@@ -1,7 +1,15 @@
 pub mod board;
 pub mod country;
+pub mod layout;
 pub mod map;
+pub mod render;
+pub mod scenario;
+pub mod status;
 
 pub use board::{Board, Influence};
 pub use country::{Country, CountryId, Region, SubRegion, Superpower};
-pub use map::{MapError, WorldMap};
+pub use layout::{Cell, LayoutError, MapLayout};
+pub use map::{Found, MapError, WorldMap};
+pub use render::ColorMode;
+pub use scenario::{Scenario, ScenarioError};
+pub use status::GameStatus;

@@ -44,6 +44,14 @@ impl fmt::Display for MapError {
 
 impl std::error::Error for MapError {}
 
+/// The result of a forgiving, interactive name lookup ([`WorldMap::find`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Found {
+    One(CountryId),
+    Ambiguous(Vec<CountryId>),
+    None,
+}
+
 impl From<serde_json::Error> for MapError {
     fn from(e: serde_json::Error) -> Self {
         MapError::Json(e)
@@ -152,6 +160,30 @@ impl WorldMap {
 
     pub fn id_by_name(&self, name: &str) -> Option<CountryId> {
         self.by_name.get(name).copied()
+    }
+
+    /// A forgiving name lookup for interactive use: an exact match (any
+    /// case) wins outright; otherwise every country whose name starts with
+    /// `query` (any case) is a candidate.
+    pub fn find(&self, query: &str) -> Found {
+        let query_lower = query.to_lowercase();
+        for country in &self.countries {
+            if country.name.to_lowercase() == query_lower {
+                return Found::One(self.by_name[&country.name]);
+            }
+        }
+        let matches: Vec<CountryId> = self
+            .countries
+            .iter()
+            .enumerate()
+            .filter(|(_, c)| c.name.to_lowercase().starts_with(&query_lower))
+            .map(|(i, _)| CountryId::new(i))
+            .collect();
+        match matches.len() {
+            0 => Found::None,
+            1 => Found::One(matches[0]),
+            _ => Found::Ambiguous(matches),
+        }
     }
 
     pub fn iter(&self) -> impl Iterator<Item = (CountryId, &Country)> {

@@ -17,7 +17,7 @@ impl CountryId {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Deserialize)]
 pub enum Superpower {
     Us,
     Ussr,
@@ -76,6 +76,17 @@ pub enum SubRegion {
     WesternEurope,
     EasternEurope,
     SoutheastAsia,
+}
+
+impl fmt::Display for SubRegion {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let s = match self {
+            SubRegion::WesternEurope => "Western Europe",
+            SubRegion::EasternEurope => "Eastern Europe",
+            SubRegion::SoutheastAsia => "Southeast Asia",
+        };
+        write!(f, "{s}")
+    }
 }
 
 /// The immutable properties of a country on the board: its name, how hard
