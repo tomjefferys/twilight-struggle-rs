@@ -104,6 +104,19 @@ fn color_never_emits_no_escape_codes() {
 }
 
 #[test]
+fn background_land_is_tinted_by_region() {
+    // Each of the six regions gets its own board colour, so the tinted
+    // landmass should carry at least two distinct region SGR codes —
+    // guards against the tint collapsing to one flat colour.
+    let (map, layout) = standard();
+    let board = Board::new(&map);
+    let canvas = render_world_map(&map, &layout, &board);
+    let text = canvas.render(ColorMode::Always);
+    assert!(text.contains("38;5;140"), "expected Europe's purple tint");
+    assert!(text.contains("38;5;208"), "expected Asia's orange tint");
+}
+
+#[test]
 fn color_always_wraps_styled_text_in_sgr_codes() {
     let (map, layout) = standard();
     let scenario = Scenario::demo(&map).unwrap();

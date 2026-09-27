@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 use crate::board::Board;
-use crate::country::Superpower;
+use crate::country::{Region, Superpower};
 use crate::layout::MapLayout;
 use crate::map::WorldMap;
 
@@ -29,8 +29,18 @@ pub fn render_world_map(map: &WorldMap, layout: &MapLayout, board: &Board) -> Ca
 
     let mut canvas = Canvas::new(content_width, height + 1 + legend.len());
 
+    // Tint each patch of land by whichever colour zone is closest to it,
+    // so the landmass reads like the physical board's coloured areas
+    // rather than a flat grey silhouette. Sea is left untinted.
+    let zones = tint_zones(map, layout);
     for (row, line) in background.iter().enumerate() {
-        canvas.put(row, 0, line, Style::color(Color::Muted));
+        for (col, ch) in line.chars().enumerate() {
+            if ch == ' ' {
+                continue;
+            }
+            let color = home_territory(row, col).unwrap_or_else(|| nearest_zone(&zones, row, col));
+            canvas.put_char(row, col, ch, Style::color(color).dim());
+        }
     }
 
     for sp in [Superpower::Us, Superpower::Ussr] {
@@ -48,6 +58,112 @@ pub fn render_world_map(map: &WorldMap, layout: &MapLayout, board: &Board) -> Ca
     }
 
     canvas
+}
+
+/// The board colour for a scoring region — matches the physical
+/// *Twilight Struggle* board, independent of any country's control state.
+fn region_color(region: Region) -> Color {
+    match region {
+        Region::Europe => Color::Europe,
+        Region::Asia => Color::Asia,
+        Region::MiddleEast => Color::MiddleEast,
+        Region::Africa => Color::Africa,
+        Region::CentralAmerica => Color::CentralAmerica,
+        Region::SouthAmerica => Color::SouthAmerica,
+    }
+}
+
+/// Canada's landmass on the background art: real Canada is a single point
+/// (`world_cell` row 5), but the raster draws a landmass far wider than
+/// that one point can dominate by nearest-neighbour alone — e.g. the
+/// eastern coastline is column-close enough to the Caribbean's countries
+/// that a plain Voronoi tessellation tinted it Central America instead.
+/// Since Canada is the only real country anywhere in this rectangle and
+/// it's scored as Europe, the whole area is forced to Europe outright
+/// rather than left to compete. Bounds checked against every country's
+/// `world_cell` in `data/standard_layout.json`.
+const CANADA_TERRITORY: ((usize, usize), (usize, usize)) = ((0, 9), (0, 72));
+
+/// The USA's own landmass on the background art, south of Canada: this
+/// land belongs to no scoring region at all, so it's carved out as USA
+/// territory rather than left to compete in the region Voronoi below.
+/// Bounds checked against every country's `world_cell` in
+/// `data/standard_layout.json`: nothing else on the map falls inside this
+/// rectangle.
+const USA_TERRITORY: ((usize, usize), (usize, usize)) = ((10, 15), (0, 72));
+
+/// The same idea for USSR: the background art draws a huge stretch of
+/// undifferentiated Siberian landmass around and below the USSR box that
+/// has no country of its own, and left to a plain Voronoi tessellation it
+/// reads as whichever real region happens to have the nearest country
+/// (Middle East, usually, since Turkey/Iraq/Iran sit at a similar
+/// longitude) rather than as USSR territory. Bounded to stop just short
+/// of Finland (column 98, the westernmost real country anywhere near this
+/// band) and well above Romania/Bulgaria/Turkey (row 9 onward), so no
+/// real region's country is ever inside this rectangle.
+const USSR_TERRITORY: ((usize, usize), (usize, usize)) = ((0, 8), (100, usize::MAX));
+
+/// The strip of land directly south of the USSR box, east of
+/// Romania/Bulgaria (column 103) and north of Turkey/Iraq (row 11) —
+/// roughly where real-world Kazakhstan sits. It has no country of its
+/// own, and the nearest real country to it is usually Iraq or Turkey, so
+/// a plain Voronoi tessellation tinted it Middle East — visually reading
+/// as the Middle East abutting the USSR box directly, with no Asia in
+/// between. Since this land sits right against USSR territory rather
+/// than the Middle East's own cluster, it reads better as Asia. Bounded
+/// to two rows (9–10) so it stops before Turkey's own row (11).
+const CENTRAL_ASIA_GAP: ((usize, usize), (usize, usize)) = ((9, 10), (104, usize::MAX));
+
+fn home_territory(row: usize, col: usize) -> Option<Color> {
+    let in_rect = |((r0, r1), (c0, c1)): ((usize, usize), (usize, usize))| {
+        row >= r0 && row <= r1 && col >= c0 && col <= c1
+    };
+    if in_rect(CANADA_TERRITORY) {
+        Some(Color::Europe)
+    } else if in_rect(USA_TERRITORY) {
+        Some(Color::Us)
+    } else if in_rect(USSR_TERRITORY) {
+        Some(Color::Ussr)
+    } else if in_rect(CENTRAL_ASIA_GAP) {
+        Some(Color::Asia)
+    } else {
+        None
+    }
+}
+
+/// One anchor point per country, at its own `world_cell`, coloured by its
+/// *scoring* region rather than by geography — this is what keeps a
+/// country like Turkey (geographically in the Middle East, but scored as
+/// Europe in *Twilight Struggle*) tinted as its own real region right at
+/// its own position: nearest-neighbour always resolves to a country's own
+/// point first, at zero distance, before it ever reaches for a
+/// neighbour's. A single per-region centroid can't offer that guarantee
+/// — Turkey/Bulgaria/Romania all sit geographically closer to the Middle
+/// East cluster than to the bulk of Europe, so a centroid-only lookup
+/// tinted them Middle East despite their region being Europe. Only the
+/// genuinely empty land between countries is left to a nearest-neighbour
+/// guess, which is a far smaller and less consequential source of error.
+fn tint_zones(map: &WorldMap, layout: &MapLayout) -> Vec<(isize, isize, Color)> {
+    map.iter()
+        .map(|(id, country)| {
+            let cell = layout.world_cell(id);
+            (cell.row as isize, cell.col as isize, region_color(country.region))
+        })
+        .collect()
+}
+
+/// The colour of whichever zone anchor is geographically closest to
+/// `(row, col)`.
+fn nearest_zone(zones: &[(isize, isize, Color)], row: usize, col: usize) -> Color {
+    zones
+        .iter()
+        .min_by_key(|&&(r, c, _)| {
+            let dr = r - row as isize;
+            let dc = c - col as isize;
+            dr * dr + dc * dc
+        })
+        .map(|&(_, _, color)| color)
+        .expect("at least one tint zone exists")
 }
 
 fn draw_superpower_box(canvas: &mut Canvas, (y, x): (usize, usize), (rows, cols): (u8, u8), sp: Superpower) {
