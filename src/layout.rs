@@ -3,7 +3,7 @@ use std::fmt;
 
 use serde::Deserialize;
 
-use crate::country::{CountryId, Region, Superpower};
+use crate::country::{CountryId, Direction, Region, Superpower};
 use crate::map::WorldMap;
 
 const STANDARD_LAYOUT_JSON: &str = include_str!("../data/standard_layout.json");
@@ -486,5 +486,39 @@ impl MapLayout {
     /// this grid, and is instead footnoted below the map.
     pub fn undrawn_links(&self) -> &[(CountryId, CountryId)] {
         &self.undrawn
+    }
+
+    /// The country reached by moving `dir` from `from` on `region`'s
+    /// display grid: the nearest other country in `region` that lies
+    /// strictly on `dir`'s side of `from`, or `None` if there isn't one —
+    /// the selection should then hold still, the same convention as
+    /// [`Region::step`].
+    ///
+    /// The region grids are sparse (Africa is over half empty, with holes
+    /// in the interior, not just the edges), so a bare row±1/col±1 step
+    /// would often land on nothing. Picking the nearest candidate by
+    /// (cross-axis distance, along-axis distance) instead reaches every
+    /// country in every region with no dead ends — verified against the
+    /// real grid in `data/standard_layout.json`.
+    pub fn step_country(&self, map: &WorldMap, region: Region, from: CountryId, dir: Direction) -> Option<CountryId> {
+        let from_cell = self.cell(from);
+        self.countries_in_region(map, region)
+            .into_iter()
+            .filter(|&id| id != from)
+            .filter_map(|id| {
+                let cell = self.cell(id);
+                let dr = cell.row as i16 - from_cell.row as i16;
+                let dc = cell.col as i16 - from_cell.col as i16;
+                let (cross, along) = match dir {
+                    Direction::Left if dc < 0 => (dr.abs(), -dc),
+                    Direction::Right if dc > 0 => (dr.abs(), dc),
+                    Direction::Up if dr < 0 => (dc.abs(), -dr),
+                    Direction::Down if dr > 0 => (dc.abs(), dr),
+                    _ => return None,
+                };
+                Some((cross, along, cell.row, cell.col, id))
+            })
+            .min_by_key(|&(cross, along, row, col, _)| (cross, along, row, col))
+            .map(|(.., id)| id)
     }
 }

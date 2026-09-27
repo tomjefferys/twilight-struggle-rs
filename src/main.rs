@@ -115,14 +115,14 @@ fn run_command(session: &mut Session, line: &str) {
         }
         "region" => match words.get(1).and_then(|s| parse_region(s)) {
             Some(region) => {
-                let canvas = render_region(&session.map, &session.layout, &session.board, region);
+                let canvas = render_region(&session.map, &session.layout, &session.board, region, None);
                 println!("{}", canvas.render(session.color));
             }
             None => println!("unknown region {:?}. Try: europe, asia, middleeast, africa, centralamerica, southamerica, or 1-6", words.get(1)),
         },
         "1" | "2" | "3" | "4" | "5" | "6" => {
             if let Some(region) = region_by_index(cmd.parse().unwrap()) {
-                let canvas = render_region(&session.map, &session.layout, &session.board, region);
+                let canvas = render_region(&session.map, &session.layout, &session.board, region, None);
                 println!("{}", canvas.render(session.color));
             }
         }
@@ -254,6 +254,7 @@ Commands:
   map, world              the six-region dashboard
   worldmap, wm            the whole world as one geographic map (codes, no names);
                           arrow keys select a region, Enter zooms in, Esc backs out
+                          (and the same arrow-key selection continues inside a region)
   region <name>, 1-6      zoom into one region (europe/asia/middleeast/africa/centralamerica/southamerica)
   country <name>, /<name> a single country's detail, with all its neighbours (name or code)
   set <c> <us|ussr> <n>   set a country's influence

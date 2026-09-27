@@ -41,7 +41,7 @@ fn no_rendered_line_exceeds_requested_width() {
         }
     }
     for &region in &Region::ALL {
-        let canvas = render_region(&map, &layout, &scenario.board, region);
+        let canvas = render_region(&map, &layout, &scenario.board, region, None);
         let text = canvas.render(ColorMode::Never);
         // Region views size themselves to their content rather than a
         // requested width, so just confirm every line the canvas produced
@@ -59,7 +59,7 @@ fn every_in_region_adjacency_is_drawn_or_footnoted() {
     let (map, layout) = standard();
     let board = Board::new(&map);
     for &region in &Region::ALL {
-        let canvas = render_region(&map, &layout, &board, region);
+        let canvas = render_region(&map, &layout, &board, region, None);
         let text = canvas.render(ColorMode::Never);
         let has_connector = text.chars().any(|c| matches!(c, '─' | '│' | '╲' | '╱' | '╳'));
         assert!(has_connector, "{region} region view has no connectors at all");
@@ -101,7 +101,7 @@ fn control_markers_and_battleground_flag_are_correct() {
     board.set_influence(poland, Superpower::Ussr, 3); // USSR controls
     // UK left uncontrolled
 
-    let canvas = render_region(&map, &layout, &board, Region::Europe);
+    let canvas = render_region(&map, &layout, &board, Region::Europe, None);
     let text = canvas.render(ColorMode::Never);
 
     let italy_name_line = line_containing(&text, "Italy");
@@ -114,6 +114,37 @@ fn control_markers_and_battleground_flag_are_correct() {
 
     let uk_stats_line = line_after(&text, "UK");
     assert!(uk_stats_line.contains(':'), "uncontrolled UK should show ':': {uk_stats_line:?}");
+}
+
+#[test]
+fn a_country_selection_adds_its_name_and_the_key_hints() {
+    let (map, layout) = standard();
+    let board = Board::new(&map);
+    let italy = map.id_by_name("Italy").unwrap();
+    let plain = render_region(&map, &layout, &board, Region::Europe, None);
+    let selected = render_region(&map, &layout, &board, Region::Europe, Some(italy));
+    let text = selected.render(ColorMode::Never);
+    assert!(text.contains("▸ Italy ◂"), "selected country's name missing:\n{text}");
+    assert!(text.contains("Esc back"), "key hints missing:\n{text}");
+    assert!(!text.contains("Enter"), "Enter is unbound in the region view, so shouldn't be hinted:\n{text}");
+    assert_eq!(selected.height(), plain.height() + 2, "a selection should add exactly two rows");
+}
+
+#[test]
+fn a_selected_country_box_is_bold_where_an_unselected_one_is_not() {
+    let (map, layout) = standard();
+    let board = Board::new(&map);
+    let italy = map.id_by_name("Italy").unwrap();
+    let canvas = render_region(&map, &layout, &board, Region::Europe, Some(italy));
+    let text = canvas.render(ColorMode::Always);
+    let italy_border_line = line_containing(&text, "Italy");
+    assert!(italy_border_line.contains("\x1b[1m"), "Italy's box should be bold: {italy_border_line:?}");
+
+    let uk = map.id_by_name("UK").unwrap();
+    let canvas = render_region(&map, &layout, &board, Region::Europe, Some(uk));
+    let text = canvas.render(ColorMode::Always);
+    let italy_border_line = line_containing(&text, "Italy");
+    assert!(!italy_border_line.contains("\x1b[1m"), "Italy shouldn't be bold when UK is selected: {italy_border_line:?}");
 }
 
 fn line_containing<'a>(text: &'a str, needle: &str) -> &'a str {

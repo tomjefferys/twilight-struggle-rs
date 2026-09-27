@@ -4,6 +4,7 @@
 //! comes from `twilight_struggle::render`, which stays a pure `Canvas`
 //! producer per its own module doc.
 
+use std::collections::HashMap;
 use std::io::{self, Write};
 
 use crossterm::cursor::{Hide, MoveTo, Show};
@@ -12,15 +13,15 @@ use crossterm::terminal::{self, Clear, ClearType, EnterAlternateScreen, LeaveAlt
 use crossterm::{execute, queue};
 
 use twilight_struggle::render::{render_region, render_world_map};
-use twilight_struggle::{Board, ColorMode, Direction, MapLayout, Region, WorldMap};
+use twilight_struggle::{Board, ColorMode, CountryId, Direction, MapLayout, Region, WorldMap};
 
 /// Which screen is currently showing.
 enum Screen {
     /// The to-scale world map, with `selected` picked by the arrow keys.
     World { selected: Region },
-    /// One region's zoomed-in view — `Esc` returns to `World` with the
-    /// same region still selected.
-    Region(Region),
+    /// One region's zoomed-in view, with its own country selection —
+    /// `Esc` returns to `World` with the region still selected.
+    Region { region: Region, selected: CountryId },
 }
 
 /// Puts the terminal into raw mode and the alternate screen, and — however
@@ -51,6 +52,10 @@ impl Drop for TerminalGuard {
 pub fn run(map: &WorldMap, layout: &MapLayout, board: &Board, color: ColorMode) -> io::Result<()> {
     let _guard = TerminalGuard::enter()?;
     let mut screen = Screen::World { selected: Region::Europe };
+    // Remembers the last country selected in each region, so leaving a
+    // region and coming back to it later re-selects the same one instead
+    // of always resetting to its top-left-most country.
+    let mut last_selected: HashMap<Region, CountryId> = HashMap::new();
 
     draw(&screen, map, layout, board, color)?;
     loop {
@@ -65,12 +70,26 @@ pub fn run(map: &WorldMap, layout: &MapLayout, board: &Board, color: ColorMode) 
                         KeyCode::Right => *selected = selected.step(Direction::Right).unwrap_or(*selected),
                         KeyCode::Up => *selected = selected.step(Direction::Up).unwrap_or(*selected),
                         KeyCode::Down => *selected = selected.step(Direction::Down).unwrap_or(*selected),
-                        KeyCode::Enter => screen = Screen::Region(*selected),
+                        KeyCode::Enter => {
+                            let region = *selected;
+                            let country = last_selected
+                                .get(&region)
+                                .copied()
+                                .unwrap_or_else(|| layout.countries_in_region(map, region)[0]);
+                            screen = Screen::Region { region, selected: country };
+                        }
                         KeyCode::Esc | KeyCode::Char('q') => return Ok(()),
                         _ => continue,
                     },
-                    Screen::Region(region) => match key.code {
-                        KeyCode::Esc => screen = Screen::World { selected: *region },
+                    Screen::Region { region, selected } => match key.code {
+                        KeyCode::Left => *selected = layout.step_country(map, *region, *selected, Direction::Left).unwrap_or(*selected),
+                        KeyCode::Right => *selected = layout.step_country(map, *region, *selected, Direction::Right).unwrap_or(*selected),
+                        KeyCode::Up => *selected = layout.step_country(map, *region, *selected, Direction::Up).unwrap_or(*selected),
+                        KeyCode::Down => *selected = layout.step_country(map, *region, *selected, Direction::Down).unwrap_or(*selected),
+                        KeyCode::Esc => {
+                            last_selected.insert(*region, *selected);
+                            screen = Screen::World { selected: *region };
+                        }
                         KeyCode::Char('q') => return Ok(()),
                         _ => continue,
                     },
@@ -86,7 +105,7 @@ pub fn run(map: &WorldMap, layout: &MapLayout, board: &Board, color: ColorMode) 
 fn draw(screen: &Screen, map: &WorldMap, layout: &MapLayout, board: &Board, color: ColorMode) -> io::Result<()> {
     let canvas = match screen {
         Screen::World { selected } => render_world_map(map, layout, board, Some(*selected)),
-        Screen::Region(region) => render_region(map, layout, board, *region),
+        Screen::Region { region, selected } => render_region(map, layout, board, *region, Some(*selected)),
     };
 
     let rows = terminal::size().map(|(_, h)| h as usize).unwrap_or(canvas.height());

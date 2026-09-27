@@ -42,12 +42,17 @@ DEFCON, coups, etc.) haven't been built yet.
   list.
 - **`interactive.rs`** — the terminal-driving code for `worldmap`/`wm`
   when run interactively (a real TTY, not one-shot mode): raw mode, the
-  alternate screen, and the arrow/Enter/Esc event loop that moves a
-  `Region` selection (`Region::step`, in `country.rs`) around the world
-  map and zooms into `render_region`. The only place in the crate that
-  touches the terminal directly — everything it draws still comes from
-  `render::render_world_map`/`render_region`, which stay pure `Canvas`
-  producers. Uses `crossterm`, the one non-serde dependency.
+  alternate screen, and the arrow/Enter/Esc event loop. On the world map
+  it moves a `Region` selection (`Region::step`, in `country.rs`); Enter
+  zooms into `render_region`, where arrow keys move a country selection
+  on that region's display grid instead (`MapLayout::step_country`, in
+  `layout.rs` — a nearest-in-that-direction search over `Cell` positions,
+  not a hand-written table, since the grids are sparse with interior
+  holes). Each region remembers its last-selected country across visits.
+  The only place in the crate that touches the terminal directly —
+  everything it draws still comes from `render::render_world_map`/
+  `render_region`, which stay pure `Canvas` producers. Uses `crossterm`,
+  the one non-serde dependency.
 
 ## Data files (`data/`)
 

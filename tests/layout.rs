@@ -1,4 +1,4 @@
-use twilight_struggle::{LayoutError, MapLayout, WorldMap};
+use twilight_struggle::{Direction, LayoutError, MapLayout, Region, WorldMap};
 
 fn standard() -> (WorldMap, MapLayout) {
     let map = WorldMap::standard().expect("standard map should load");
@@ -254,5 +254,59 @@ fn rejects_short_name_too_long() {
     match MapLayout::load(&map, &json) {
         Err(LayoutError::ShortNameTooLong { country, .. }) => assert_eq!(country, "Canada"),
         other => panic!("expected ShortNameTooLong, got {other:?}"),
+    }
+}
+
+const DIRECTIONS: [Direction; 4] = [Direction::Up, Direction::Down, Direction::Left, Direction::Right];
+
+#[test]
+fn every_country_is_reachable_by_stepping_within_its_region() {
+    // The region display grids are sparse, with interior holes as well as
+    // edge ones (Africa is over half empty) — a plain row±1/col±1 step
+    // would frequently land on nothing. `step_country` instead has to
+    // reach every country in a region by some sequence of arrow presses
+    // starting from that region's first country in grid order.
+    let (map, layout) = standard();
+    for &region in &Region::ALL {
+        let ids = layout.countries_in_region(&map, region);
+        let start = ids[0];
+        let mut seen = vec![start];
+        let mut frontier = vec![start];
+        while let Some(id) = frontier.pop() {
+            for &dir in &DIRECTIONS {
+                if let Some(next) = layout.step_country(&map, region, id, dir)
+                    && !seen.contains(&next)
+                {
+                    seen.push(next);
+                    frontier.push(next);
+                }
+            }
+        }
+        for &id in &ids {
+            assert!(
+                seen.contains(&id),
+                "{} in {region} is unreachable by stepping from {}",
+                map.country(id).name,
+                map.country(start).name
+            );
+        }
+    }
+}
+
+#[test]
+fn step_country_never_returns_the_starting_country() {
+    let (map, layout) = standard();
+    for &region in &Region::ALL {
+        for &id in &layout.countries_in_region(&map, region) {
+            for &dir in &DIRECTIONS {
+                let next = layout.step_country(&map, region, id, dir);
+                assert_ne!(
+                    next,
+                    Some(id),
+                    "{} stepping {dir:?} in {region} returned itself",
+                    map.country(id).name
+                );
+            }
+        }
     }
 }
