@@ -28,21 +28,38 @@ pub enum Color {
     Ussr,
     Battleground,
     Muted,
+    /// The six *Twilight Struggle* board regions, each matching that
+    /// region's colour on the physical board — used to tint the world
+    /// map's landmass so it reads like the real board at a glance.
+    Europe,
+    Asia,
+    MiddleEast,
+    Africa,
+    CentralAmerica,
+    SouthAmerica,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct Style {
     pub color: Color,
     pub bold: bool,
+    pub dim: bool,
 }
 
 impl Style {
     pub fn color(color: Color) -> Style {
-        Style { color, bold: false }
+        Style { color, bold: false, dim: false }
     }
 
     pub fn bold(mut self) -> Style {
         self.bold = true;
+        self
+    }
+
+    /// A subdued version of the same colour — used for background
+    /// shading, so it recedes behind the foreground content drawn on top.
+    pub fn dim(mut self) -> Style {
+        self.dim = true;
         self
     }
 }
@@ -60,17 +77,39 @@ pub enum ColorMode {
 struct Theme;
 
 impl Theme {
-    fn sgr(style: Style) -> Option<&'static str> {
-        match (style.color, style.bold) {
-            (Color::Default, false) => None,
-            (Color::Default, true) => Some("\x1b[1m"),
-            (Color::Us, false) => Some("\x1b[94m"),
-            (Color::Us, true) => Some("\x1b[1;94m"),
-            (Color::Ussr, false) => Some("\x1b[91m"),
-            (Color::Ussr, true) => Some("\x1b[1;91m"),
-            (Color::Battleground, false) => Some("\x1b[93m"),
-            (Color::Battleground, true) => Some("\x1b[1;93m"),
-            (Color::Muted, _) => Some("\x1b[2m"),
+    fn sgr(style: Style) -> Option<String> {
+        // The base 16-colour palette can't cover orange/purple, so those
+        // two reach for a 256-colour code; everything else stays a plain
+        // SGR number for maximum terminal compatibility.
+        let color_code: Option<&'static str> = match style.color {
+            Color::Default => None,
+            Color::Us => Some("94"),
+            Color::Ussr => Some("91"),
+            Color::Battleground => Some("93"),
+            Color::Muted => None,
+            Color::Europe => Some("38;5;140"),
+            Color::Asia => Some("38;5;208"),
+            Color::MiddleEast => Some("96"),
+            Color::Africa => Some("33"),
+            Color::CentralAmerica => Some("92"),
+            Color::SouthAmerica => Some("32"),
+        };
+
+        let mut parts: Vec<&str> = Vec::new();
+        if style.bold {
+            parts.push("1");
+        }
+        if style.dim || style.color == Color::Muted {
+            parts.push("2");
+        }
+        if let Some(code) = color_code {
+            parts.push(code);
+        }
+
+        if parts.is_empty() {
+            None
+        } else {
+            Some(format!("\x1b[{}m", parts.join(";")))
         }
     }
 }
@@ -180,7 +219,7 @@ fn render_line(cells: &[CanvasCell], mode: ColorMode) -> String {
         let text: String = cells[i..j].iter().map(|c| c.ch).collect();
         match Theme::sgr(style) {
             Some(code) => {
-                out.push_str(code);
+                out.push_str(&code);
                 out.push_str(&text);
                 out.push_str("\x1b[0m");
             }
