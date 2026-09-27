@@ -67,6 +67,103 @@ impl fmt::Display for Region {
     }
 }
 
+/// An arrow-key direction, for navigating between regions on the world map.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Direction {
+    Up,
+    Down,
+    Left,
+    Right,
+}
+
+impl Region {
+    /// All six regions, in no particular order.
+    pub const ALL: [Region; 6] = [
+        Region::Europe,
+        Region::Asia,
+        Region::MiddleEast,
+        Region::Africa,
+        Region::CentralAmerica,
+        Region::SouthAmerica,
+    ];
+
+    /// The region reached by moving `dir` from this one on the world map,
+    /// or `None` if there isn't a sensible neighbour that way — the
+    /// selection should then hold still rather than wrap around.
+    ///
+    /// Hand-tuned against each region's real `world_cell` positions in
+    /// `data/standard_layout.json` (mean row/col: Europe 8/89, Asia 17/135,
+    /// Middle East 15/103, Africa 21/94, Central America 18/45, South
+    /// America 26/57), rather than derived from them, so a move always
+    /// lands somewhere predictable.
+    pub fn step(self, dir: Direction) -> Option<Region> {
+        use Direction::*;
+        use Region::*;
+        Some(match (self, dir) {
+            (Europe, Left) => CentralAmerica,
+            (Europe, Right) => Asia,
+            (Europe, Down) => MiddleEast,
+
+            (Asia, Left) => MiddleEast,
+            (Asia, Up) => Europe,
+
+            (MiddleEast, Left) => Africa,
+            (MiddleEast, Right) => Asia,
+            (MiddleEast, Up) => Europe,
+            (MiddleEast, Down) => Africa,
+
+            (Africa, Left) => SouthAmerica,
+            (Africa, Right) => MiddleEast,
+            (Africa, Up) => Europe,
+
+            (CentralAmerica, Right) => Africa,
+            (CentralAmerica, Up) => Europe,
+            (CentralAmerica, Down) => SouthAmerica,
+
+            (SouthAmerica, Right) => Africa,
+            (SouthAmerica, Up) => CentralAmerica,
+
+            _ => return None,
+        })
+    }
+}
+
+#[cfg(test)]
+mod region_navigation_tests {
+    use super::*;
+
+    #[test]
+    fn every_region_is_reachable_from_europe() {
+        // Breadth-first search over `step` from Europe should reach all
+        // six regions — otherwise some region would be an unreachable
+        // island on the world map.
+        let mut seen = vec![Region::Europe];
+        let mut frontier = vec![Region::Europe];
+        while let Some(region) = frontier.pop() {
+            for dir in [Direction::Up, Direction::Down, Direction::Left, Direction::Right] {
+                if let Some(next) = region.step(dir)
+                    && !seen.contains(&next)
+                {
+                    seen.push(next);
+                    frontier.push(next);
+                }
+            }
+        }
+        for &region in &Region::ALL {
+            assert!(seen.contains(&region), "{region} is unreachable from Europe");
+        }
+    }
+
+    #[test]
+    fn step_never_returns_the_starting_region() {
+        for &region in &Region::ALL {
+            for dir in [Direction::Up, Direction::Down, Direction::Left, Direction::Right] {
+                assert_ne!(region.step(dir), Some(region), "{region} stepping {dir:?} returned itself");
+            }
+        }
+    }
+}
+
 /// Finer-grained groupings referenced by specific event cards
 /// (e.g. "Warsaw Pact Formed" targets Eastern Europe, "SE Asia Scoring"
 /// targets Southeast Asia). A country can belong to zero or more of these,

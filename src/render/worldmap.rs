@@ -5,7 +5,7 @@ use crate::country::{Region, Superpower};
 use crate::layout::MapLayout;
 use crate::map::WorldMap;
 
-use super::{Canvas, Color, Style};
+use super::{region_tally, Canvas, Color, Style};
 
 /// The whole world on one grid, drawn to actually look like a map: real
 /// landmass shading underneath (rasterized once from public-domain
@@ -19,27 +19,41 @@ use super::{Canvas, Color, Style};
 /// the confusion this view exists to avoid. That precision lives
 /// exclusively in `render_region`; this is the low-detail, geographic
 /// overview.
-pub fn render_world_map(map: &WorldMap, layout: &MapLayout, board: &Board) -> Canvas {
+///
+/// `selected`, when set, is the region currently picked in interactive
+/// navigation: its landmass and country chips are drawn bold and at full
+/// brightness rather than dimmed, and two extra lines below the legend
+/// name it and give the key hints. Passing `None` reproduces the plain,
+/// static view exactly — no extra rows, no style changes — so every
+/// existing caller is unaffected.
+pub fn render_world_map(map: &WorldMap, layout: &MapLayout, board: &Board, selected: Option<Region>) -> Canvas {
     let background = layout.background();
     let height = background.len();
     let width = background.iter().map(|l| l.chars().count()).max().unwrap_or(0);
 
     let legend = superpower_legend(map);
+    let footer_rows = if selected.is_some() { 2 } else { 0 };
     let content_width = legend.iter().map(|l| l.chars().count()).chain([width]).max().unwrap_or(width);
 
-    let mut canvas = Canvas::new(content_width, height + 1 + legend.len());
+    let mut canvas = Canvas::new(content_width, height + 1 + legend.len() + footer_rows);
 
-    // Tint each patch of land by whichever colour zone is closest to it,
-    // so the landmass reads like the physical board's coloured areas
-    // rather than a flat grey silhouette. Sea is left untinted.
+    // Tint each patch of land by whichever zone is closest to it, so the
+    // landmass reads like the physical board's coloured areas rather than
+    // a flat grey silhouette. Sea is left untinted. The selected region's
+    // own land is drawn bold and undimmed so it visibly stands out; every
+    // other zone keeps today's dim treatment.
     let zones = tint_zones(map, layout);
     for (row, line) in background.iter().enumerate() {
         for (col, ch) in line.chars().enumerate() {
             if ch == ' ' {
                 continue;
             }
-            let color = home_territory(row, col).unwrap_or_else(|| nearest_zone(&zones, row, col));
-            canvas.put_char(row, col, ch, Style::color(color).dim());
+            let zone = home_territory(row, col).unwrap_or_else(|| nearest_zone(&zones, row, col));
+            let style = match zone {
+                Zone::Region(r) if selected == Some(r) => Style::color(zone_color(zone)).bold(),
+                _ => Style::color(zone_color(zone)).dim(),
+            };
+            canvas.put_char(row, col, ch, style);
         }
     }
 
@@ -48,28 +62,45 @@ pub fn render_world_map(map: &WorldMap, layout: &MapLayout, board: &Board) -> Ca
         draw_superpower_box(&mut canvas, (b.cell.row as usize, b.cell.col as usize), (b.rows, b.cols), sp);
     }
 
-    for (id, _) in map.iter() {
+    for (id, country) in map.iter() {
         let cell = layout.world_cell(id);
-        draw_chip(&mut canvas, cell.row as usize, cell.col as usize, map, layout, board, id);
+        let bold = selected == Some(country.region);
+        draw_chip(&mut canvas, cell.row as usize, cell.col as usize, map, layout, board, id, bold);
     }
 
     for (i, line) in legend.iter().enumerate() {
         canvas.put(height + 1 + i, 0, line, Style::color(Color::Muted));
     }
 
+    if let Some(region) = selected {
+        draw_selection_footer(&mut canvas, height + 1 + legend.len(), map, layout, board, region);
+    }
+
     canvas
 }
 
-/// The board colour for a scoring region — matches the physical
-/// *Twilight Struggle* board, independent of any country's control state.
-fn region_color(region: Region) -> Color {
-    match region {
-        Region::Europe => Color::Europe,
-        Region::Asia => Color::Asia,
-        Region::MiddleEast => Color::MiddleEast,
-        Region::Africa => Color::Africa,
-        Region::CentralAmerica => Color::CentralAmerica,
-        Region::SouthAmerica => Color::SouthAmerica,
+/// A patch of the background art: either a scoring region (tinted by that
+/// region's board colour) or a superpower's own home territory (tinted by
+/// that superpower's colour, matching its box).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Zone {
+    Region(Region),
+    Superpower(Superpower),
+}
+
+/// The board colour for a zone — a scoring region's matches the physical
+/// *Twilight Struggle* board, independent of any country's control state;
+/// a superpower's matches its own box.
+fn zone_color(zone: Zone) -> Color {
+    match zone {
+        Zone::Region(Region::Europe) => Color::Europe,
+        Zone::Region(Region::Asia) => Color::Asia,
+        Zone::Region(Region::MiddleEast) => Color::MiddleEast,
+        Zone::Region(Region::Africa) => Color::Africa,
+        Zone::Region(Region::CentralAmerica) => Color::CentralAmerica,
+        Zone::Region(Region::SouthAmerica) => Color::SouthAmerica,
+        Zone::Superpower(Superpower::Us) => Color::Us,
+        Zone::Superpower(Superpower::Ussr) => Color::Ussr,
     }
 }
 
@@ -114,18 +145,18 @@ const USSR_TERRITORY: ((usize, usize), (usize, usize)) = ((0, 8), (100, usize::M
 /// to two rows (9–10) so it stops before Turkey's own row (11).
 const CENTRAL_ASIA_GAP: ((usize, usize), (usize, usize)) = ((9, 10), (104, usize::MAX));
 
-fn home_territory(row: usize, col: usize) -> Option<Color> {
+fn home_territory(row: usize, col: usize) -> Option<Zone> {
     let in_rect = |((r0, r1), (c0, c1)): ((usize, usize), (usize, usize))| {
         row >= r0 && row <= r1 && col >= c0 && col <= c1
     };
     if in_rect(CANADA_TERRITORY) {
-        Some(Color::Europe)
+        Some(Zone::Region(Region::Europe))
     } else if in_rect(USA_TERRITORY) {
-        Some(Color::Us)
+        Some(Zone::Superpower(Superpower::Us))
     } else if in_rect(USSR_TERRITORY) {
-        Some(Color::Ussr)
+        Some(Zone::Superpower(Superpower::Ussr))
     } else if in_rect(CENTRAL_ASIA_GAP) {
-        Some(Color::Asia)
+        Some(Zone::Region(Region::Asia))
     } else {
         None
     }
@@ -143,18 +174,17 @@ fn home_territory(row: usize, col: usize) -> Option<Color> {
 /// tinted them Middle East despite their region being Europe. Only the
 /// genuinely empty land between countries is left to a nearest-neighbour
 /// guess, which is a far smaller and less consequential source of error.
-fn tint_zones(map: &WorldMap, layout: &MapLayout) -> Vec<(isize, isize, Color)> {
+fn tint_zones(map: &WorldMap, layout: &MapLayout) -> Vec<(isize, isize, Zone)> {
     map.iter()
         .map(|(id, country)| {
             let cell = layout.world_cell(id);
-            (cell.row as isize, cell.col as isize, region_color(country.region))
+            (cell.row as isize, cell.col as isize, Zone::Region(country.region))
         })
         .collect()
 }
 
-/// The colour of whichever zone anchor is geographically closest to
-/// `(row, col)`.
-fn nearest_zone(zones: &[(isize, isize, Color)], row: usize, col: usize) -> Color {
+/// The zone of whichever anchor is geographically closest to `(row, col)`.
+fn nearest_zone(zones: &[(isize, isize, Zone)], row: usize, col: usize) -> Zone {
     zones
         .iter()
         .min_by_key(|&&(r, c, _)| {
@@ -162,7 +192,7 @@ fn nearest_zone(zones: &[(isize, isize, Color)], row: usize, col: usize) -> Colo
             let dc = c - col as isize;
             dr * dr + dc * dc
         })
-        .map(|&(_, _, color)| color)
+        .map(|&(_, _, zone)| zone)
         .expect("at least one tint zone exists")
 }
 
@@ -180,6 +210,9 @@ fn draw_superpower_box(canvas: &mut Canvas, (y, x): (usize, usize), (rows, cols)
     canvas.put(label_y, label_x, &label, style);
 }
 
+/// `bold` is set for a country in the currently-selected region, so its
+/// chip stays legible against the brightened land beneath it.
+#[allow(clippy::too_many_arguments)]
 fn draw_chip(
     canvas: &mut Canvas,
     row: usize,
@@ -188,15 +221,19 @@ fn draw_chip(
     layout: &MapLayout,
     board: &Board,
     id: crate::country::CountryId,
+    bold: bool,
 ) {
     let country = map.country(id);
     let controller = board.controller(map, id);
-    let style = match controller {
+    let mut style = match controller {
         Some(Superpower::Us) => Style::color(Color::Us),
         Some(Superpower::Ussr) => Style::color(Color::Ussr),
         None if country.battleground => Style::color(Color::Battleground),
         None => Style::default(),
     };
+    if bold {
+        style = style.bold();
+    }
     // Centre the chip (flag + code) on its geographic point rather than
     // left-aligning from it — left-aligned, every label reads as sitting
     // to the right of where it's actually placed, which is most obvious
@@ -206,6 +243,21 @@ fn draw_chip(
     let start = col.saturating_sub(total / 2);
     canvas.put_char(row, start, if country.battleground { '*' } else { ' ' }, style);
     canvas.put(row, start + 1, code, style);
+}
+
+/// The two lines shown below the legend once a region is selected: its
+/// name (upper-cased, bold, in its own region colour) with the same
+/// battleground/country tallies a dashboard panel shows, then the key
+/// hints for interactive navigation.
+fn draw_selection_footer(canvas: &mut Canvas, row: usize, map: &WorldMap, layout: &MapLayout, board: &Board, region: Region) {
+    let tally = region_tally(map, layout, board, region);
+    let name = region.to_string().to_uppercase();
+    let title = format!(
+        "▸ {name} ◂   bg {}-{}  ctry {}-{}",
+        tally.bg_us, tally.bg_ussr, tally.ctry_us, tally.ctry_ussr
+    );
+    canvas.put(row, 0, &title, Style::color(zone_color(Zone::Region(region))).bold());
+    canvas.put(row + 1, 0, "←→↑↓ select · Enter open · Esc back", Style::color(Color::Muted));
 }
 
 /// One line per superpower listing its real bordering countries — with no

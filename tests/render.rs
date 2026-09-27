@@ -7,15 +7,6 @@ fn standard() -> (WorldMap, MapLayout) {
     (map, layout)
 }
 
-const ALL_REGIONS: [Region; 6] = [
-    Region::Europe,
-    Region::Asia,
-    Region::MiddleEast,
-    Region::Africa,
-    Region::CentralAmerica,
-    Region::SouthAmerica,
-];
-
 #[test]
 fn world_dashboard_matches_snapshot_at_104() {
     let (map, layout) = standard();
@@ -49,7 +40,7 @@ fn no_rendered_line_exceeds_requested_width() {
             );
         }
     }
-    for &region in &ALL_REGIONS {
+    for &region in &Region::ALL {
         let canvas = render_region(&map, &layout, &scenario.board, region);
         let text = canvas.render(ColorMode::Never);
         // Region views size themselves to their content rather than a
@@ -67,7 +58,7 @@ fn no_rendered_line_exceeds_requested_width() {
 fn every_in_region_adjacency_is_drawn_or_footnoted() {
     let (map, layout) = standard();
     let board = Board::new(&map);
-    for &region in &ALL_REGIONS {
+    for &region in &Region::ALL {
         let canvas = render_region(&map, &layout, &board, region);
         let text = canvas.render(ColorMode::Never);
         let has_connector = text.chars().any(|c| matches!(c, '─' | '│' | '╲' | '╱' | '╳'));

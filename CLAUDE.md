@@ -40,6 +40,14 @@ DEFCON, coups, etc.) haven't been built yet.
 - **`main.rs`** — a REPL (`cargo run`) plus one-shot mode
   (`cargo run -- <command>`). Type `help` inside the REPL for the command
   list.
+- **`interactive.rs`** — the terminal-driving code for `worldmap`/`wm`
+  when run interactively (a real TTY, not one-shot mode): raw mode, the
+  alternate screen, and the arrow/Enter/Esc event loop that moves a
+  `Region` selection (`Region::step`, in `country.rs`) around the world
+  map and zooms into `render_region`. The only place in the crate that
+  touches the terminal directly — everything it draws still comes from
+  `render::render_world_map`/`render_region`, which stay pure `Canvas`
+  producers. Uses `crossterm`, the one non-serde dependency.
 
 ## Data files (`data/`)
 

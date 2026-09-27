@@ -7,7 +7,7 @@ pub mod scenario;
 pub mod status;
 
 pub use board::{Board, Influence};
-pub use country::{Country, CountryId, Region, SubRegion, Superpower};
+pub use country::{Country, CountryId, Direction, Region, SubRegion, Superpower};
 pub use layout::{Cell, LayoutError, MapLayout};
 pub use map::{Found, MapError, WorldMap};
 pub use render::ColorMode;

@@ -230,6 +230,39 @@ fn render_line(cells: &[CanvasCell], mode: ColorMode) -> String {
     out
 }
 
+/// Battleground and total country counts for one region, US then USSR —
+/// the numbers shown in a region's title, whether that's a dashboard panel
+/// or the world map's selection line.
+pub(crate) struct RegionTally {
+    pub bg_us: usize,
+    pub bg_ussr: usize,
+    pub ctry_us: usize,
+    pub ctry_ussr: usize,
+}
+
+pub(crate) fn region_tally(
+    map: &crate::map::WorldMap,
+    layout: &crate::layout::MapLayout,
+    board: &crate::board::Board,
+    region: crate::country::Region,
+) -> RegionTally {
+    use crate::country::Superpower;
+
+    let ids = layout.countries_in_region(map, region);
+    let bg_us = ids
+        .iter()
+        .filter(|&&id| map.country(id).battleground && board.is_controlled_by(map, id, Superpower::Us))
+        .count();
+    let bg_ussr = ids
+        .iter()
+        .filter(|&&id| map.country(id).battleground && board.is_controlled_by(map, id, Superpower::Ussr))
+        .count();
+    let ctry_us = ids.iter().filter(|&&id| board.is_controlled_by(map, id, Superpower::Us)).count();
+    let ctry_ussr = ids.iter().filter(|&&id| board.is_controlled_by(map, id, Superpower::Ussr)).count();
+
+    RegionTally { bg_us, bg_ussr, ctry_us, ctry_ussr }
+}
+
 /// `"-"` for zero, otherwise the number — so an occupied country stands out
 /// from an empty one at a glance.
 pub(crate) fn nz(value: u8) -> String {

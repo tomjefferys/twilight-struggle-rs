@@ -4,7 +4,7 @@ use crate::layout::MapLayout;
 use crate::map::WorldMap;
 use crate::status::GameStatus;
 
-use super::{control_glyph, nz, Canvas, Color, Style};
+use super::{control_glyph, nz, region_tally, Canvas, Color, Style};
 
 /// Width of one country token: 1 battleground flag + 9-char name + 2-digit
 /// US influence + 1 control glyph + 2-digit USSR influence.
@@ -146,26 +146,11 @@ fn draw_region_panel(
     tokens_per_row: usize,
 ) {
     let ids = layout.countries_in_region(map, region);
-    let bg_us = ids
-        .iter()
-        .filter(|&&id| map.country(id).battleground && board.is_controlled_by(map, id, Superpower::Us))
-        .count();
-    let bg_ussr = ids
-        .iter()
-        .filter(|&&id| map.country(id).battleground && board.is_controlled_by(map, id, Superpower::Ussr))
-        .count();
-    let ctry_us = ids
-        .iter()
-        .filter(|&&id| board.is_controlled_by(map, id, Superpower::Us))
-        .count();
-    let ctry_ussr = ids
-        .iter()
-        .filter(|&&id| board.is_controlled_by(map, id, Superpower::Ussr))
-        .count();
+    let tally = region_tally(map, layout, board, region);
 
     let title = format!(
         " {}  bg {}-{}  ctry {}-{} ",
-        region, bg_us, bg_ussr, ctry_us, ctry_ussr
+        region, tally.bg_us, tally.bg_ussr, tally.ctry_us, tally.ctry_ussr
     );
     canvas.draw_box(row, col, width, height, Style::default());
     canvas.put(row, col + 1, &title, Style::default());

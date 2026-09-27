@@ -1,7 +1,9 @@
-use std::io::{self, Write};
+use std::io::{self, IsTerminal, Write};
 
 use twilight_struggle::render::{render_country, render_region, render_world, render_world_map};
 use twilight_struggle::{Board, ColorMode, Found, MapLayout, Region, Scenario, Superpower, WorldMap};
+
+mod interactive;
 
 struct Session {
     map: WorldMap,
@@ -10,6 +12,11 @@ struct Session {
     scenario: Scenario,
     width: usize,
     color: ColorMode,
+    /// False in one-shot mode, so `worldmap`/`wm` always falls back to a
+    /// plain print there — the documented snapshot-regeneration workflow
+    /// (`cargo run -- --color never worldmap`) runs on a TTY and must keep
+    /// producing a single static render, never the interactive view.
+    interactive_ok: bool,
 }
 
 fn main() {
@@ -51,6 +58,7 @@ fn main() {
         scenario,
         width,
         color,
+        interactive_ok: command_words.is_empty(),
     };
 
     if !command_words.is_empty() {
@@ -96,8 +104,14 @@ fn run_command(session: &mut Session, line: &str) {
             println!("{}", canvas.render(session.color));
         }
         "worldmap" | "wm" => {
-            let canvas = render_world_map(&session.map, &session.layout, &session.board);
-            println!("{}", canvas.render(session.color));
+            if session.interactive_ok && io::stdin().is_terminal() && io::stdout().is_terminal() {
+                if let Err(e) = interactive::run(&session.map, &session.layout, &session.board, session.color) {
+                    println!("interactive mode failed: {e}");
+                }
+            } else {
+                let canvas = render_world_map(&session.map, &session.layout, &session.board, None);
+                println!("{}", canvas.render(session.color));
+            }
         }
         "region" => match words.get(1).and_then(|s| parse_region(s)) {
             Some(region) => {
@@ -238,7 +252,8 @@ fn print_help() {
         "\
 Commands:
   map, world              the six-region dashboard
-  worldmap, wm            the whole world as one geographic map (codes, no names)
+  worldmap, wm            the whole world as one geographic map (codes, no names);
+                          arrow keys select a region, Enter zooms in, Esc backs out
   region <name>, 1-6      zoom into one region (europe/asia/middleeast/africa/centralamerica/southamerica)
   country <name>, /<name> a single country's detail, with all its neighbours (name or code)
   set <c> <us|ussr> <n>   set a country's influence
