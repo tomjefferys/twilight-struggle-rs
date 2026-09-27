@@ -1,6 +1,6 @@
 use std::io::{self, Write};
 
-use twilight_struggle::render::{render_country, render_region, render_world};
+use twilight_struggle::render::{render_country, render_region, render_world, render_world_map};
 use twilight_struggle::{Board, ColorMode, Found, MapLayout, Region, Scenario, Superpower, WorldMap};
 
 struct Session {
@@ -95,6 +95,10 @@ fn run_command(session: &mut Session, line: &str) {
             let canvas = render_world(&session.map, &session.layout, &session.board, &session.scenario.status, session.width);
             println!("{}", canvas.render(session.color));
         }
+        "worldmap" | "wm" => {
+            let canvas = render_world_map(&session.map, &session.layout, &session.board);
+            println!("{}", canvas.render(session.color));
+        }
         "region" => match words.get(1).and_then(|s| parse_region(s)) {
             Some(region) => {
                 let canvas = render_region(&session.map, &session.layout, &session.board, region);
@@ -181,7 +185,13 @@ fn print_country(session: &Session, query: &str) {
             let canvas = render_country(&session.map, &session.board, id);
             println!("{}", canvas.render(session.color));
         }
-        Found::None => println!("no country matches {query:?}"),
+        Found::None => match session.layout.find_by_code(query) {
+            Some(id) => {
+                let canvas = render_country(&session.map, &session.board, id);
+                println!("{}", canvas.render(session.color));
+            }
+            None => println!("no country matches {query:?}"),
+        },
         Found::Ambiguous(ids) => print_ambiguous(session, &ids),
     }
 }
@@ -228,8 +238,9 @@ fn print_help() {
         "\
 Commands:
   map, world              the six-region dashboard
+  worldmap, wm            the whole world as one geographic map (codes, no names)
   region <name>, 1-6      zoom into one region (europe/asia/middleeast/africa/centralamerica/southamerica)
-  country <name>, /<name> a single country's detail, with all its neighbours
+  country <name>, /<name> a single country's detail, with all its neighbours (name or code)
   set <c> <us|ussr> <n>   set a country's influence
   add <c> <us|ussr> <n>   add influence (saturates)
   remove <c> <us|ussr> <n> remove influence (saturates at 0)

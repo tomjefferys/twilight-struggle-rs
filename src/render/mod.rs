@@ -10,10 +10,12 @@
 pub mod country;
 pub mod region;
 pub mod world;
+pub mod worldmap;
 
 pub use country::render_country;
 pub use region::render_region;
 pub use world::render_world;
+pub use worldmap::render_world_map;
 
 /// A semantic colour. What each one actually looks like is up to the
 /// [`Theme`] resolving it, so a colour-blind or light-background palette is
