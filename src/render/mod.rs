@@ -37,6 +37,11 @@ pub enum Color {
     Africa,
     CentralAmerica,
     SouthAmerica,
+    /// A UI accent with no in-game meaning of its own — used to mark
+    /// whatever is currently selected in interactive navigation, so it
+    /// doesn't compete with (or get lost among) the colours above, which
+    /// all mean something about the game state.
+    Selected,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -93,6 +98,7 @@ impl Theme {
             Color::Africa => Some("33"),
             Color::CentralAmerica => Some("92"),
             Color::SouthAmerica => Some("32"),
+            Color::Selected => Some("97"),
         };
 
         let mut parts: Vec<&str> = Vec::new();
@@ -167,20 +173,34 @@ impl Canvas {
     }
 
     pub fn draw_box(&mut self, row: usize, col: usize, w: usize, h: usize, style: Style) {
+        self.draw_box_glyphs(row, col, w, h, style, ['┌', '┐', '└', '┘', '─', '│']);
+    }
+
+    /// The same box as [`Canvas::draw_box`], but drawn with heavy
+    /// box-drawing characters instead of thin ones — a shape change, not
+    /// just a style change, so a selection drawn this way still stands
+    /// out under [`ColorMode::Never`], where colour and boldness are both
+    /// invisible.
+    pub fn draw_thick_box(&mut self, row: usize, col: usize, w: usize, h: usize, style: Style) {
+        self.draw_box_glyphs(row, col, w, h, style, ['┏', '┓', '┗', '┛', '━', '┃']);
+    }
+
+    fn draw_box_glyphs(&mut self, row: usize, col: usize, w: usize, h: usize, style: Style, glyphs: [char; 6]) {
         if w < 2 || h < 2 {
             return;
         }
-        self.put_char(row, col, '┌', style);
-        self.put_char(row, col + w - 1, '┐', style);
-        self.put_char(row + h - 1, col, '└', style);
-        self.put_char(row + h - 1, col + w - 1, '┘', style);
+        let [top_left, top_right, bottom_left, bottom_right, horizontal, vertical] = glyphs;
+        self.put_char(row, col, top_left, style);
+        self.put_char(row, col + w - 1, top_right, style);
+        self.put_char(row + h - 1, col, bottom_left, style);
+        self.put_char(row + h - 1, col + w - 1, bottom_right, style);
         for c in (col + 1)..(col + w - 1) {
-            self.put_char(row, c, '─', style);
-            self.put_char(row + h - 1, c, '─', style);
+            self.put_char(row, c, horizontal, style);
+            self.put_char(row + h - 1, c, horizontal, style);
         }
         for r in (row + 1)..(row + h - 1) {
-            self.put_char(r, col, '│', style);
-            self.put_char(r, col + w - 1, '│', style);
+            self.put_char(r, col, vertical, style);
+            self.put_char(r, col + w - 1, vertical, style);
         }
     }
 

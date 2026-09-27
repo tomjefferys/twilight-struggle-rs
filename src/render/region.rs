@@ -96,7 +96,7 @@ pub fn render_region(map: &WorldMap, layout: &MapLayout, board: &Board, region: 
     draw_connectors(&mut canvas, map, layout, &ids, region);
 
     if let Some(footer_title) = &footer_title {
-        canvas.put(height - 2, 0, footer_title, Style::default().bold());
+        canvas.put(height - 2, 0, footer_title, Style::color(Color::Selected).bold());
         canvas.put(height - 1, 0, SELECTION_HINT, Style::color(Color::Muted));
     }
 
@@ -119,8 +119,10 @@ pub fn render_region(map: &WorldMap, layout: &MapLayout, board: &Board, region: 
     canvas
 }
 
-/// `selected` bolds the border and name, so the box stands out the same
-/// way the world map's selected region does.
+/// `selected` draws the border in heavy line-work and a bright accent
+/// colour, and bolds the name — a shape change as well as a colour one,
+/// so the selection still reads clearly even under `ColorMode::Never` or
+/// on a terminal where bold text barely differs from regular weight.
 #[allow(clippy::too_many_arguments)]
 fn draw_country_box(
     canvas: &mut Canvas,
@@ -133,8 +135,12 @@ fn draw_country_box(
     selected: bool,
 ) {
     let country = map.country(id);
-    let frame_style = if selected { Style::default().bold() } else { Style::default() };
-    canvas.draw_box(row, col, BOX_W, BOX_H, frame_style);
+    let frame_style = if selected { Style::color(Color::Selected).bold() } else { Style::default() };
+    if selected {
+        canvas.draw_thick_box(row, col, BOX_W, BOX_H, frame_style);
+    } else {
+        canvas.draw_box(row, col, BOX_W, BOX_H, frame_style);
+    }
 
     let flag_style = if country.battleground {
         Style::color(Color::Battleground)

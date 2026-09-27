@@ -138,13 +138,37 @@ fn a_selected_country_box_is_bold_where_an_unselected_one_is_not() {
     let canvas = render_region(&map, &layout, &board, Region::Europe, Some(italy));
     let text = canvas.render(ColorMode::Always);
     let italy_border_line = line_containing(&text, "Italy");
-    assert!(italy_border_line.contains("\x1b[1m"), "Italy's box should be bold: {italy_border_line:?}");
+    assert!(
+        italy_border_line.contains("\x1b[1;97m"),
+        "Italy's box should be bold and in the selection accent colour: {italy_border_line:?}"
+    );
 
     let uk = map.id_by_name("UK").unwrap();
     let canvas = render_region(&map, &layout, &board, Region::Europe, Some(uk));
     let text = canvas.render(ColorMode::Always);
     let italy_border_line = line_containing(&text, "Italy");
-    assert!(!italy_border_line.contains("\x1b[1m"), "Italy shouldn't be bold when UK is selected: {italy_border_line:?}");
+    assert!(!italy_border_line.contains("\x1b[1;97m"), "Italy shouldn't be bold when UK is selected: {italy_border_line:?}");
+}
+
+#[test]
+fn a_selected_country_box_uses_heavy_borders_even_without_colour() {
+    // Bold and colour both vanish under ColorMode::Never, so the selected
+    // box needs a shape difference too — heavy box-drawing characters
+    // instead of thin ones — to still read as selected there.
+    let (map, layout) = standard();
+    let board = Board::new(&map);
+    let italy = map.id_by_name("Italy").unwrap();
+
+    let canvas = render_region(&map, &layout, &board, Region::Europe, Some(italy));
+    let text = canvas.render(ColorMode::Never);
+    let italy_line = line_containing(&text, "Italy");
+    assert!(italy_line.contains('┃'), "Italy's box should use heavy borders when selected: {italy_line:?}");
+
+    let uk = map.id_by_name("UK").unwrap();
+    let canvas = render_region(&map, &layout, &board, Region::Europe, Some(uk));
+    let text = canvas.render(ColorMode::Never);
+    let italy_line = line_containing(&text, "Italy");
+    assert!(!italy_line.contains('┃'), "Italy shouldn't use heavy borders when UK is selected: {italy_line:?}");
 }
 
 fn line_containing<'a>(text: &'a str, needle: &str) -> &'a str {
