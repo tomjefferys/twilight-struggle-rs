@@ -103,6 +103,17 @@ const USA_TERRITORY: ((usize, usize), (usize, usize)) = ((10, 15), (0, 72));
 /// real region's country is ever inside this rectangle.
 const USSR_TERRITORY: ((usize, usize), (usize, usize)) = ((0, 8), (100, usize::MAX));
 
+/// The strip of land directly south of the USSR box, east of
+/// Romania/Bulgaria (column 103) and north of Turkey/Iraq (row 11) —
+/// roughly where real-world Kazakhstan sits. It has no country of its
+/// own, and the nearest real country to it is usually Iraq or Turkey, so
+/// a plain Voronoi tessellation tinted it Middle East — visually reading
+/// as the Middle East abutting the USSR box directly, with no Asia in
+/// between. Since this land sits right against USSR territory rather
+/// than the Middle East's own cluster, it reads better as Asia. Bounded
+/// to two rows (9–10) so it stops before Turkey's own row (11).
+const CENTRAL_ASIA_GAP: ((usize, usize), (usize, usize)) = ((9, 10), (104, usize::MAX));
+
 fn home_territory(row: usize, col: usize) -> Option<Color> {
     let in_rect = |((r0, r1), (c0, c1)): ((usize, usize), (usize, usize))| {
         row >= r0 && row <= r1 && col >= c0 && col <= c1
@@ -113,6 +124,8 @@ fn home_territory(row: usize, col: usize) -> Option<Color> {
         Some(Color::Us)
     } else if in_rect(USSR_TERRITORY) {
         Some(Color::Ussr)
+    } else if in_rect(CENTRAL_ASIA_GAP) {
+        Some(Color::Asia)
     } else {
         None
     }
