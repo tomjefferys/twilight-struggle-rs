@@ -1,18 +1,47 @@
 use crate::board::Board;
 use crate::country::{CountryId, Superpower};
 use crate::map::WorldMap;
+use crate::ops::Operation;
 
-use super::{control_glyph, nz, Canvas, Color, Style};
+use super::{control_glyph, modifier_line, nz, odds_line, Canvas, Color, Style};
 
 /// A single country in detail: its own state plus every neighbour's, since
 /// that's what deciding where to place, coup, or realign from actually
 /// needs.
-pub fn render_country(map: &WorldMap, board: &Board, id: CountryId) -> Canvas {
+///
+/// `op`, when it's a [`Realignment`](crate::ops::Realignment) in
+/// progress, appends a block below everything else: both sides' itemised
+/// modifiers for a roll on this country and the resulting odds. An
+/// [`InfluencePlacement`](crate::ops::InfluencePlacement) adds nothing
+/// here — its balance line has nowhere to go on this view either, so
+/// `main.rs` prints it as a banner above, exactly as it already does for
+/// the six-region dashboard.
+pub fn render_country(map: &WorldMap, board: &Board, id: CountryId, op: Option<&Operation>) -> Canvas {
     let country = map.country(id);
     let neighbor_lines = country.adjacent.len() + country.adjacent_superpowers.len();
     let sub_region_line = if country.sub_regions.is_empty() { 0 } else { 1 };
-    let height = 5 + sub_region_line + neighbor_lines;
-    let mut canvas = Canvas::new(60, height.max(5));
+
+    let realign_preview = match op {
+        Some(Operation::Realign(r)) => Some((r.side(), r.preview(map, board, id))),
+        _ => None,
+    };
+    // A blank separator row plus one line per side's modifiers and one
+    // for the odds.
+    let realign_rows = if realign_preview.is_some() { 4 } else { 0 };
+    let height = 5 + sub_region_line + neighbor_lines + realign_rows;
+
+    // This view was 60 columns fixed for as long as nothing on it could
+    // run longer than that. The realignment odds line can, so the width
+    // grows to fit it rather than risk the silent clipping every other
+    // view in this crate has to fold for.
+    let content_width = match &realign_preview {
+        Some((side, (acting, opposing, odds))) => {
+            let lines = [modifier_line(*side, acting), modifier_line(side.opponent(), opposing), odds_line(*side, odds)];
+            lines.iter().map(|l| l.chars().count()).max().unwrap_or(60).max(60)
+        }
+        None => 60,
+    };
+    let mut canvas = Canvas::new(content_width, height.max(5));
 
     let title_style = if country.battleground {
         Style::color(Color::Battleground).bold()
@@ -55,11 +84,28 @@ pub fn render_country(map: &WorldMap, board: &Board, id: CountryId) -> Canvas {
         let nctl = board.controller(map, neighbor_id);
         canvas.put(row, 2, &format!("{:<20}", n.name), Style::default());
         draw_influence(&mut canvas, row, 22, board, neighbor_id, nctl);
+        // Turn a realignment's "adjacent controlled" modifier from a bare
+        // number into a visible derivation: mark exactly the neighbours
+        // that are actually supplying it.
+        if let Some((side, _)) = &realign_preview
+            && board.is_controlled_by(map, neighbor_id, *side)
+        {
+            canvas.put(row, 42, "+1 realign", Style::color(Color::Selected));
+        }
         row += 1;
     }
     for &sp in &country.adjacent_superpowers {
         canvas.put(row, 2, &format!("{sp} (superpower)"), Style::color(Color::Muted));
         row += 1;
+    }
+
+    if let Some((side, (acting, opposing, odds))) = &realign_preview {
+        row += 1;
+        canvas.put(row, 0, &modifier_line(*side, acting), Style::color(Color::Selected));
+        row += 1;
+        canvas.put(row, 0, &modifier_line(side.opponent(), opposing), Style::color(Color::Muted));
+        row += 1;
+        canvas.put(row, 0, &odds_line(*side, odds), Style::color(Color::Muted));
     }
 
     canvas

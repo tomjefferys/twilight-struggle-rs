@@ -1,5 +1,6 @@
 pub mod board;
 pub mod country;
+pub mod dice;
 pub mod layout;
 pub mod map;
 pub mod ops;
@@ -9,9 +10,12 @@ pub mod status;
 
 pub use board::{Board, Influence};
 pub use country::{Country, CountryId, Direction, Region, SubRegion, Superpower};
+pub use dice::Dice;
 pub use layout::{Cell, LayoutError, MapLayout};
 pub use map::{Found, MapError, WorldMap};
-pub use ops::{InfluencePlacement, PlacementError};
+pub use ops::{
+    modifiers, odds, resolve, InfluencePlacement, Modifiers, Odds, Operation, PlacementError, RealignError, Realignment, RollResult,
+};
 pub use render::ColorMode;
 pub use scenario::{Scenario, ScenarioError};
 pub use status::GameStatus;

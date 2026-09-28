@@ -4,16 +4,20 @@ use crate::board::Board;
 use crate::country::{Region, Superpower};
 use crate::layout::MapLayout;
 use crate::map::WorldMap;
-use crate::ops::InfluencePlacement;
+use crate::ops::Operation;
 
-use super::{placement_balance_line, region_tally, Canvas, Color, Style};
+use super::{operation_balance_line, region_tally, Canvas, Color, Style};
 
-/// Shown below the legend when a region is selected but no placement is
+/// Shown below the legend when a region is selected but no operation is
 /// in progress.
 const WORLD_HINT: &str = "←→↑↓ select · Enter open · Esc back";
 
-/// Shown instead once an [`InfluencePlacement`] is in progress.
+/// Shown instead once an [`InfluencePlacement`](crate::ops::InfluencePlacement) is in progress.
 const WORLD_PLACEMENT_HINT: &str = "←→↑↓ select · Enter open · u undo · c confirm · Esc back";
+
+/// Shown instead once a [`Realignment`](crate::ops::Realignment) is in
+/// progress. No `u undo` — a resolved roll can't be taken back.
+const WORLD_REALIGN_HINT: &str = "←→↑↓ select · Enter open · r roll · c done · Esc back";
 
 /// The whole world on one grid, drawn to actually look like a map: real
 /// landmass shading underneath (rasterized once from public-domain
@@ -35,48 +39,44 @@ const WORLD_PLACEMENT_HINT: &str = "←→↑↓ select · Enter open · u undo 
 /// static view exactly — no extra rows, no style changes — so every
 /// existing caller is unaffected.
 ///
-/// `placement`, when set, is an influence placement in progress: every
-/// country with pending influence shows a `+` in place of its flag, and
-/// an extra footer line shows the side, its ops balance, and where it's
-/// placed so far.
+/// `op`, when set, is an operation in progress. An
+/// [`InfluencePlacement`](crate::ops::InfluencePlacement) shows every
+/// country with pending influence as a `+` in place of its flag. A
+/// [`Realignment`](crate::ops::Realignment) shows `!` instead, on any
+/// country its net influence has actually changed (there's no
+/// speculative board here — see the module's own doc). Either way an
+/// extra footer line shows the side, its ops balance, and where it's
+/// acted so far.
 pub fn render_world_map(
     map: &WorldMap,
     layout: &MapLayout,
     board: &Board,
     selected: Option<Region>,
-    placement: Option<&InfluencePlacement>,
+    op: Option<&Operation>,
 ) -> Canvas {
     // While a placement is in progress, every reader should see its
     // speculative board rather than the caller's, so control colours and
     // (were they ever added) influence figures stay live as points are
-    // staged.
-    let board = placement.map_or(board, InfluencePlacement::board);
+    // staged. A realignment has no speculative board — its rolls are
+    // already on the real one, which is exactly what `board` already is.
+    let board = op.and_then(Operation::board).unwrap_or(board);
     let background = layout.background();
     let height = background.len();
     let width = background.iter().map(|l| l.chars().count()).max().unwrap_or(0);
 
     let legend = superpower_legend(map);
-    let balance_line = placement.map(|p| placement_balance_line(layout, p));
-    // A selected region's footer is normally 2 rows (title + hint); an
-    // active placement adds the balance line to it. With no region
-    // selected there's no title to show, so an active placement (an edge
-    // case outside interactive use, where the two always go together)
-    // just gets the one balance row.
-    let footer_rows = if selected.is_some() {
-        2 + usize::from(balance_line.is_some())
-    } else {
-        usize::from(balance_line.is_some())
-    };
+    let footer_lines = footer_lines(map, layout, board, selected, op);
+    let footer_rows = footer_lines.len();
     // Unlike `render_region`, this view's width previously left the
     // selection footer's own strings out of the fold entirely — harmless
-    // while that footer never grew, but the placement balance line can be
-    // long, so it (and the hints) must be included here or `Canvas` will
-    // silently clip them.
+    // while that footer never grew, but the balance line can be long, so
+    // it (and the hints) must be included here or `Canvas` will silently
+    // clip them.
     let content_width = legend
         .iter()
         .map(|l| l.chars().count())
-        .chain(balance_line.iter().map(|l| l.chars().count()))
-        .chain([width, WORLD_HINT.chars().count(), WORLD_PLACEMENT_HINT.chars().count()])
+        .chain(footer_lines.iter().map(|(l, _)| l.chars().count()))
+        .chain([width])
         .max()
         .unwrap_or(width);
 
@@ -110,8 +110,8 @@ pub fn render_world_map(
     for (id, country) in map.iter() {
         let cell = layout.world_cell(id);
         let bold = selected == Some(country.region);
-        let pending = placement.is_some_and(|p| p.pending(id) > 0);
-        draw_chip(&mut canvas, cell.row as usize, cell.col as usize, map, layout, board, id, bold, pending);
+        let touched = op.is_some_and(|o| o.touches(board, id));
+        draw_chip(&mut canvas, cell.row as usize, cell.col as usize, map, layout, board, id, bold, touched, op);
     }
 
     for (i, line) in legend.iter().enumerate() {
@@ -119,13 +119,46 @@ pub fn render_world_map(
     }
 
     let frow = height + 1 + legend.len();
-    if let Some(region) = selected {
-        draw_selection_footer(&mut canvas, frow, map, layout, board, region, placement);
-    } else if let Some(line) = &balance_line {
-        canvas.put(frow, 0, line, Style::color(Color::Selected));
+    for (i, (line, style)) in footer_lines.iter().enumerate() {
+        canvas.put(frow + i, 0, line, *style);
     }
 
     canvas
+}
+
+/// Every footer line this view might draw, in draw order — built once so
+/// the row count (`.len()`) and the drawing loop can never drift apart.
+/// A selected region's footer is normally 2 rows (title + hint); an
+/// active operation adds the balance line to it. With no region selected
+/// there's no title to show, so an active operation (an edge case outside
+/// interactive use, where the two always go together) just gets the one
+/// balance row and no hint.
+fn footer_lines(
+    map: &WorldMap,
+    layout: &MapLayout,
+    board: &Board,
+    selected: Option<Region>,
+    op: Option<&Operation>,
+) -> Vec<(String, Style)> {
+    let mut lines = Vec::new();
+    if let Some(region) = selected {
+        let tally = region_tally(map, layout, board, region);
+        let name = region.to_string().to_uppercase();
+        let title = format!("▸ {name} ◂   bg {}-{}  ctry {}-{}", tally.bg_us, tally.bg_ussr, tally.ctry_us, tally.ctry_ussr);
+        lines.push((title, Style::color(zone_color(Zone::Region(region))).bold()));
+    }
+    if let Some(operation) = op {
+        lines.push((operation_balance_line(layout, board, operation), Style::color(Color::Selected)));
+    }
+    if selected.is_some() {
+        let hint = match op {
+            Some(Operation::Influence(_)) => WORLD_PLACEMENT_HINT,
+            Some(Operation::Realign(_)) => WORLD_REALIGN_HINT,
+            None => WORLD_HINT,
+        };
+        lines.push((hint.to_string(), Style::color(Color::Muted)));
+    }
+    lines
 }
 
 /// A patch of the background art: either a scoring region (tinted by that
@@ -260,12 +293,15 @@ fn draw_superpower_box(canvas: &mut Canvas, (y, x): (usize, usize), (rows, cols)
 }
 
 /// `bold` is set for a country in the currently-selected region, so its
-/// chip stays legible against the brightened land beneath it. `pending`
-/// marks a country with staged (uncommitted) influence: since a chip is
-/// only ever `flag + code`, there's no spare column for a count, so the
-/// flag slot is overridden with `+` — trading away the battleground flag
-/// for the duration of the placement, which is an acceptable loss on this
-/// low-detail overview (the region view keeps both).
+/// chip stays legible against the brightened land beneath it. `touched`
+/// marks a country an open operation has actually changed the net
+/// influence of: since a chip is only ever `flag + code`, there's no
+/// spare column for a count, so the flag slot is overridden — `+` for a
+/// placement's staged points, `!` for a realignment's live swing (a
+/// hyphen would read as just another dash among the chips, and `nz`
+/// already uses `-` to mean zero influence elsewhere) — trading away the
+/// battleground flag for the duration of the operation, an acceptable
+/// loss on this low-detail overview (the region view keeps both).
 #[allow(clippy::too_many_arguments)]
 fn draw_chip(
     canvas: &mut Canvas,
@@ -276,7 +312,8 @@ fn draw_chip(
     board: &Board,
     id: crate::country::CountryId,
     bold: bool,
-    pending: bool,
+    touched: bool,
+    op: Option<&Operation>,
 ) {
     let country = map.country(id);
     let controller = board.controller(map, id);
@@ -286,7 +323,7 @@ fn draw_chip(
         None if country.battleground => Style::color(Color::Battleground),
         None => Style::default(),
     };
-    if bold || pending {
+    if bold || touched {
         style = style.bold();
     }
     // Centre the chip (flag + code) on its geographic point rather than
@@ -296,46 +333,14 @@ fn draw_chip(
     let code = layout.code(id);
     let total = code.chars().count() + 1;
     let start = col.saturating_sub(total / 2);
-    let flag = if pending {
-        '+'
-    } else if country.battleground {
-        '*'
-    } else {
-        ' '
+    let flag = match op {
+        Some(Operation::Influence(_)) if touched => '+',
+        Some(Operation::Realign(_)) if touched => '!',
+        _ if country.battleground => '*',
+        _ => ' ',
     };
     canvas.put_char(row, start, flag, style);
     canvas.put(row, start + 1, code, style);
-}
-
-/// The two lines shown below the legend once a region is selected: its
-/// name (upper-cased, bold, in its own region colour) with the same
-/// battleground/country tallies a dashboard panel shows, then the key
-/// hints for interactive navigation.
-#[allow(clippy::too_many_arguments)]
-fn draw_selection_footer(
-    canvas: &mut Canvas,
-    row: usize,
-    map: &WorldMap,
-    layout: &MapLayout,
-    board: &Board,
-    region: Region,
-    placement: Option<&InfluencePlacement>,
-) {
-    let tally = region_tally(map, layout, board, region);
-    let name = region.to_string().to_uppercase();
-    let title = format!(
-        "▸ {name} ◂   bg {}-{}  ctry {}-{}",
-        tally.bg_us, tally.bg_ussr, tally.ctry_us, tally.ctry_ussr
-    );
-    let mut r = row;
-    canvas.put(r, 0, &title, Style::color(zone_color(Zone::Region(region))).bold());
-    r += 1;
-    if let Some(p) = placement {
-        canvas.put(r, 0, &placement_balance_line(layout, p), Style::color(Color::Selected));
-        r += 1;
-    }
-    let hint = if placement.is_some() { WORLD_PLACEMENT_HINT } else { WORLD_HINT };
-    canvas.put(r, 0, hint, Style::color(Color::Muted));
 }
 
 /// One line per superpower listing its real bordering countries — with no

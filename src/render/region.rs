@@ -2,9 +2,9 @@ use crate::board::Board;
 use crate::country::{CountryId, Region, Superpower};
 use crate::layout::MapLayout;
 use crate::map::WorldMap;
-use crate::ops::InfluencePlacement;
+use crate::ops::Operation;
 
-use super::{control_glyph, nz, placement_balance_line, Canvas, Color, Style};
+use super::{control_glyph, modifier_line, nz, odds_line, operation_balance_line, Canvas, Color, Style};
 
 /// Box dimensions and grid pitch for the region zoom view. A 1-column,
 /// 1-row gap between boxes leaves room for connector glyphs.
@@ -19,8 +19,12 @@ const TOP_MARGIN: usize = 2; // title line + blank
 /// nothing for it to open yet.
 const SELECTION_HINT: &str = "←→↑↓ select · Esc back";
 
-/// Shown instead, once an [`InfluencePlacement`] is in progress.
+/// Shown instead, once an [`InfluencePlacement`](crate::ops::InfluencePlacement) is in progress.
 const PLACEMENT_HINT: &str = "←→↑↓ select · + place · u undo · c confirm · Esc back";
+
+/// Shown instead of [`SELECTION_HINT`], once a [`Realignment`](crate::ops::Realignment)
+/// is in progress. No `u undo` — a resolved roll can't be taken back.
+const REALIGN_HINT: &str = "←→↑↓ select · r roll · c done · Esc back";
 
 /// A geographic zoom into one region: every country in it drawn as a box
 /// on its layout grid cell, connected to its in-region neighbours by line
@@ -34,23 +38,31 @@ const PLACEMENT_HINT: &str = "←→↑↓ select · + place · u undo · c conf
 /// Passing `None` reproduces the plain, static view exactly — no extra
 /// rows, no style changes — so every existing caller is unaffected.
 ///
-/// `placement`, when set, is an influence placement in progress: each
-/// country with pending influence shows a `+N` badge and the live
-/// (speculative) influence numbers, a country that isn't currently a
-/// legal target is dimmed, and an extra footer line shows the side, its
-/// ops balance, and where it's placed so far.
+/// `op`, when set, is an operation in progress. An
+/// [`InfluencePlacement`](crate::ops::InfluencePlacement) shows each
+/// pending country with a `+N` badge and the live (speculative) influence
+/// numbers, dims a country that isn't currently a legal target, and adds
+/// a footer line with the side, its ops balance, and where it's placed so
+/// far. A [`Realignment`](crate::ops::Realignment) shows a `+N`/`-N` net
+/// badge from the real board's own live numbers (there's no speculative
+/// board — see the module's own doc), dims a country with no opponent
+/// influence to remove, and — while a country is also selected — adds a
+/// modifier and odds breakdown for the roll that country would resolve
+/// next.
 pub fn render_region(
     map: &WorldMap,
     layout: &MapLayout,
     board: &Board,
     region: Region,
     selected: Option<CountryId>,
-    placement: Option<&InfluencePlacement>,
+    op: Option<&Operation>,
 ) -> Canvas {
     // While a placement is in progress, every reader — influence numbers,
     // control glyphs, tallies — should see its speculative board rather
     // than the caller's, so the view always reflects pending state live.
-    let board = placement.map_or(board, InfluencePlacement::board);
+    // A realignment has no speculative board of its own: its rolls are
+    // already on the real one, which is exactly what `board` already is.
+    let board = op.and_then(Operation::board).unwrap_or(board);
     let ids = layout.countries_in_region(map, region);
     let (max_row, max_col) = ids.iter().fold((0u8, 0u8), |(mr, mc), &id| {
         let cell = layout.cell(id);
@@ -70,14 +82,8 @@ pub fn render_region(
     if !undrawn.is_empty() {
         extra_lines += 1 + undrawn.len();
     }
-    let footer_title = selected.map(|id| selection_title(map, board, id));
-    let balance_line = placement.map(|p| placement_balance_line(layout, p));
-    let hint = if placement.is_some() { PLACEMENT_HINT } else { SELECTION_HINT };
-    // A footer line is drawn for whichever of the selection title and the
-    // placement balance apply, plus a hint line once either does — so
-    // `None`/`None` stays at zero extra rows (byte-identical to the plain
-    // view) and today's "selected only" case stays at exactly two.
-    let footer_rows = footer_title.iter().count() + balance_line.iter().count() + usize::from(selected.is_some() || placement.is_some());
+    let footer_lines = build_footer_lines(map, board, layout, selected, op);
+    let footer_rows = footer_lines.len();
     let height = grid_height + if extra_lines > 0 { extra_lines + 1 } else { 0 } + footer_rows;
 
     let bg_us = ids
@@ -103,10 +109,9 @@ pub fn render_region(
     let content_width = off_region_links
         .iter()
         .chain(undrawn.iter())
-        .chain(footer_title.iter())
-        .chain(balance_line.iter())
         .map(|line| line.chars().count())
-        .chain([title.chars().count(), SELECTION_HINT.chars().count(), PLACEMENT_HINT.chars().count(), grid_width])
+        .chain(footer_lines.iter().map(|(line, _)| line.chars().count()))
+        .chain([title.chars().count(), grid_width])
         .max()
         .unwrap_or(grid_width);
 
@@ -117,22 +122,13 @@ pub fn render_region(
         let cell = layout.cell(id);
         let y = TOP_MARGIN + cell.row as usize * PITCH_ROW;
         let x = LEFT_MARGIN + cell.col as usize * PITCH_COL;
-        draw_country_box(&mut canvas, y, x, map, layout, board, id, selected == Some(id), placement);
+        draw_country_box(&mut canvas, y, x, map, layout, board, id, selected == Some(id), op);
     }
 
     draw_connectors(&mut canvas, map, layout, &ids, region);
 
-    if footer_rows > 0 {
-        let mut frow = height - footer_rows;
-        if let Some(footer_title) = &footer_title {
-            canvas.put(frow, 0, footer_title, Style::color(Color::Selected).bold());
-            frow += 1;
-        }
-        if let Some(balance_line) = &balance_line {
-            canvas.put(frow, 0, balance_line, Style::color(Color::Selected));
-            frow += 1;
-        }
-        canvas.put(frow, 0, hint, Style::color(Color::Muted));
+    for (i, (line, style)) in footer_lines.iter().enumerate() {
+        canvas.put(height - footer_rows + i, 0, line, *style);
     }
 
     let mut row = grid_height;
@@ -168,7 +164,7 @@ fn draw_country_box(
     board: &Board,
     id: CountryId,
     selected: bool,
-    placement: Option<&InfluencePlacement>,
+    op: Option<&Operation>,
 ) {
     let country = map.country(id);
     let frame_style = if selected { Style::color(Color::Selected).bold() } else { Style::default() };
@@ -184,9 +180,10 @@ fn draw_country_box(
         Style::default()
     };
     canvas.put_char(row + 1, col + 1, if country.battleground { '*' } else { ' ' }, flag_style);
-    // A country that can't legally receive the next placement is dimmed —
-    // the rule is visible up front, not just enforced on a failed attempt.
-    let legal = placement.is_none_or(|p| p.is_legal_target(map, id));
+    // A country that can't legally receive the next placement (or roll)
+    // is dimmed — the rule is visible up front, not just enforced on a
+    // failed attempt.
+    let legal = op.is_none_or(|o| o.is_legal_target(map, board, id));
     let name_style = if legal { frame_style } else { Style::color(Color::Muted) };
     canvas.put(row + 1, col + 2, layout.short_name(id), name_style);
 
@@ -207,13 +204,40 @@ fn draw_country_box(
     canvas.put(row + 2, col + 4, &format!("{:<2}", nz(ussr)), ussr_style);
     canvas.put(row + 2, col + 8, &format!("st{}", country.stability), Style::color(Color::Muted));
 
-    let pending = placement.map_or(0, |p| p.pending(id));
-    if pending > 0 {
-        // Cols 11-12 are the only ones free on the stats row (1-5 is the
-        // influence pair, 8-10 is `st<n>`); clamp so `+N` can never run
-        // into the box's right border at col 13.
-        canvas.put(row + 2, col + 11, &format!("+{}", pending.min(9)), Style::color(Color::Selected).bold());
+    // Cols 11-12 are free on the stats row for the operation's headline
+    // number (1-5 is the influence pair, 8-10 is `st<n>`); cols 6-7 are
+    // also free, used only by a realignment that's *also* cost the
+    // acting side its own influence there. Clamped so a badge can never
+    // run into the box's right border at col 13.
+    if let Some(operation) = op {
+        match operation {
+            Operation::Influence(p) => {
+                let pending = p.pending(id) as i8;
+                if pending > 0 {
+                    canvas.put(row + 2, col + 11, &format_delta(pending), Style::color(Color::Selected).bold());
+                }
+            }
+            Operation::Realign(_) => {
+                let side = operation.side();
+                let opponent = side.opponent();
+                let opp_delta = operation.delta(board, id, opponent);
+                let own_delta = operation.delta(board, id, side);
+                if opp_delta != 0 {
+                    canvas.put(row + 2, col + 11, &format_delta(opp_delta), Style::color(Color::Selected).bold());
+                }
+                if own_delta != 0 {
+                    canvas.put(row + 2, col + 6, &format_delta(own_delta), Style::color(Color::Muted));
+                }
+            }
+        }
     }
+}
+
+/// A signed delta clamped to a single digit of magnitude, so it always
+/// fits the two-character badge slot in a country box.
+fn format_delta(delta: i8) -> String {
+    let sign = if delta < 0 { '-' } else { '+' };
+    format!("{sign}{}", delta.unsigned_abs().min(9))
 }
 
 /// Draws a connector glyph in the gap between every pair of grid-adjacent,
@@ -277,6 +301,48 @@ fn draw_connectors(canvas: &mut Canvas, map: &WorldMap, layout: &MapLayout, ids:
     for (&(y, x), &glyph) in &glyphs {
         canvas.put_char(y, x, glyph, Style::color(Color::Muted));
     }
+}
+
+/// Every footer line this view might draw, in draw order — built once so
+/// the row count (`.len()`) and the drawing loop can never drift apart,
+/// unlike the hand-maintained parallel tallies this replaced.
+///
+/// A selection title shows whenever a country is selected; the operation
+/// balance line shows whenever one is open; a realignment *also* adds its
+/// modifier and odds breakdown, but only once a country is selected too —
+/// gating that on `op.is_some()` alone would change a placement's row
+/// count, which `tests/render.rs` pins exactly. A hint line closes it off
+/// whenever either a selection or an operation is present, naming
+/// whichever of the two applies.
+fn build_footer_lines(
+    map: &WorldMap,
+    board: &Board,
+    layout: &MapLayout,
+    selected: Option<CountryId>,
+    op: Option<&Operation>,
+) -> Vec<(String, Style)> {
+    let mut lines = Vec::new();
+    if let Some(id) = selected {
+        lines.push((selection_title(map, board, id), Style::color(Color::Selected).bold()));
+    }
+    if let Some(operation) = op {
+        lines.push((operation_balance_line(layout, board, operation), Style::color(Color::Selected)));
+        if let (Operation::Realign(realignment), Some(id)) = (operation, selected) {
+            let (acting, opposing, odds) = realignment.preview(map, board, id);
+            lines.push((modifier_line(realignment.side(), &acting), Style::color(Color::Selected)));
+            lines.push((modifier_line(realignment.side().opponent(), &opposing), Style::color(Color::Muted)));
+            lines.push((odds_line(realignment.side(), &odds), Style::color(Color::Muted)));
+        }
+    }
+    if selected.is_some() || op.is_some() {
+        let hint = match op {
+            Some(Operation::Influence(_)) => PLACEMENT_HINT,
+            Some(Operation::Realign(_)) => REALIGN_HINT,
+            None => SELECTION_HINT,
+        };
+        lines.push((hint.to_string(), Style::color(Color::Muted)));
+    }
+    lines
 }
 
 /// The selected country's footer line: name, battleground flag, stability,

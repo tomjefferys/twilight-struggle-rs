@@ -1,5 +1,5 @@
 use twilight_struggle::render::{render_country, render_region, render_world};
-use twilight_struggle::{Board, ColorMode, InfluencePlacement, MapLayout, Region, Scenario, Superpower, WorldMap};
+use twilight_struggle::{Board, ColorMode, InfluencePlacement, MapLayout, Operation, Realignment, Region, Scenario, Superpower, WorldMap};
 
 fn standard() -> (WorldMap, MapLayout) {
     let map = WorldMap::standard().unwrap();
@@ -189,9 +189,10 @@ fn a_placement_adds_exactly_one_footer_row_over_a_plain_selection() {
     let mut placement = InfluencePlacement::new(Superpower::Ussr, 5, &board);
     placement.place(&map, poland).unwrap();
 
+    let op = Operation::Influence(placement);
     let plain = render_region(&map, &layout, &board, Region::Europe, None, None);
     let selected_only = render_region(&map, &layout, &board, Region::Europe, Some(poland), None);
-    let with_placement = render_region(&map, &layout, &board, Region::Europe, Some(poland), Some(&placement));
+    let with_placement = render_region(&map, &layout, &board, Region::Europe, Some(poland), Some(&op));
 
     assert_eq!(selected_only.height(), plain.height() + 2, "selection alone should still add exactly two rows");
     assert_eq!(with_placement.height(), plain.height() + 3, "a placement should add exactly one more row than a bare selection");
@@ -206,7 +207,8 @@ fn pending_influence_is_marked_in_the_region_view() {
     placement.place(&map, poland).unwrap();
     placement.place(&map, poland).unwrap();
 
-    let canvas = render_region(&map, &layout, &board, Region::Europe, None, Some(&placement));
+    let op = Operation::Influence(placement);
+    let canvas = render_region(&map, &layout, &board, Region::Europe, None, Some(&op));
     let text = canvas.render(ColorMode::Never);
     let poland_stats_line = line_after(&text, "Poland");
     assert!(poland_stats_line.contains("+2"), "Poland should show a +2 pending badge: {poland_stats_line:?}");
@@ -223,7 +225,8 @@ fn the_pending_marker_reads_without_colour() {
     let mut placement = InfluencePlacement::new(Superpower::Ussr, 5, &board);
     placement.place(&map, poland).unwrap();
 
-    let canvas = render_region(&map, &layout, &board, Region::Europe, None, Some(&placement));
+    let op = Operation::Influence(placement);
+    let canvas = render_region(&map, &layout, &board, Region::Europe, None, Some(&op));
     let text = canvas.render(ColorMode::Never);
     assert!(!text.contains('\x1b'));
     let poland_stats_line = line_after(&text, "Poland");
@@ -239,7 +242,8 @@ fn the_balance_line_shows_side_and_remaining_ops() {
     placement.place(&map, poland).unwrap();
     placement.place(&map, poland).unwrap();
 
-    let canvas = render_region(&map, &layout, &board, Region::Europe, None, Some(&placement));
+    let op = Operation::Influence(placement);
+    let canvas = render_region(&map, &layout, &board, Region::Europe, None, Some(&op));
     let text = canvas.render(ColorMode::Never);
     assert!(text.contains("USSR"), "balance line should name the placing side:\n{text}");
     assert!(text.contains("6 of 8 ops left"), "balance line should show the ops remaining:\n{text}");
@@ -251,8 +255,9 @@ fn the_placement_hint_replaces_the_selection_hint() {
     let board = Board::new(&map);
     let poland = map.id_by_name("Poland").unwrap();
     let placement = InfluencePlacement::new(Superpower::Ussr, 5, &board);
+    let op = Operation::Influence(placement);
 
-    let with_placement = render_region(&map, &layout, &board, Region::Europe, Some(poland), Some(&placement));
+    let with_placement = render_region(&map, &layout, &board, Region::Europe, Some(poland), Some(&op));
     let text = with_placement.render(ColorMode::Never);
     assert!(text.contains("u undo"), "placement hint missing 'u undo':\n{text}");
     assert!(text.contains("c confirm"), "placement hint missing 'c confirm':\n{text}");
@@ -273,7 +278,8 @@ fn a_country_that_cannot_receive_the_next_placement_is_dimmed() {
     let chile = map.id_by_name("Chile").unwrap();
     assert!(!placement.is_legal_target(&map, chile));
 
-    let canvas = render_region(&map, &layout, &board, Region::SouthAmerica, None, Some(&placement));
+    let op = Operation::Influence(placement);
+    let canvas = render_region(&map, &layout, &board, Region::SouthAmerica, None, Some(&op));
     let text = canvas.render(ColorMode::Always);
     let chile_line = line_containing(&text, "Chile");
     // The name should not be drawn in the default (unstyled) run — it
@@ -288,9 +294,10 @@ fn no_region_line_exceeds_the_canvas_width_with_a_placement_active() {
     let poland = map.id_by_name("Poland").unwrap();
     let mut placement = InfluencePlacement::new(Superpower::Ussr, 5, &board);
     placement.place(&map, poland).unwrap();
+    let op = Operation::Influence(placement);
 
     for &region in &Region::ALL {
-        let canvas = render_region(&map, &layout, &board, region, Some(poland), Some(&placement));
+        let canvas = render_region(&map, &layout, &board, region, Some(poland), Some(&op));
         let text = canvas.render(ColorMode::Never);
         for line in text.lines() {
             assert!(line.chars().count() <= canvas.width(), "region {region} placement view exceeded its own width: {line:?}");
@@ -315,7 +322,7 @@ fn color_never_emits_no_escape_codes() {
     let canvas = render_world(&map, &layout, &scenario.board, &scenario.status, 104);
     assert!(!canvas.render(ColorMode::Never).contains('\x1b'));
 
-    let country_canvas = render_country(&map, &scenario.board, map.id_by_name("Italy").unwrap());
+    let country_canvas = render_country(&map, &scenario.board, map.id_by_name("Italy").unwrap(), None);
     assert!(!country_canvas.render(ColorMode::Never).contains('\x1b'));
 }
 
@@ -326,7 +333,7 @@ fn color_always_wraps_styled_text_in_sgr_codes() {
     let italy = map.id_by_name("Italy").unwrap();
     board.set_influence(italy, Superpower::Us, 3);
 
-    let canvas = render_country(&map, &board, italy);
+    let canvas = render_country(&map, &board, italy, None);
     let text = canvas.render(ColorMode::Always);
     assert!(text.contains('\x1b'), "coloured output should contain ANSI escapes");
     assert!(text.contains("\x1b[0m"), "styled runs should be reset");
@@ -340,7 +347,7 @@ fn render_country_lists_every_neighbor_with_its_own_state() {
     board.set_influence(france, Superpower::Ussr, 5);
 
     let italy = map.id_by_name("Italy").unwrap();
-    let canvas = render_country(&map, &board, italy);
+    let canvas = render_country(&map, &board, italy, None);
     let text = canvas.render(ColorMode::Never);
 
     for neighbor in &map.country(italy).adjacent {
@@ -350,4 +357,170 @@ fn render_country_lists_every_neighbor_with_its_own_state() {
     // France's own influence (not Italy's) should show up on its line.
     let france_line = line_containing(&text, "France");
     assert!(france_line.contains('5'), "France's USSR influence should appear: {france_line:?}");
+}
+
+#[test]
+fn a_realignment_adds_exactly_four_more_footer_rows_than_a_bare_selection() {
+    let (map, layout) = standard();
+    let board = Board::new(&map);
+    let poland = map.id_by_name("Poland").unwrap();
+    let op = Operation::Realign(Realignment::new(Superpower::Ussr, 5, &board));
+
+    let plain = render_region(&map, &layout, &board, Region::Europe, None, None);
+    let selected_only = render_region(&map, &layout, &board, Region::Europe, Some(poland), None);
+    let with_realign = render_region(&map, &layout, &board, Region::Europe, Some(poland), Some(&op));
+
+    assert_eq!(selected_only.height(), plain.height() + 2, "selection alone should still add exactly two rows");
+    // Selection title, balance line, this side's modifiers, the
+    // opponent's modifiers, and the odds line: four more than a bare
+    // selection's title + hint.
+    assert_eq!(
+        with_realign.height(),
+        selected_only.height() + 4,
+        "a realignment with a country selected should add exactly four more rows than a bare selection"
+    );
+}
+
+#[test]
+fn a_realigned_country_shows_its_badge() {
+    let (map, layout) = standard();
+    let mut board = Board::new(&map);
+    let italy = map.id_by_name("Italy").unwrap();
+    board.set_influence(italy, Superpower::Us, 3);
+    board.set_influence(italy, Superpower::Ussr, 1);
+
+    // The realignment's `base` is captured here, before the board is
+    // mutated below — exactly as a real win would leave it.
+    let op = Operation::Realign(Realignment::new(Superpower::Ussr, 5, &board));
+    board.set_influence(italy, Superpower::Us, 1); // as if a roll just removed 2
+
+    let canvas = render_region(&map, &layout, &board, Region::Europe, None, Some(&op));
+    let text = canvas.render(ColorMode::Never);
+    let italy_stats_line = line_after(&text, "Italy");
+    assert!(italy_stats_line.contains("-2"), "Italy should show a -2 badge for the US influence it lost: {italy_stats_line:?}");
+}
+
+#[test]
+fn the_badge_reads_without_colour() {
+    let (map, layout) = standard();
+    let mut board = Board::new(&map);
+    let italy = map.id_by_name("Italy").unwrap();
+    board.set_influence(italy, Superpower::Us, 3);
+    let op = Operation::Realign(Realignment::new(Superpower::Ussr, 5, &board));
+    board.set_influence(italy, Superpower::Us, 1);
+
+    let canvas = render_region(&map, &layout, &board, Region::Europe, None, Some(&op));
+    let text = canvas.render(ColorMode::Never);
+    assert!(!text.contains('\x1b'));
+    let italy_stats_line = line_after(&text, "Italy");
+    assert!(italy_stats_line.contains("-2"), "the badge should still read under ColorMode::Never: {italy_stats_line:?}");
+}
+
+#[test]
+fn a_country_with_no_opponent_influence_is_dimmed_during_a_realignment() {
+    let (map, layout) = standard();
+    let board = Board::new(&map);
+    // On an empty board, the US has no influence anywhere in South
+    // America, so every country there is an illegal realignment target
+    // for the USSR — a good, unambiguous "should be dimmed" case.
+    let op = Operation::Realign(Realignment::new(Superpower::Ussr, 5, &board));
+
+    let canvas = render_region(&map, &layout, &board, Region::SouthAmerica, None, Some(&op));
+    let text = canvas.render(ColorMode::Always);
+    let chile_line = line_containing(&text, "Chile");
+    assert!(chile_line.contains("\x1b[2m") || chile_line.contains(";2m"), "an illegal target's name should be dimmed: {chile_line:?}");
+}
+
+#[test]
+fn the_realign_hint_replaces_the_selection_hint() {
+    let (map, layout) = standard();
+    let board = Board::new(&map);
+    let poland = map.id_by_name("Poland").unwrap();
+    let op = Operation::Realign(Realignment::new(Superpower::Ussr, 5, &board));
+
+    let with_realign = render_region(&map, &layout, &board, Region::Europe, Some(poland), Some(&op));
+    let text = with_realign.render(ColorMode::Never);
+    assert!(text.contains("r roll"), "realign hint missing 'r roll':\n{text}");
+    assert!(text.contains("c done"), "realign hint missing 'c done':\n{text}");
+    assert!(!text.contains("u undo"), "a realignment hint shouldn't offer undo, which isn't possible:\n{text}");
+    assert!(!text.contains("+ place"), "a realignment hint shouldn't offer placement's '+ place':\n{text}");
+}
+
+#[test]
+fn the_modifier_summary_names_every_active_modifier() {
+    let (map, layout) = standard();
+    let mut board = Board::new(&map);
+    let poland = map.id_by_name("Poland").unwrap();
+    // Poland borders the USSR itself, so superpower_adjacent is free;
+    // controlling both its other neighbours and out-influencing the US
+    // there lights up the remaining two modifiers as well.
+    board.set_influence(map.id_by_name("East Germany").unwrap(), Superpower::Ussr, 3);
+    board.set_influence(map.id_by_name("Czechoslovakia").unwrap(), Superpower::Ussr, 3);
+    board.set_influence(poland, Superpower::Ussr, 2);
+    assert!(map.country(poland).borders_superpower(Superpower::Ussr));
+
+    let op = Operation::Realign(Realignment::new(Superpower::Ussr, 5, &board));
+    let canvas = render_region(&map, &layout, &board, Region::Europe, Some(poland), Some(&op));
+    let text = canvas.render(ColorMode::Never);
+    assert!(text.contains("2 adjacent controlled countries"), "expected the adjacent-controlled count:\n{text}");
+    assert!(text.contains("more influence"), "expected the more-influence modifier:\n{text}");
+    assert!(text.contains("superpower adjacent"), "expected the superpower-adjacent modifier:\n{text}");
+}
+
+#[test]
+fn no_region_line_exceeds_the_canvas_width_with_a_realignment_active() {
+    let (map, layout) = standard();
+    let mut board = Board::new(&map);
+    // Stack every modifier for both sides on the same country, and use
+    // one with a long name, to stress the width fold as hard as
+    // possible: the country's own line, the balance line, the
+    // modifier lines, and the odds line all become long at once.
+    let poland = map.id_by_name("Poland").unwrap();
+    board.set_influence(map.id_by_name("East Germany").unwrap(), Superpower::Ussr, 3);
+    board.set_influence(map.id_by_name("Czechoslovakia").unwrap(), Superpower::Ussr, 3);
+    board.set_influence(poland, Superpower::Ussr, 2);
+
+    let op = Operation::Realign(Realignment::new(Superpower::Ussr, 5, &board));
+    for &region in &Region::ALL {
+        let canvas = render_region(&map, &layout, &board, region, Some(poland), Some(&op));
+        let text = canvas.render(ColorMode::Never);
+        for line in text.lines() {
+            assert!(line.chars().count() <= canvas.width(), "region {region} realignment view exceeded its own width: {line:?}");
+        }
+    }
+}
+
+#[test]
+fn no_country_detail_line_exceeds_its_canvas_width() {
+    let (map, _layout) = standard();
+    let mut board = Board::new(&map);
+    let poland = map.id_by_name("Poland").unwrap();
+    board.set_influence(map.id_by_name("East Germany").unwrap(), Superpower::Ussr, 3);
+    board.set_influence(map.id_by_name("Czechoslovakia").unwrap(), Superpower::Ussr, 3);
+    board.set_influence(poland, Superpower::Ussr, 2);
+
+    let op = Operation::Realign(Realignment::new(Superpower::Ussr, 5, &board));
+    let canvas = render_country(&map, &board, poland, Some(&op));
+    let text = canvas.render(ColorMode::Never);
+    for line in text.lines() {
+        assert!(line.chars().count() <= canvas.width(), "country detail view exceeded its own width: {line:?}");
+    }
+    assert!(text.contains("odds"), "expected the odds line to be present:\n{text}");
+}
+
+#[test]
+fn country_detail_marks_the_neighbours_supplying_adjacent_controlled() {
+    let (map, _layout) = standard();
+    let mut board = Board::new(&map);
+    let poland = map.id_by_name("Poland").unwrap();
+    let east_germany = map.id_by_name("East Germany").unwrap();
+    board.set_influence(east_germany, Superpower::Ussr, 3);
+
+    let op = Operation::Realign(Realignment::new(Superpower::Ussr, 5, &board));
+    let canvas = render_country(&map, &board, poland, Some(&op));
+    let text = canvas.render(ColorMode::Never);
+    let east_germany_line = line_containing(&text, "East Germany");
+    assert!(east_germany_line.contains("+1 realign"), "the controlled neighbour should be marked: {east_germany_line:?}");
+    let czechoslovakia_line = line_containing(&text, "Czechoslovakia");
+    assert!(!czechoslovakia_line.contains("+1 realign"), "an uncontrolled neighbour shouldn't be marked: {czechoslovakia_line:?}");
 }
