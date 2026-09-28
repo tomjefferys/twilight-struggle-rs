@@ -1,7 +1,7 @@
 use std::io::{self, IsTerminal, Write};
 
-use twilight_struggle::render::{operation_balance_line, render_country, render_region, render_world, render_world_map, roll_result_line};
-use twilight_struggle::{Board, ColorMode, Dice, Found, InfluencePlacement, MapLayout, Operation, Realignment, Region, Scenario, Superpower, WorldMap};
+use twilight_struggle::render::{coup_result_line, operation_balance_line, render_country, render_region, render_world, render_world_map, roll_result_line};
+use twilight_struggle::{Board, ColorMode, Coup, Dice, Found, InfluencePlacement, MapLayout, Operation, Realignment, Region, Scenario, Superpower, WorldMap};
 
 mod interactive;
 
@@ -17,23 +17,23 @@ struct Session {
     /// (`cargo run -- --color never worldmap`) runs on a TTY and must keep
     /// producing a single static render, never the interactive view.
     interactive_ok: bool,
-    /// An open operation, if `ops` or `realign` has started one. While
-    /// it's open, every view renders its speculative board (if it has
-    /// one — a realignment doesn't) instead of `board`, and
+    /// An open operation, if `ops`, `realign`, or `coup` has started one.
+    /// While it's open, every view renders its speculative board (if it
+    /// has one — a realignment or coup doesn't) instead of `board`, and
     /// `set`/`add`/`remove`/`load` are refused so the board an operation
     /// was judged legal against can't shift underneath it.
     op: Option<Operation>,
-    /// Rolls a realignment's dice. Seeded from entropy in the REPL, or
-    /// from a fixed default (overridable with `--seed`) in one-shot mode,
-    /// so the documented snapshot-regeneration workflow stays
-    /// reproducible.
+    /// Rolls a realignment's or coup's dice. Seeded from entropy in the
+    /// REPL, or from a fixed default (overridable with `--seed`) in
+    /// one-shot mode, so the documented snapshot-regeneration workflow
+    /// stays reproducible.
     dice: Dice,
 }
 
 /// The board every view should read: an operation's speculative one
-/// while a session is open (placement has one; realignment doesn't,
-/// since its rolls already land on the real board), otherwise the
-/// committed board.
+/// while a session is open (placement has one; realignment and coup
+/// don't, since their rolls already land on the real board), otherwise
+/// the committed board.
 fn view_board(session: &Session) -> &Board {
     session.op.as_ref().and_then(Operation::board).unwrap_or(&session.board)
 }
@@ -238,6 +238,7 @@ fn run_command(session: &mut Session, line: &str) {
         "ops" => run_ops_command(session, &words),
         "place" => run_place_command(session, &words),
         "realign" => run_realign_command(session, &words),
+        "coup" => run_coup_command(session, &words),
         "roll" => run_roll_command(session, &words),
         "undo" => run_undo_command(session),
         "confirm" => run_confirm_command(session),
@@ -301,12 +302,12 @@ fn print_ambiguous(session: &Session, ids: &[twilight_struggle::CountryId]) {
 }
 
 /// `ops <us|ussr> <n>` starts a placement session; bare `ops` reports the
-/// currently open operation (either kind), if any.
+/// currently open operation (any kind), if any.
 fn run_ops_command(session: &mut Session, words: &[&str]) {
     if words.len() == 1 {
         match &session.op {
             Some(_) => print_operation_banner(session),
-            None => println!("no operation session open. Start one with: ops <us|ussr> <n> or realign <us|ussr> <n>"),
+            None => println!("no operation session open. Start one with: ops <us|ussr> <n>, realign <us|ussr> <n>, or coup <us|ussr> <n>"),
         }
         return;
     }
@@ -345,7 +346,7 @@ fn run_realign_command(session: &mut Session, words: &[&str]) {
     if words.len() == 1 {
         match &session.op {
             Some(_) => print_operation_banner(session),
-            None => println!("no operation session open. Start one with: realign <us|ussr> <n> or ops <us|ussr> <n>"),
+            None => println!("no operation session open. Start one with: realign <us|ussr> <n>, ops <us|ussr> <n>, or coup <us|ussr> <n>"),
         }
         return;
     }
@@ -376,6 +377,49 @@ fn run_realign_command(session: &mut Session, words: &[&str]) {
     }
     session.op = Some(Operation::Realign(Realignment::new(side, ops, &session.board)));
     println!("started a {side} realignment with {ops} ops — each roll resolves immediately onto the board and cannot be taken back");
+}
+
+/// `coup <us|ussr> <n>` starts a coup session; bare `coup` reports the
+/// open one, if any. The whole card's ops are spent on a single attempt
+/// (rule 6.3.2) — `roll <country>` resolves it.
+fn run_coup_command(session: &mut Session, words: &[&str]) {
+    if words.len() == 1 {
+        match &session.op {
+            Some(_) => print_operation_banner(session),
+            None => println!("no operation session open. Start one with: coup <us|ussr> <n>, ops <us|ussr> <n>, or realign <us|ussr> <n>"),
+        }
+        return;
+    }
+    if let Some(op) = &session.op {
+        println!(
+            "a {} session is already open ({} of {} ops left) — confirm or cancel it first",
+            op.verb(),
+            op.remaining(),
+            op.ops_total()
+        );
+        return;
+    }
+    if words.len() != 3 {
+        println!("usage: coup <us|ussr> <n>");
+        return;
+    }
+    let Some(side) = parse_superpower(words[1]) else {
+        println!("expected 'us' or 'ussr', got {:?}", words[1]);
+        return;
+    };
+    let Ok(ops) = words[2].parse::<u8>() else {
+        println!("expected a number, got {:?}", words[2]);
+        return;
+    };
+    if ops == 0 {
+        println!("ops must be at least 1");
+        return;
+    }
+    session.op = Some(Operation::Coup(Coup::new(side, ops, &session.board)));
+    println!(
+        "started a {side} coup with {ops} ops — `roll <country>` spends all {ops} on one attempt, \
+         resolved immediately onto the board and cannot be taken back"
+    );
 }
 
 /// `place <country> [n]` places `n` (default 1) points of influence, one
@@ -441,8 +485,9 @@ fn run_place_command(session: &mut Session, words: &[&str]) {
     }
 }
 
-/// `roll <country>` resolves one realignment roll immediately — there's
-/// no "current target" to default to, so the country is required.
+/// `roll <country>` resolves one realignment roll, or a coup's one
+/// attempt, immediately — whichever kind of session is open. There's no
+/// "current target" to default to, so the country is required.
 fn run_roll_command(session: &mut Session, words: &[&str]) {
     let rest = &words[1..];
     if rest.is_empty() {
@@ -461,16 +506,17 @@ fn run_roll_command(session: &mut Session, words: &[&str]) {
             return;
         }
     };
-    let Some(Operation::Realign(realignment)) = &mut session.op else {
-        match &session.op {
-            Some(op) => println!("a {} session is open, not a realignment — `roll` only works during a realignment", op.verb()),
-            None => println!("no realignment session open. Start one with: realign <us|ussr> <n>"),
-        }
-        return;
-    };
-    match realignment.roll(&session.map, &mut session.board, id, &mut session.dice) {
-        Ok(result) => println!("{}", roll_result_line(&session.map, realignment.side(), &result)),
-        Err(e) => println!("cannot roll in {}: {e}", session.map.country(id).name),
+    match &mut session.op {
+        Some(Operation::Realign(realignment)) => match realignment.roll(&session.map, &mut session.board, id, &mut session.dice) {
+            Ok(result) => println!("{}", roll_result_line(&session.map, realignment.side(), &result)),
+            Err(e) => println!("cannot roll in {}: {e}", session.map.country(id).name),
+        },
+        Some(Operation::Coup(coup)) => match coup.attempt(&session.map, &mut session.board, id, &mut session.dice) {
+            Ok(result) => println!("{}", coup_result_line(&session.map, coup.side(), &result)),
+            Err(e) => println!("cannot coup {}: {e}", session.map.country(id).name),
+        },
+        Some(op) => println!("a {} session is open, not a realignment or coup — `roll` only works during one of those", op.verb()),
+        None => println!("no realignment or coup session open. Start one with: realign <us|ussr> <n> or coup <us|ussr> <n>"),
     }
 }
 
@@ -486,6 +532,7 @@ fn run_undo_command(session: &mut Session) {
             None => println!("nothing to undo"),
         },
         Some(Operation::Realign(_)) => println!("a resolved realignment roll can't be taken back"),
+        Some(Operation::Coup(_)) => println!("a resolved coup can't be taken back"),
         None => println!("no operation session open"),
     }
 }
@@ -523,6 +570,17 @@ fn run_confirm_command(session: &mut Session) {
                 );
             }
         }
+        Some(Operation::Coup(coup)) => {
+            let side = coup.side();
+            let total = coup.ops_total();
+            match coup.result() {
+                Some(result) => println!(
+                    "done — {side} spent all {total} ops couping {}, already resolved on the board",
+                    session.map.country(result.target).name,
+                ),
+                None => println!("closed — {side}'s coup never attempted; all {total} ops are simply lost"),
+            }
+        }
         None => println!("no operation session open"),
     }
 }
@@ -543,6 +601,13 @@ fn run_cancel_command(session: &mut Session) {
                 realignment.remaining(),
             );
         }
+        Some(Operation::Coup(coup)) => match coup.result() {
+            Some(result) => println!(
+                "closed — the coup on {} already resolved on the board and can't be undone",
+                session.map.country(result.target).name,
+            ),
+            None => println!("closed — the coup never attempted; all {} ops are simply lost", coup.ops_total()),
+        },
         None => println!("no operation session open"),
     }
 }
@@ -595,7 +660,7 @@ Commands:
   load demo               reload the bundled demo scenario
 
   ops <us|ussr> <n>       start placing influence with n operation points
-  ops                     show the open session's ops balance (either kind)
+  ops                     show the open session's ops balance (any kind)
   place <country> [n]     place n influence (default 1); 1 op, or 2 in an
                           opponent-controlled country — refused if there's
                           no influence there, in a neighbour, or a border
@@ -610,18 +675,30 @@ Commands:
   undo                    (during a realignment) refuses: rolls can't be
                           taken back, only placement points can
 
+  coup <us|ussr> <n>      start a coup with n operation points; view a
+                          country to see its target number (stability ×2)
+                          and success odds first
+  roll <country>          resolve the coup's one attempt, spending all n
+                          ops at once — resolves immediately onto the
+                          board and CANNOT be undone; a second `roll`
+                          in the same session is refused
+  undo                    (during a coup) refuses: a resolved attempt
+                          can't be taken back
+
   confirm                 commit a pending placement, or close a finished
-                          realignment (whose rolls are already on the board)
+                          realignment or coup (whose rolls are already on
+                          the board)
   cancel                  discard an unconfirmed placement, unspent; or
-                          close a realignment, leaving its rolls in place
+                          close a realignment or coup, leaving any rolls
+                          already made in place
                           (while a session is open: map/world/country show
                           a balance banner; worldmap/region mark touched
                           countries and are navigable the same way inside
-                          interactive mode — + place / r roll, u undo,
-                          c confirm, X cancel; set/add/remove/load are
-                          refused until you confirm or cancel)
+                          interactive mode — + place / r roll or coup,
+                          u undo, c confirm, X cancel; set/add/remove/load
+                          are refused until you confirm or cancel)
 
-  seed <n>                reseed the realignment dice (for reproducible play)
+  seed <n>                reseed the dice (for reproducible play)
   width <n>               set the render width
   color on|off            toggle ANSI colour
   help, ?                 this text

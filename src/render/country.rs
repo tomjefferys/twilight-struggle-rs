@@ -3,7 +3,7 @@ use crate::country::{CountryId, Superpower};
 use crate::map::WorldMap;
 use crate::ops::Operation;
 
-use super::{control_glyph, modifier_line, nz, odds_line, Canvas, Color, Style};
+use super::{control_glyph, coup_odds_line, coup_target_line, modifier_line, nz, odds_line, Canvas, Color, Style};
 
 /// A single country in detail: its own state plus every neighbour's, since
 /// that's what deciding where to place, coup, or realign from actually
@@ -11,11 +11,13 @@ use super::{control_glyph, modifier_line, nz, odds_line, Canvas, Color, Style};
 ///
 /// `op`, when it's a [`Realignment`](crate::ops::Realignment) in
 /// progress, appends a block below everything else: both sides' itemised
-/// modifiers for a roll on this country and the resulting odds. An
-/// [`InfluencePlacement`](crate::ops::InfluencePlacement) adds nothing
-/// here — its balance line has nowhere to go on this view either, so
-/// `main.rs` prints it as a banner above, exactly as it already does for
-/// the six-region dashboard.
+/// modifiers for a roll on this country and the resulting odds. A
+/// [`Coup`](crate::ops::Coup) in progress appends the target number
+/// (stability × 2) and the success odds instead — a coup has no per-side
+/// modifiers to itemise. An [`InfluencePlacement`](crate::ops::InfluencePlacement)
+/// adds nothing here — its balance line has nowhere to go on this view
+/// either, so `main.rs` prints it as a banner above, exactly as it
+/// already does for the six-region dashboard.
 pub fn render_country(map: &WorldMap, board: &Board, id: CountryId, op: Option<&Operation>) -> Canvas {
     let country = map.country(id);
     let neighbor_lines = country.adjacent.len() + country.adjacent_superpowers.len();
@@ -25,22 +27,30 @@ pub fn render_country(map: &WorldMap, board: &Board, id: CountryId, op: Option<&
         Some(Operation::Realign(r)) => Some((r.side(), r.preview(map, board, id))),
         _ => None,
     };
+    let coup_preview = match op {
+        Some(Operation::Coup(c)) => Some((c.side(), c.ops_total(), c.preview(map, board, id))),
+        _ => None,
+    };
     // A blank separator row plus one line per side's modifiers and one
-    // for the odds.
+    // for the odds; a coup has no per-side modifiers, so just the
+    // separator plus a target-number line and an odds line.
     let realign_rows = if realign_preview.is_some() { 4 } else { 0 };
-    let height = 5 + sub_region_line + neighbor_lines + realign_rows;
+    let coup_rows = if coup_preview.is_some() { 3 } else { 0 };
+    let height = 5 + sub_region_line + neighbor_lines + realign_rows + coup_rows;
 
     // This view was 60 columns fixed for as long as nothing on it could
-    // run longer than that. The realignment odds line can, so the width
-    // grows to fit it rather than risk the silent clipping every other
-    // view in this crate has to fold for.
-    let content_width = match &realign_preview {
-        Some((side, (acting, opposing, odds))) => {
-            let lines = [modifier_line(*side, acting), modifier_line(side.opponent(), opposing), odds_line(*side, odds)];
-            lines.iter().map(|l| l.chars().count()).max().unwrap_or(60).max(60)
-        }
-        None => 60,
-    };
+    // run longer than that. The realignment/coup odds lines can, so the
+    // width grows to fit them rather than risk the silent clipping every
+    // other view in this crate has to fold for.
+    let realign_width = realign_preview.as_ref().map(|(side, (acting, opposing, odds))| {
+        let lines = [modifier_line(*side, acting), modifier_line(side.opponent(), opposing), odds_line(*side, odds)];
+        lines.iter().map(|l| l.chars().count()).max().unwrap_or(60)
+    });
+    let coup_width = coup_preview.as_ref().map(|(side, ops, (target_number, odds))| {
+        let lines = [coup_target_line(*side, *ops, *target_number, country.stability), coup_odds_line(*side, odds)];
+        lines.iter().map(|l| l.chars().count()).max().unwrap_or(60)
+    });
+    let content_width = realign_width.into_iter().chain(coup_width).chain([60]).max().unwrap_or(60);
     let mut canvas = Canvas::new(content_width, height.max(5));
 
     let title_style = if country.battleground {
@@ -106,6 +116,13 @@ pub fn render_country(map: &WorldMap, board: &Board, id: CountryId, op: Option<&
         canvas.put(row, 0, &modifier_line(side.opponent(), opposing), Style::color(Color::Muted));
         row += 1;
         canvas.put(row, 0, &odds_line(*side, odds), Style::color(Color::Muted));
+    }
+
+    if let Some((side, ops, (target_number, odds))) = &coup_preview {
+        row += 1;
+        canvas.put(row, 0, &coup_target_line(*side, *ops, *target_number, country.stability), Style::color(Color::Selected));
+        row += 1;
+        canvas.put(row, 0, &coup_odds_line(*side, odds), Style::color(Color::Muted));
     }
 
     canvas

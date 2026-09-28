@@ -4,7 +4,7 @@ use crate::layout::MapLayout;
 use crate::map::WorldMap;
 use crate::ops::Operation;
 
-use super::{control_glyph, modifier_line, nz, odds_line, operation_balance_line, Canvas, Color, Style};
+use super::{control_glyph, coup_odds_line, coup_target_line, modifier_line, nz, odds_line, operation_balance_line, Canvas, Color, Style};
 
 /// Box dimensions and grid pitch for the region zoom view. A 1-column,
 /// 1-row gap between boxes leaves room for connector glyphs.
@@ -25,6 +25,10 @@ const PLACEMENT_HINT: &str = "←→↑↓ select · + place · u undo · c conf
 /// Shown instead of [`SELECTION_HINT`], once a [`Realignment`](crate::ops::Realignment)
 /// is in progress. No `u undo` — a resolved roll can't be taken back.
 const REALIGN_HINT: &str = "←→↑↓ select · r roll · c done · Esc back";
+
+/// Shown instead of [`SELECTION_HINT`], once a [`Coup`](crate::ops::Coup) is
+/// in progress. No `u undo` — a resolved attempt can't be taken back.
+const COUP_HINT: &str = "←→↑↓ select · r coup · c done · Esc back";
 
 /// A geographic zoom into one region: every country in it drawn as a box
 /// on its layout grid cell, connected to its in-region neighbours by line
@@ -48,7 +52,9 @@ const REALIGN_HINT: &str = "←→↑↓ select · r roll · c done · Esc back"
 /// board — see the module's own doc), dims a country with no opponent
 /// influence to remove, and — while a country is also selected — adds a
 /// modifier and odds breakdown for the roll that country would resolve
-/// next.
+/// next. A [`Coup`](crate::ops::Coup) behaves the same way — same badge,
+/// same dimming rule — but its footer breakdown shows the target number
+/// (stability × 2) and success odds instead of realignment's modifiers.
 pub fn render_region(
     map: &WorldMap,
     layout: &MapLayout,
@@ -60,8 +66,9 @@ pub fn render_region(
     // While a placement is in progress, every reader — influence numbers,
     // control glyphs, tallies — should see its speculative board rather
     // than the caller's, so the view always reflects pending state live.
-    // A realignment has no speculative board of its own: its rolls are
-    // already on the real one, which is exactly what `board` already is.
+    // A realignment or coup has no speculative board of its own: its
+    // rolls are already on the real one, which is exactly what `board`
+    // already is.
     let board = op.and_then(Operation::board).unwrap_or(board);
     let ids = layout.countries_in_region(map, region);
     let (max_row, max_col) = ids.iter().fold((0u8, 0u8), |(mr, mc), &id| {
@@ -217,7 +224,7 @@ fn draw_country_box(
                     canvas.put(row + 2, col + 11, &format_delta(pending), Style::color(Color::Selected).bold());
                 }
             }
-            Operation::Realign(_) => {
+            Operation::Realign(_) | Operation::Coup(_) => {
                 let side = operation.side();
                 let opponent = side.opponent();
                 let opp_delta = operation.delta(board, id, opponent);
@@ -309,11 +316,13 @@ fn draw_connectors(canvas: &mut Canvas, map: &WorldMap, layout: &MapLayout, ids:
 ///
 /// A selection title shows whenever a country is selected; the operation
 /// balance line shows whenever one is open; a realignment *also* adds its
-/// modifier and odds breakdown, but only once a country is selected too —
-/// gating that on `op.is_some()` alone would change a placement's row
-/// count, which `tests/render.rs` pins exactly. A hint line closes it off
-/// whenever either a selection or an operation is present, naming
-/// whichever of the two applies.
+/// modifier and odds breakdown (4 rows total with the balance line), and a
+/// coup adds its target-number and odds breakdown (3 rows total) — either
+/// way only once a country is selected too, since gating that on
+/// `op.is_some()` alone would change a placement's row count, which
+/// `tests/render.rs` pins exactly. A hint line closes it off whenever
+/// either a selection or an operation is present, naming whichever of the
+/// two applies.
 fn build_footer_lines(
     map: &WorldMap,
     board: &Board,
@@ -333,11 +342,20 @@ fn build_footer_lines(
             lines.push((modifier_line(realignment.side().opponent(), &opposing), Style::color(Color::Muted)));
             lines.push((odds_line(realignment.side(), &odds), Style::color(Color::Muted)));
         }
+        if let (Operation::Coup(coup), Some(id)) = (operation, selected) {
+            let (target_number, odds) = coup.preview(map, board, id);
+            lines.push((
+                coup_target_line(coup.side(), coup.ops_total(), target_number, map.country(id).stability),
+                Style::color(Color::Selected),
+            ));
+            lines.push((coup_odds_line(coup.side(), &odds), Style::color(Color::Muted)));
+        }
     }
     if selected.is_some() || op.is_some() {
         let hint = match op {
             Some(Operation::Influence(_)) => PLACEMENT_HINT,
             Some(Operation::Realign(_)) => REALIGN_HINT,
+            Some(Operation::Coup(_)) => COUP_HINT,
             None => SELECTION_HINT,
         };
         lines.push((hint.to_string(), Style::color(Color::Muted)));

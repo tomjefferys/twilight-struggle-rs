@@ -345,13 +345,22 @@ fn touched_country_summary(
     let name = layout.short_name(id);
     match op {
         crate::ops::Operation::Influence(p) => format!("{name} +{}", p.pending(id)),
-        crate::ops::Operation::Realign(_) => {
+        crate::ops::Operation::Realign(_) | crate::ops::Operation::Coup(_) => {
             let side = op.side();
             let opponent = side.opponent();
             let opp_delta = op.delta(board, id, opponent);
             let own_delta = op.delta(board, id, side);
+            // A pure (0, 0) reads differently depending on how it can
+            // happen: a realignment roll actually contested the two
+            // totals and came out level, so "tied" fits; a coup with
+            // nothing changed only ever means its one attempt fell short
+            // of the target number, so "failed" is the honest word.
+            let no_change = match op {
+                crate::ops::Operation::Coup(_) => format!("{name} failed"),
+                _ => format!("{name} tied"),
+            };
             match (opp_delta, own_delta) {
-                (0, 0) => format!("{name} tied"),
+                (0, 0) => no_change,
                 (o, 0) => format!("{name} {opponent}{o:+}"),
                 (0, s) => format!("{name} {side}{s:+}"),
                 (o, s) => format!("{name} {opponent}{o:+}/{side}{s:+}"),
@@ -401,4 +410,47 @@ pub fn odds_line(side: crate::country::Superpower, odds: &crate::ops::Odds) -> S
         odds.removed_36ths as f32 / 36.0,
         odds.lost_36ths as f32 / 36.0,
     )
+}
+
+/// A coup's target number for the currently selected country, alongside
+/// what's rolled against it — the `modifier_line` analogue for a coup,
+/// shared by the region footer, the country detail view, and the REPL.
+pub fn coup_target_line(side: crate::country::Superpower, ops: u8, target_number: u8, stability: u8) -> String {
+    format!("{side}  d6 +{ops} vs {target_number}   (stability {stability} ×2)")
+}
+
+/// The coup odds line: success/failure share out of 6, plus the expected
+/// influence swing on each side.
+pub fn coup_odds_line(side: crate::country::Superpower, odds: &crate::ops::CoupOdds) -> String {
+    let opponent = side.opponent();
+    format!(
+        "odds  {side} {}/6 · {opponent} {}/6   avg  {opponent} -{:.1} / {side} +{:.1}",
+        odds.success,
+        odds.failure,
+        odds.removed_6ths as f32 / 6.0,
+        odds.added_6ths as f32 / 6.0,
+    )
+}
+
+/// The outcome of a resolved coup attempt, in a single line — used by
+/// both the REPL's own `roll` command and the interactive footer's
+/// sticky roll message, so the wording is identical either way.
+pub fn coup_result_line(map: &crate::map::WorldMap, side: crate::country::Superpower, result: &crate::ops::CoupResult) -> String {
+    let opponent = side.opponent();
+    let country = &map.country(result.target).name;
+    let modified = result.die as u16 + result.ops as u16;
+    let dice = format!("{side} {}+{}={modified} vs {}", result.die, result.ops, result.target_number);
+    let outcome = if !result.success() {
+        format!("no better than {} — the coup fails in {country}", result.target_number)
+    } else if result.added == 0 {
+        format!("{side} removes {} {opponent} influence from {country}", result.removed)
+    } else if result.removed == 0 {
+        format!("{side} adds {} of its own influence to {country}", result.added)
+    } else {
+        format!(
+            "{side} removes {} {opponent} influence from {country} and adds {} of its own",
+            result.removed, result.added,
+        )
+    };
+    format!("{dice} → {outcome}")
 }

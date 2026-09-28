@@ -12,7 +12,7 @@ use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
 use crossterm::terminal::{self, Clear, ClearType, EnterAlternateScreen, LeaveAlternateScreen};
 use crossterm::{execute, queue};
 
-use twilight_struggle::render::{render_region, render_world_map, roll_result_line};
+use twilight_struggle::render::{coup_result_line, render_region, render_world_map, roll_result_line};
 use twilight_struggle::{Board, ColorMode, CountryId, Dice, Direction, MapLayout, Operation, Region, WorldMap};
 
 /// Which screen is currently showing.
@@ -67,14 +67,15 @@ impl Drop for TerminalGuard {
 /// `op`, when `Some` on entry (or started implicitly never — a session
 /// can only be opened from the REPL today), is an operation in progress.
 /// `c` confirms/closes it into `board` (a placement commits; a
-/// realignment's rolls are already there) and `X` cancels/closes it. For
-/// an [`InfluencePlacement`](twilight_struggle::InfluencePlacement),
+/// realignment's or coup's rolls are already there) and `X` cancels/closes
+/// it. For an [`InfluencePlacement`](twilight_struggle::InfluencePlacement),
 /// `+`/`=` places one point in the selected country (region screen only)
 /// and `u` undoes the last one. For a
-/// [`Realignment`](twilight_struggle::Realignment), `r` resolves a roll
-/// on the selected country (region screen only) — immediately and
-/// permanently, since there's nothing to undo. Leaving via `Esc`/`q`
-/// keeps a still-open session intact.
+/// [`Realignment`](twilight_struggle::Realignment) or a
+/// [`Coup`](twilight_struggle::Coup), `r` resolves a roll (or the coup's
+/// one attempt) on the selected country (region screen only) —
+/// immediately and permanently, since there's nothing to undo. Leaving
+/// via `Esc`/`q` keeps a still-open session intact.
 pub fn run(
     map: &WorldMap,
     layout: &MapLayout,
@@ -110,7 +111,9 @@ pub fn run(
                 // it's set fresh below whenever a new roll happens, and
                 // any other key that would otherwise clear it doesn't
                 // touch it.
-                let rolled = matches!(key.code, KeyCode::Char('r')) && matches!(screen, Screen::Region { .. }) && matches!(op, Some(Operation::Realign(_)));
+                let rolled = matches!(key.code, KeyCode::Char('r'))
+                    && matches!(screen, Screen::Region { .. })
+                    && matches!(op, Some(Operation::Realign(_)) | Some(Operation::Coup(_)));
                 if !rolled {
                     message = None;
                 }
@@ -137,6 +140,9 @@ pub fn run(
                             }
                             Some(Operation::Realign(_)) => {
                                 message = Some("a resolved realignment roll can't be taken back".to_string());
+                            }
+                            Some(Operation::Coup(_)) => {
+                                message = Some("a resolved coup can't be taken back".to_string());
                             }
                             None => {}
                         }
@@ -169,14 +175,21 @@ pub fn run(
                                     message = Some(format!("{}: {e}", map.country(*selected).name));
                                 }
                             }
-                            KeyCode::Char('r') => {
-                                if let Some(Operation::Realign(r)) = op.as_mut() {
+                            KeyCode::Char('r') => match op.as_mut() {
+                                Some(Operation::Realign(r)) => {
                                     message = Some(match r.roll(map, board, *selected, dice) {
                                         Ok(result) => roll_result_line(map, r.side(), &result),
                                         Err(e) => format!("{}: {e}", map.country(*selected).name),
                                     });
                                 }
-                            }
+                                Some(Operation::Coup(c)) => {
+                                    message = Some(match c.attempt(map, board, *selected, dice) {
+                                        Ok(result) => coup_result_line(map, c.side(), &result),
+                                        Err(e) => format!("{}: {e}", map.country(*selected).name),
+                                    });
+                                }
+                                _ => {}
+                            },
                             KeyCode::Esc => {
                                 last_selected.insert(*region, *selected);
                                 screen = Screen::World { selected: *region };

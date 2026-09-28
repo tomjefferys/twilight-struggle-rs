@@ -14,7 +14,8 @@ pub use dice::Dice;
 pub use layout::{Cell, LayoutError, MapLayout};
 pub use map::{Found, MapError, WorldMap};
 pub use ops::{
-    modifiers, odds, resolve, InfluencePlacement, Modifiers, Odds, Operation, PlacementError, RealignError, Realignment, RollResult,
+    coup_odds, coup_resolve, coup_target_number, modifiers, odds, resolve, Coup, CoupError, CoupOdds, CoupResult, InfluencePlacement,
+    Modifiers, Odds, Operation, PlacementError, RealignError, Realignment, RollResult,
 };
 pub use render::ColorMode;
 pub use scenario::{Scenario, ScenarioError};
