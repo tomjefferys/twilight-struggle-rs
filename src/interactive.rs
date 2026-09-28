@@ -12,8 +12,8 @@ use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
 use crossterm::terminal::{self, Clear, ClearType, EnterAlternateScreen, LeaveAlternateScreen};
 use crossterm::{execute, queue};
 
-use twilight_struggle::render::{render_region, render_world_map};
-use twilight_struggle::{Board, ColorMode, CountryId, Direction, InfluencePlacement, MapLayout, Region, WorldMap};
+use twilight_struggle::render::{render_region, render_world_map, roll_result_line};
+use twilight_struggle::{Board, ColorMode, CountryId, Dice, Direction, MapLayout, Operation, Region, WorldMap};
 
 /// Which screen is currently showing.
 enum Screen {
@@ -64,17 +64,23 @@ impl Drop for TerminalGuard {
 /// Drives the interactive world map until the user backs all the way out
 /// (`Esc` from the world view, `q`, or Ctrl-C).
 ///
-/// `placement`, when `Some` on entry (or started implicitly never — a
-/// session can only be opened from the REPL today), is an influence
-/// placement in progress: `+`/`=` places one point of influence in the
-/// selected country (region screen only), `u` undoes the last point, `c`
-/// confirms it into `board`, and `X` discards it. Leaving via `Esc`/`q`
+/// `op`, when `Some` on entry (or started implicitly never — a session
+/// can only be opened from the REPL today), is an operation in progress.
+/// `c` confirms/closes it into `board` (a placement commits; a
+/// realignment's rolls are already there) and `X` cancels/closes it. For
+/// an [`InfluencePlacement`](twilight_struggle::InfluencePlacement),
+/// `+`/`=` places one point in the selected country (region screen only)
+/// and `u` undoes the last one. For a
+/// [`Realignment`](twilight_struggle::Realignment), `r` resolves a roll
+/// on the selected country (region screen only) — immediately and
+/// permanently, since there's nothing to undo. Leaving via `Esc`/`q`
 /// keeps a still-open session intact.
 pub fn run(
     map: &WorldMap,
     layout: &MapLayout,
     board: &mut Board,
-    placement: &mut Option<InfluencePlacement>,
+    op: &mut Option<Operation>,
+    dice: &mut Dice,
     color: ColorMode,
 ) -> io::Result<Outcome> {
     let _guard = TerminalGuard::enter()?;
@@ -83,37 +89,56 @@ pub fn run(
     // region and coming back to it later re-selects the same one instead
     // of always resetting to its top-left-most country.
     let mut last_selected: HashMap<Region, CountryId> = HashMap::new();
-    // The most recent placement error, shown on one extra row below the
-    // canvas until the next key changes something. Kept here rather than
-    // threaded into `render/`, which never touches the terminal or takes
-    // free-text messages.
+    // The most recent refusal or roll outcome, shown on one extra row
+    // below the canvas until the next key changes something. Kept here
+    // rather than threaded into `render/`, which never touches the
+    // terminal or takes free-text messages. A roll's own result is
+    // deliberately *not* cleared on every keypress the way a refusal is
+    // (see below) — it's the one thing a player most wants to keep
+    // reading after it appears.
     let mut message: Option<String> = None;
 
-    draw(&screen, map, layout, board, placement.as_ref(), message.as_deref(), color)?;
+    draw(&screen, map, layout, board, op.as_ref(), message.as_deref(), color)?;
     loop {
         match event::read()? {
             Event::Key(key) if key.kind == KeyEventKind::Press => {
                 if key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL) {
                     return Ok(Outcome::Left);
                 }
-                message = None;
+                // A roll's outcome stays on screen through the next key,
+                // rather than being cleared like an ordinary refusal —
+                // it's set fresh below whenever a new roll happens, and
+                // any other key that would otherwise clear it doesn't
+                // touch it.
+                let rolled = matches!(key.code, KeyCode::Char('r')) && matches!(screen, Screen::Region { .. }) && matches!(op, Some(Operation::Realign(_)));
+                if !rolled {
+                    message = None;
+                }
                 match key.code {
                     KeyCode::Esc if matches!(screen, Screen::World { .. }) => return Ok(Outcome::Left),
                     KeyCode::Char('q') => return Ok(Outcome::Left),
                     KeyCode::Char('c') => {
-                        if let Some(p) = placement.take() {
-                            *board = p.commit();
+                        if let Some(operation) = op.take() {
+                            if let Operation::Influence(p) = operation {
+                                *board = p.commit();
+                            }
                             return Ok(Outcome::Confirmed);
                         }
                     }
                     KeyCode::Char('X') => {
-                        if placement.take().is_some() {
+                        if op.take().is_some() {
                             return Ok(Outcome::Cancelled);
                         }
                     }
                     KeyCode::Char('u') => {
-                        if let Some(p) = placement.as_mut() {
-                            p.undo_last(map);
+                        match op.as_mut() {
+                            Some(Operation::Influence(p)) => {
+                                p.undo_last(map);
+                            }
+                            Some(Operation::Realign(_)) => {
+                                message = Some("a resolved realignment roll can't be taken back".to_string());
+                            }
+                            None => {}
                         }
                     }
                     _ => match &mut screen {
@@ -138,10 +163,18 @@ pub fn run(
                             KeyCode::Up => *selected = layout.step_country(map, *region, *selected, Direction::Up).unwrap_or(*selected),
                             KeyCode::Down => *selected = layout.step_country(map, *region, *selected, Direction::Down).unwrap_or(*selected),
                             KeyCode::Char('+') | KeyCode::Char('=') => {
-                                if let Some(p) = placement.as_mut()
+                                if let Some(Operation::Influence(p)) = op.as_mut()
                                     && let Err(e) = p.place(map, *selected)
                                 {
                                     message = Some(format!("{}: {e}", map.country(*selected).name));
+                                }
+                            }
+                            KeyCode::Char('r') => {
+                                if let Some(Operation::Realign(r)) = op.as_mut() {
+                                    message = Some(match r.roll(map, board, *selected, dice) {
+                                        Ok(result) => roll_result_line(map, r.side(), &result),
+                                        Err(e) => format!("{}: {e}", map.country(*selected).name),
+                                    });
                                 }
                             }
                             KeyCode::Esc => {
@@ -152,9 +185,9 @@ pub fn run(
                         },
                     },
                 }
-                draw(&screen, map, layout, board, placement.as_ref(), message.as_deref(), color)?;
+                draw(&screen, map, layout, board, op.as_ref(), message.as_deref(), color)?;
             }
-            Event::Resize(_, _) => draw(&screen, map, layout, board, placement.as_ref(), message.as_deref(), color)?,
+            Event::Resize(_, _) => draw(&screen, map, layout, board, op.as_ref(), message.as_deref(), color)?,
             _ => {}
         }
     }
@@ -166,13 +199,13 @@ fn draw(
     map: &WorldMap,
     layout: &MapLayout,
     board: &Board,
-    placement: Option<&InfluencePlacement>,
+    op: Option<&Operation>,
     message: Option<&str>,
     color: ColorMode,
 ) -> io::Result<()> {
     let canvas = match screen {
-        Screen::World { selected } => render_world_map(map, layout, board, Some(*selected), placement),
-        Screen::Region { region, selected } => render_region(map, layout, board, *region, Some(*selected), placement),
+        Screen::World { selected } => render_world_map(map, layout, board, Some(*selected), op),
+        Screen::Region { region, selected } => render_region(map, layout, board, *region, Some(*selected), op),
     };
 
     let rows = terminal::size().map(|(_, h)| h as usize).unwrap_or(canvas.height());

@@ -303,27 +303,102 @@ pub(crate) fn control_glyph(controller: Option<crate::country::Superpower>) -> c
     }
 }
 
-/// The ops balance line shown wherever a placement is in progress: the
+/// The ops balance line shown wherever an operation is in progress: the
 /// region view's footer, the world map's footer, and — since neither the
 /// six-region dashboard nor the country detail view have room to show
 /// pending state inline — a banner `main.rs` prints above them instead.
-/// Worded identically everywhere, so switching views mid-placement reads
-/// as the same session, not several.
-pub fn placement_balance_line(layout: &crate::layout::MapLayout, placement: &crate::ops::InfluencePlacement) -> String {
-    let pending = placement.pending_countries();
-    let where_placed = if pending.is_empty() {
-        "nothing placed yet".to_string()
+/// Worded the same way for every operation (just naming its own verb),
+/// so switching views mid-action reads as the same session, not several.
+///
+/// For a realignment, the number shown per country is primarily the
+/// *opponent's* net change there — the operation's own core metric,
+/// mirroring how a placement's number is always the placing side's own
+/// points added. A country that's also cost the acting side its own
+/// influence (a later roll there went the other way) gets that named
+/// too; a pure tie reads as "tied" rather than a bare `+0`.
+pub fn operation_balance_line(layout: &crate::layout::MapLayout, board: &crate::board::Board, op: &crate::ops::Operation) -> String {
+    let touched = op.touched();
+    let where_touched = if touched.is_empty() {
+        "nothing yet".to_string()
     } else {
-        pending
+        touched
             .iter()
-            .map(|&(id, n)| format!("{} +{n}", layout.short_name(id)))
+            .map(|&id| touched_country_summary(layout, board, op, id))
             .collect::<Vec<_>>()
             .join(", ")
     };
     format!(
-        "{} placing · {} of {} ops left · {where_placed}",
-        placement.side(),
-        placement.remaining(),
-        placement.ops_total(),
+        "{} {} · {} of {} ops left · {where_touched}",
+        op.side(),
+        op.verb(),
+        op.remaining(),
+        op.ops_total(),
+    )
+}
+
+fn touched_country_summary(
+    layout: &crate::layout::MapLayout,
+    board: &crate::board::Board,
+    op: &crate::ops::Operation,
+    id: crate::country::CountryId,
+) -> String {
+    let name = layout.short_name(id);
+    match op {
+        crate::ops::Operation::Influence(p) => format!("{name} +{}", p.pending(id)),
+        crate::ops::Operation::Realign(_) => {
+            let side = op.side();
+            let opponent = side.opponent();
+            let opp_delta = op.delta(board, id, opponent);
+            let own_delta = op.delta(board, id, side);
+            match (opp_delta, own_delta) {
+                (0, 0) => format!("{name} tied"),
+                (o, 0) => format!("{name} {opponent}{o:+}"),
+                (0, s) => format!("{name} {side}{s:+}"),
+                (o, s) => format!("{name} {opponent}{o:+}/{side}{s:+}"),
+            }
+        }
+    }
+}
+
+/// One side's realignment modifier breakdown for the currently selected
+/// country — shared by the region footer, the country detail view, and
+/// the REPL's own `target`/`roll` output, so all three read identically.
+pub fn modifier_line(side: crate::country::Superpower, mods: &crate::ops::Modifiers) -> String {
+    let reasons = mods.reasons();
+    let detail = if reasons.is_empty() { "no modifiers".to_string() } else { reasons.join(" · ") };
+    format!("{side}  d6 {:+}   ({detail})", mods.total())
+}
+
+/// The outcome of one resolved realignment roll, in a single line — used
+/// by both the REPL's own `roll` command and the interactive footer's
+/// sticky roll message, so the wording is identical either way.
+pub fn roll_result_line(map: &crate::map::WorldMap, side: crate::country::Superpower, result: &crate::ops::RollResult) -> String {
+    let opponent = side.opponent();
+    let country = &map.country(result.target).name;
+    let acting_total = result.acting_die as i8 + result.acting_mods.total();
+    let opposing_total = result.opposing_die as i8 + result.opposing_mods.total();
+    let dice = format!(
+        "{side} {}{:+}={acting_total} · {opponent} {}{:+}={opposing_total}",
+        result.acting_die, result.acting_mods.total(), result.opposing_die, result.opposing_mods.total(),
+    );
+    let outcome = match result.loser {
+        None => format!("a tie — no influence removed in {country}"),
+        Some(loser) if loser == opponent => format!("{side} removes {} {opponent} influence from {country}", result.removed),
+        Some(_) => format!("{opponent} wins the roll — {side} loses {} of its own influence in {country}", result.removed),
+    };
+    format!("{dice} → {outcome}")
+}
+
+/// The realignment odds line: each side's win/draw/loss share out of 36,
+/// plus the expected influence swing on each side.
+pub fn odds_line(side: crate::country::Superpower, odds: &crate::ops::Odds) -> String {
+    let opponent = side.opponent();
+    format!(
+        "odds  {side} {}/36 · draw {}/36 · {opponent} {}/36   avg  {opponent} -{:.1} / {side} -{:.1}",
+        odds.win,
+        odds.draw,
+        odds.loss,
+        odds.removed_36ths as f32 / 36.0,
+        odds.lost_36ths as f32 / 36.0,
     )
 }
