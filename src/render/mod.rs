@@ -302,3 +302,28 @@ pub(crate) fn control_glyph(controller: Option<crate::country::Superpower>) -> c
         None => ':',
     }
 }
+
+/// The ops balance line shown wherever a placement is in progress: the
+/// region view's footer, the world map's footer, and — since neither the
+/// six-region dashboard nor the country detail view have room to show
+/// pending state inline — a banner `main.rs` prints above them instead.
+/// Worded identically everywhere, so switching views mid-placement reads
+/// as the same session, not several.
+pub fn placement_balance_line(layout: &crate::layout::MapLayout, placement: &crate::ops::InfluencePlacement) -> String {
+    let pending = placement.pending_countries();
+    let where_placed = if pending.is_empty() {
+        "nothing placed yet".to_string()
+    } else {
+        pending
+            .iter()
+            .map(|&(id, n)| format!("{} +{n}", layout.short_name(id)))
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
+    format!(
+        "{} placing · {} of {} ops left · {where_placed}",
+        placement.side(),
+        placement.remaining(),
+        placement.ops_total(),
+    )
+}

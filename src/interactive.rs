@@ -13,7 +13,7 @@ use crossterm::terminal::{self, Clear, ClearType, EnterAlternateScreen, LeaveAlt
 use crossterm::{execute, queue};
 
 use twilight_struggle::render::{render_region, render_world_map};
-use twilight_struggle::{Board, ColorMode, CountryId, Direction, MapLayout, Region, WorldMap};
+use twilight_struggle::{Board, ColorMode, CountryId, Direction, InfluencePlacement, MapLayout, Region, WorldMap};
 
 /// Which screen is currently showing.
 enum Screen {
@@ -22,6 +22,20 @@ enum Screen {
     /// One region's zoomed-in view, with its own country selection —
     /// `Esc` returns to `World` with the region still selected.
     Region { region: Region, selected: CountryId },
+}
+
+/// How the user left interactive mode, so the REPL can print a matching
+/// line: leaving a placement session open is not the same as confirming
+/// or discarding it.
+pub enum Outcome {
+    /// `Esc`/`q`/Ctrl-C. Any open placement is left untouched — it stays
+    /// in `Session.placement`, resumable from the REPL or by reopening
+    /// the map.
+    Left,
+    /// The open placement was committed to `board`.
+    Confirmed,
+    /// The open placement was discarded, unspent.
+    Cancelled,
 }
 
 /// Puts the terminal into raw mode and the alternate screen, and — however
@@ -49,74 +63,136 @@ impl Drop for TerminalGuard {
 
 /// Drives the interactive world map until the user backs all the way out
 /// (`Esc` from the world view, `q`, or Ctrl-C).
-pub fn run(map: &WorldMap, layout: &MapLayout, board: &Board, color: ColorMode) -> io::Result<()> {
+///
+/// `placement`, when `Some` on entry (or started implicitly never — a
+/// session can only be opened from the REPL today), is an influence
+/// placement in progress: `+`/`=` places one point of influence in the
+/// selected country (region screen only), `u` undoes the last point, `c`
+/// confirms it into `board`, and `X` discards it. Leaving via `Esc`/`q`
+/// keeps a still-open session intact.
+pub fn run(
+    map: &WorldMap,
+    layout: &MapLayout,
+    board: &mut Board,
+    placement: &mut Option<InfluencePlacement>,
+    color: ColorMode,
+) -> io::Result<Outcome> {
     let _guard = TerminalGuard::enter()?;
     let mut screen = Screen::World { selected: Region::Europe };
     // Remembers the last country selected in each region, so leaving a
     // region and coming back to it later re-selects the same one instead
     // of always resetting to its top-left-most country.
     let mut last_selected: HashMap<Region, CountryId> = HashMap::new();
+    // The most recent placement error, shown on one extra row below the
+    // canvas until the next key changes something. Kept here rather than
+    // threaded into `render/`, which never touches the terminal or takes
+    // free-text messages.
+    let mut message: Option<String> = None;
 
-    draw(&screen, map, layout, board, color)?;
+    draw(&screen, map, layout, board, placement.as_ref(), message.as_deref(), color)?;
     loop {
         match event::read()? {
             Event::Key(key) if key.kind == KeyEventKind::Press => {
                 if key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL) {
-                    return Ok(());
+                    return Ok(Outcome::Left);
                 }
-                match &mut screen {
-                    Screen::World { selected } => match key.code {
-                        KeyCode::Left => *selected = selected.step(Direction::Left).unwrap_or(*selected),
-                        KeyCode::Right => *selected = selected.step(Direction::Right).unwrap_or(*selected),
-                        KeyCode::Up => *selected = selected.step(Direction::Up).unwrap_or(*selected),
-                        KeyCode::Down => *selected = selected.step(Direction::Down).unwrap_or(*selected),
-                        KeyCode::Enter => {
-                            let region = *selected;
-                            let country = last_selected
-                                .get(&region)
-                                .copied()
-                                .unwrap_or_else(|| layout.countries_in_region(map, region)[0]);
-                            screen = Screen::Region { region, selected: country };
+                message = None;
+                match key.code {
+                    KeyCode::Esc if matches!(screen, Screen::World { .. }) => return Ok(Outcome::Left),
+                    KeyCode::Char('q') => return Ok(Outcome::Left),
+                    KeyCode::Char('c') => {
+                        if let Some(p) = placement.take() {
+                            *board = p.commit();
+                            return Ok(Outcome::Confirmed);
                         }
-                        KeyCode::Esc | KeyCode::Char('q') => return Ok(()),
-                        _ => continue,
-                    },
-                    Screen::Region { region, selected } => match key.code {
-                        KeyCode::Left => *selected = layout.step_country(map, *region, *selected, Direction::Left).unwrap_or(*selected),
-                        KeyCode::Right => *selected = layout.step_country(map, *region, *selected, Direction::Right).unwrap_or(*selected),
-                        KeyCode::Up => *selected = layout.step_country(map, *region, *selected, Direction::Up).unwrap_or(*selected),
-                        KeyCode::Down => *selected = layout.step_country(map, *region, *selected, Direction::Down).unwrap_or(*selected),
-                        KeyCode::Esc => {
-                            last_selected.insert(*region, *selected);
-                            screen = Screen::World { selected: *region };
+                    }
+                    KeyCode::Char('X') => {
+                        if placement.take().is_some() {
+                            return Ok(Outcome::Cancelled);
                         }
-                        KeyCode::Char('q') => return Ok(()),
-                        _ => continue,
+                    }
+                    KeyCode::Char('u') => {
+                        if let Some(p) = placement.as_mut() {
+                            p.undo_last(map);
+                        }
+                    }
+                    _ => match &mut screen {
+                        Screen::World { selected } => match key.code {
+                            KeyCode::Left => *selected = selected.step(Direction::Left).unwrap_or(*selected),
+                            KeyCode::Right => *selected = selected.step(Direction::Right).unwrap_or(*selected),
+                            KeyCode::Up => *selected = selected.step(Direction::Up).unwrap_or(*selected),
+                            KeyCode::Down => *selected = selected.step(Direction::Down).unwrap_or(*selected),
+                            KeyCode::Enter => {
+                                let region = *selected;
+                                let country = last_selected
+                                    .get(&region)
+                                    .copied()
+                                    .unwrap_or_else(|| layout.countries_in_region(map, region)[0]);
+                                screen = Screen::Region { region, selected: country };
+                            }
+                            _ => continue,
+                        },
+                        Screen::Region { region, selected } => match key.code {
+                            KeyCode::Left => *selected = layout.step_country(map, *region, *selected, Direction::Left).unwrap_or(*selected),
+                            KeyCode::Right => *selected = layout.step_country(map, *region, *selected, Direction::Right).unwrap_or(*selected),
+                            KeyCode::Up => *selected = layout.step_country(map, *region, *selected, Direction::Up).unwrap_or(*selected),
+                            KeyCode::Down => *selected = layout.step_country(map, *region, *selected, Direction::Down).unwrap_or(*selected),
+                            KeyCode::Char('+') | KeyCode::Char('=') => {
+                                if let Some(p) = placement.as_mut()
+                                    && let Err(e) = p.place(map, *selected)
+                                {
+                                    message = Some(format!("{}: {e}", map.country(*selected).name));
+                                }
+                            }
+                            KeyCode::Esc => {
+                                last_selected.insert(*region, *selected);
+                                screen = Screen::World { selected: *region };
+                            }
+                            _ => continue,
+                        },
                     },
                 }
-                draw(&screen, map, layout, board, color)?;
+                draw(&screen, map, layout, board, placement.as_ref(), message.as_deref(), color)?;
             }
-            Event::Resize(_, _) => draw(&screen, map, layout, board, color)?,
+            Event::Resize(_, _) => draw(&screen, map, layout, board, placement.as_ref(), message.as_deref(), color)?,
             _ => {}
         }
     }
 }
 
-fn draw(screen: &Screen, map: &WorldMap, layout: &MapLayout, board: &Board, color: ColorMode) -> io::Result<()> {
+#[allow(clippy::too_many_arguments)]
+fn draw(
+    screen: &Screen,
+    map: &WorldMap,
+    layout: &MapLayout,
+    board: &Board,
+    placement: Option<&InfluencePlacement>,
+    message: Option<&str>,
+    color: ColorMode,
+) -> io::Result<()> {
     let canvas = match screen {
-        Screen::World { selected } => render_world_map(map, layout, board, Some(*selected)),
-        Screen::Region { region, selected } => render_region(map, layout, board, *region, Some(*selected)),
+        Screen::World { selected } => render_world_map(map, layout, board, Some(*selected), placement),
+        Screen::Region { region, selected } => render_region(map, layout, board, *region, Some(*selected), placement),
     };
 
     let rows = terminal::size().map(|(_, h)| h as usize).unwrap_or(canvas.height());
 
     let mut out = io::stdout();
     queue!(out, Clear(ClearType::All))?;
-    for (i, line) in canvas.render(color).split('\n').take(rows).enumerate() {
-        queue!(out, MoveTo(0, i as u16))?;
+    let mut row = 0u16;
+    for line in canvas.render(color).split('\n').take(rows) {
+        queue!(out, MoveTo(0, row))?;
         out.write_all(line.as_bytes())?;
         // Raw mode needs an explicit carriage return: a bare '\n' only
         // moves the cursor down a row, it doesn't return it to column 0.
+        out.write_all(b"\r\n")?;
+        row += 1;
+    }
+    if let Some(message) = message
+        && (row as usize) < rows
+    {
+        queue!(out, MoveTo(0, row))?;
+        out.write_all(message.as_bytes())?;
         out.write_all(b"\r\n")?;
     }
     out.flush()

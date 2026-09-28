@@ -22,6 +22,19 @@ DEFCON, coups, etc.) haven't been built yet.
 - **`Scenario`** (`src/scenario.rs`) / **`GameStatus`** (`src/status.rs`)
   — a named starting state (currently just `data/demo_state.json`): a
   `Board` snapshot plus turn/DEFCON/VP/space-race/China-card status.
+- **`ops`** (`src/ops.rs`) — the first real game operation: spending
+  operation points to place influence. `InfluencePlacement` keeps *two*
+  cloned `Board`s (cheap, per `Board`'s own design note): a fixed `base`
+  snapshot taken when the action starts, and a running `board` that
+  accumulates each placement. Presence/adjacency legality is checked
+  against `base` only — a point placed earlier in the same action can't
+  unlock a new country that had no influence in or next to it when the
+  action began — while cost (1 op, or 2 in a country the opponent
+  controls) tracks the running `board`, since control genuinely can flip
+  mid-action. Nothing reaches a real `Board` until `commit`; `undo_last`
+  refunds the exact cost a point was charged, not a
+  flat 1. This is the model for every future ops-spending operation
+  (coups, realignment, card play).
 - **`render`** (`src/render/`) — every view is a pure function
   `(WorldMap, MapLayout, Board, ...) -> Canvas`; nothing in this module
   touches the terminal directly, which keeps every view snapshot-testable.
@@ -37,9 +50,21 @@ DEFCON, coups, etc.) haven't been built yet.
     long list of hand-tuned fixes, so a future adjustment doesn't have to
     start from scratch.
   - `country.rs` — a single country's detail view.
+
+  `render_region` and `render_world_map` both take an optional
+  `&InfluencePlacement` (`region.rs`/`worldmap.rs`): `None` reproduces
+  the plain view byte-for-byte (every `render_world`/`render_country`
+  call, which don't take one, and every static call with no session
+  open); `Some` swaps in the placement's speculative board so numbers and
+  control glyphs update live, adds a `+N` badge (region) or turns a
+  chip's flag into `+` (world map), dims an illegal target (region only),
+  and appends a balance-line footer.
 - **`main.rs`** — a REPL (`cargo run`) plus one-shot mode
   (`cargo run -- <command>`). Type `help` inside the REPL for the command
-  list.
+  list, including `ops`/`place`/`undo`/`confirm`/`cancel` for staging and
+  committing an influence placement; `set`/`add`/`remove`/`load` are
+  refused while a session is open, since they'd shift the board a
+  placement was judged legal against.
 - **`interactive.rs`** — the terminal-driving code for `worldmap`/`wm`
   when run interactively (a real TTY, not one-shot mode): raw mode, the
   alternate screen, and the arrow/Enter/Esc event loop. On the world map
@@ -49,6 +74,12 @@ DEFCON, coups, etc.) haven't been built yet.
   `layout.rs` — a nearest-in-that-direction search over `Cell` positions,
   not a hand-written table, since the grids are sparse with interior
   holes). Each region remembers its last-selected country across visits.
+  When an `InfluencePlacement` session is open, `+`/`=` places one point
+  in the selected country (region screen only), `u` undoes the last
+  point, `c` confirms it into the board, and `X` discards it; `Esc`/`q`
+  leave a still-open session untouched rather than clearing it, so it can
+  be resumed from the REPL or by reopening the map. `run`'s return value
+  (`Outcome`) tells the REPL which of those happened.
   The only place in the crate that touches the terminal directly —
   everything it draws still comes from `render::render_world_map`/
   `render_region`, which stay pure `Canvas` producers. Uses `crossterm`,

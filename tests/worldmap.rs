@@ -1,5 +1,5 @@
 use twilight_struggle::render::render_world_map;
-use twilight_struggle::{Board, ColorMode, MapLayout, Region, Scenario, Superpower, WorldMap};
+use twilight_struggle::{Board, ColorMode, InfluencePlacement, MapLayout, Region, Scenario, Superpower, WorldMap};
 
 fn standard() -> (WorldMap, MapLayout) {
     let map = WorldMap::standard().unwrap();
@@ -11,7 +11,7 @@ fn standard() -> (WorldMap, MapLayout) {
 fn world_map_matches_snapshot() {
     let (map, layout) = standard();
     let scenario = Scenario::demo(&map).unwrap();
-    let canvas = render_world_map(&map, &layout, &scenario.board, None);
+    let canvas = render_world_map(&map, &layout, &scenario.board, None, None);
     let expected = include_str!("snapshots/worldmap.txt");
     assert_eq!(canvas.render(ColorMode::Never), expected.trim_end_matches('\n'));
 }
@@ -20,7 +20,7 @@ fn world_map_matches_snapshot() {
 fn background_shading_appears_in_the_rendered_map() {
     let (map, layout) = standard();
     let board = Board::new(&map);
-    let canvas = render_world_map(&map, &layout, &board, None);
+    let canvas = render_world_map(&map, &layout, &board, None, None);
     let text = canvas.render(ColorMode::Never);
     for shade in ['▒', '▓'] {
         assert!(
@@ -34,7 +34,7 @@ fn background_shading_appears_in_the_rendered_map() {
 fn renders_without_panicking_on_an_empty_board() {
     let (map, layout) = standard();
     let board = Board::new(&map);
-    let canvas = render_world_map(&map, &layout, &board, None);
+    let canvas = render_world_map(&map, &layout, &board, None, None);
     assert!(canvas.height() > 0);
     assert!(canvas.width() > 0);
 }
@@ -43,7 +43,7 @@ fn renders_without_panicking_on_an_empty_board() {
 fn both_superpower_boxes_are_labelled() {
     let (map, layout) = standard();
     let board = Board::new(&map);
-    let canvas = render_world_map(&map, &layout, &board, None);
+    let canvas = render_world_map(&map, &layout, &board, None, None);
     let text = canvas.render(ColorMode::Never);
     assert!(text.contains("USA"), "USA box label missing:\n{text}");
     assert!(text.contains("USSR"), "USSR box label missing:\n{text}");
@@ -55,7 +55,7 @@ fn superpower_legend_lists_real_borders() {
     // computed from Country::adjacent_superpowers, not hand-authored.
     let (map, layout) = standard();
     let board = Board::new(&map);
-    let canvas = render_world_map(&map, &layout, &board, None);
+    let canvas = render_world_map(&map, &layout, &board, None, None);
     let text = canvas.render(ColorMode::Never);
     assert!(text.contains("USA: "));
     assert!(text.contains("USSR: "));
@@ -71,7 +71,7 @@ fn every_country_has_a_distinct_code_chip_on_the_map() {
     // through the renderer rather than just the loader's own bookkeeping.
     let (map, layout) = standard();
     let board = Board::new(&map);
-    let canvas = render_world_map(&map, &layout, &board, None);
+    let canvas = render_world_map(&map, &layout, &board, None, None);
     let text = canvas.render(ColorMode::Never);
     for (id, country) in map.iter() {
         let code = layout.code(id);
@@ -99,7 +99,7 @@ fn superpower_box_cell_is_never_a_country_world_cell() {
 fn color_never_emits_no_escape_codes() {
     let (map, layout) = standard();
     let scenario = Scenario::demo(&map).unwrap();
-    let canvas = render_world_map(&map, &layout, &scenario.board, None);
+    let canvas = render_world_map(&map, &layout, &scenario.board, None, None);
     assert!(!canvas.render(ColorMode::Never).contains('\x1b'));
 }
 
@@ -110,7 +110,7 @@ fn background_land_is_tinted_by_region() {
     // guards against the tint collapsing to one flat colour.
     let (map, layout) = standard();
     let board = Board::new(&map);
-    let canvas = render_world_map(&map, &layout, &board, None);
+    let canvas = render_world_map(&map, &layout, &board, None, None);
     let text = canvas.render(ColorMode::Always);
     assert!(text.contains("38;5;140"), "expected Europe's purple tint");
     assert!(text.contains("38;5;208"), "expected Asia's orange tint");
@@ -120,7 +120,7 @@ fn background_land_is_tinted_by_region() {
 fn color_always_wraps_styled_text_in_sgr_codes() {
     let (map, layout) = standard();
     let scenario = Scenario::demo(&map).unwrap();
-    let canvas = render_world_map(&map, &layout, &scenario.board, None);
+    let canvas = render_world_map(&map, &layout, &scenario.board, None, None);
     let text = canvas.render(ColorMode::Always);
     assert!(text.contains('\x1b'));
     assert!(text.contains("\x1b[0m"));
@@ -130,7 +130,7 @@ fn color_always_wraps_styled_text_in_sgr_codes() {
 fn no_selection_reproduces_the_plain_view_exactly() {
     let (map, layout) = standard();
     let scenario = Scenario::demo(&map).unwrap();
-    let plain = render_world_map(&map, &layout, &scenario.board, None);
+    let plain = render_world_map(&map, &layout, &scenario.board, None, None);
     let expected = include_str!("snapshots/worldmap.txt");
     assert_eq!(plain.render(ColorMode::Never), expected.trim_end_matches('\n'));
     assert_eq!(plain.height(), expected.trim_end_matches('\n').lines().count());
@@ -140,8 +140,8 @@ fn no_selection_reproduces_the_plain_view_exactly() {
 fn a_selection_adds_the_region_title_and_key_hints() {
     let (map, layout) = standard();
     let board = Board::new(&map);
-    let plain = render_world_map(&map, &layout, &board, None);
-    let selected = render_world_map(&map, &layout, &board, Some(Region::Europe));
+    let plain = render_world_map(&map, &layout, &board, None, None);
+    let selected = render_world_map(&map, &layout, &board, Some(Region::Europe), None);
     let text = selected.render(ColorMode::Never);
     assert!(text.contains("EUROPE"), "region name missing:\n{text}");
     assert!(text.contains("Enter open"), "key hints missing:\n{text}");
@@ -149,10 +149,81 @@ fn a_selection_adds_the_region_title_and_key_hints() {
 }
 
 #[test]
+fn a_pending_chip_is_marked_with_a_plus() {
+    let (map, layout) = standard();
+    let board = Board::new(&map);
+    let poland = map.id_by_name("Poland").unwrap();
+    let mut placement = InfluencePlacement::new(Superpower::Ussr, 5, &board);
+    placement.place(&map, poland).unwrap();
+
+    let canvas = render_world_map(&map, &layout, &board, None, Some(&placement));
+    let text = canvas.render(ColorMode::Never);
+    assert!(text.contains("+Pol"), "Poland's chip should show a '+' once it has pending influence:\n{text}");
+    // Poland isn't a battleground, so its plain chip has a blank flag
+    // slot; confirm the '+' actually replaced that, not just appeared
+    // somewhere else on the map.
+    let plain = render_world_map(&map, &layout, &board, None, None).render(ColorMode::Never);
+    assert!(!plain.contains("+Pol"), "sanity check: the plain view shouldn't already have a '+' before Pol");
+}
+
+#[test]
+fn a_pending_chip_keeps_its_control_colour() {
+    let (map, layout) = standard();
+    let mut board = Board::new(&map);
+    let poland = map.id_by_name("Poland").unwrap();
+    // Give the USSR outright control of Poland before staging more.
+    let stability = map.country(poland).stability;
+    board.set_influence(poland, Superpower::Ussr, stability);
+    let mut placement = InfluencePlacement::new(Superpower::Ussr, 5, &board);
+    placement.place(&map, poland).unwrap();
+
+    let canvas = render_world_map(&map, &layout, &board, None, Some(&placement));
+    let text = canvas.render(ColorMode::Always);
+    let poland_line = text.lines().find(|l| l.contains("Pol")).expect("no line with Poland's chip");
+    assert!(poland_line.contains("\x1b[1;91m"), "a pending, USSR-controlled chip should stay bold red: {poland_line:?}");
+}
+
+#[test]
+fn no_placement_reproduces_the_plain_view_exactly_even_with_the_new_param() {
+    let (map, layout) = standard();
+    let scenario = Scenario::demo(&map).unwrap();
+    let canvas = render_world_map(&map, &layout, &scenario.board, None, None);
+    let expected = include_str!("snapshots/worldmap.txt");
+    assert_eq!(canvas.render(ColorMode::Never), expected.trim_end_matches('\n'));
+}
+
+#[test]
+fn the_placement_footer_is_not_clipped() {
+    let (map, layout) = standard();
+    let mut board = Board::new(&map);
+    let poland = map.id_by_name("Poland").unwrap();
+    let east_germany = map.id_by_name("East Germany").unwrap();
+    // Give the USSR base presence in both up front — legality is checked
+    // against the board as it stood when the action started, not against
+    // influence placed earlier in this same action.
+    board.set_influence(poland, Superpower::Ussr, 1);
+    board.set_influence(east_germany, Superpower::Ussr, 1);
+    let mut placement = InfluencePlacement::new(Superpower::Ussr, 8, &board);
+    placement.place(&map, poland).unwrap();
+    placement.place(&map, east_germany).unwrap();
+
+    let plain = render_world_map(&map, &layout, &board, None, None);
+    let with_placement = render_world_map(&map, &layout, &board, Some(Region::Europe), Some(&placement));
+    assert_eq!(with_placement.height(), plain.height() + 3, "a region selection plus a placement should add exactly three rows");
+
+    let text = with_placement.render(ColorMode::Never);
+    for line in text.lines() {
+        assert!(line.chars().count() <= with_placement.width(), "world map placement view exceeded its own width: {line:?}");
+    }
+    assert!(text.contains("USSR placing"), "the full balance line should not be clipped:\n{text}");
+    assert!(text.contains("u undo"), "the placement hint should not be clipped:\n{text}");
+}
+
+#[test]
 fn a_selected_region_is_bold_where_an_unselected_one_is_dim() {
     let (map, layout) = standard();
     let board = Board::new(&map);
-    let canvas = render_world_map(&map, &layout, &board, Some(Region::Europe));
+    let canvas = render_world_map(&map, &layout, &board, Some(Region::Europe), None);
     let text = canvas.render(ColorMode::Always);
     assert!(
         text.contains("\x1b[1;38;5;140m"),
