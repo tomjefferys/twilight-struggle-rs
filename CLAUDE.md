@@ -1,8 +1,9 @@
 # Twilight Struggle
 
 A Rust CLI implementation of the board game *Twilight Struggle*. Currently
-focused on the data model and terminal display; full game rules (cards,
-DEFCON, coups, etc.) haven't been built yet.
+focused on the data model and terminal display, plus a handful of the
+ops-spending actions (influence placement, realignment, coups); full game
+rules (cards, DEFCON, Military Operations, etc.) haven't been built yet.
 
 ## Architecture
 
@@ -22,7 +23,7 @@ DEFCON, coups, etc.) haven't been built yet.
 - **`Scenario`** (`src/scenario.rs`) / **`GameStatus`** (`src/status.rs`)
   — a named starting state (currently just `data/demo_state.json`): a
   `Board` snapshot plus turn/DEFCON/VP/space-race/China-card status.
-- **`ops`** (`src/ops/`) — the game's ops-spending operations. Two kinds
+- **`ops`** (`src/ops/`) — the game's ops-spending operations. Three kinds
   so far, sharing the `Operation` enum (`src/ops/mod.rs`) as the seam the
   rest of the crate reads through:
   - `influence.rs` — `InfluencePlacement`, spending operation points to
@@ -54,10 +55,27 @@ DEFCON, coups, etc.) haven't been built yet.
     (no `rand` dependency) — seeded from entropy in the REPL, from a
     fixed default (overridable with `--seed`) in one-shot mode, so the
     snapshot-regeneration workflow below stays reproducible.
+  - `coup.rs` — `Coup` (rule 6.3): realignment-shaped (immediate,
+    irreversible, no `commit`), but a whole action is a *single* attempt
+    that spends every op on the card at once, rather than one roll per
+    op. The target number is the country's stability, doubled; roll 1d6,
+    add the card's ops, and a modified roll that's strictly *greater
+    than* the target number succeeds by the margin — removing that much
+    opposing influence and, if there isn't enough opposing influence to
+    absorb the whole margin, adding the rest as friendly influence (rule
+    6.3.3). No presence is required (rule 6.3.1) and, like realignment's
+    6.1.3 carve-out, DEFCON degradation and Military Operations (rule
+    6.3.4) are out of scope for now. `coup_resolve`/`coup_odds` are free
+    functions mirroring realignment's `resolve`/`odds`, just over one die
+    (sixths) instead of two (36ths). `Coup::attempt` shares `Realignment`'s
+    `&mut Dice` and its `roll <country>` REPL command / `r` interactive
+    key — `roll` resolves whichever of the two kinds of session is open.
+    A second `attempt` on an already-resolved `Coup` is refused, the same
+    way rolling with no ops left is refused for a realignment.
 
-  A third operation (coups, card play) would add another `Operation`
-  variant; whether it stages like placement or resolves immediately like
-  realignment is a per-operation call, not a rule of the enum.
+  A card-play operation would add a fourth `Operation` variant; whether
+  it stages like placement or resolves immediately like realignment/coup
+  is a per-operation call, not a rule of the enum.
 - **`render`** (`src/render/`) — every view is a pure function
   `(WorldMap, MapLayout, Board, ...) -> Canvas`; nothing in this module
   touches the terminal directly, which keeps every view snapshot-testable.
@@ -79,26 +97,30 @@ DEFCON, coups, etc.) haven't been built yet.
   too. `None` reproduces the plain view byte-for-byte (every
   `render_world` call, and every static call with no session open);
   `Some` swaps in the operation's speculative board where it has one
-  (`Operation::board()` — placement does, realignment doesn't, since its
-  rolls are already on the real board), adds a `+N`/`-N` net badge
-  (region) or turns a chip's flag into `+`/`!` (world map), dims an
-  illegal target (region only), and appends an `operation_balance_line`
-  footer. A realignment additionally adds, once a country is also
-  selected, that country's modifier breakdown for both sides and its
-  odds (`modifier_line`/`odds_line`, shared with `render_country`'s own
-  panel and the REPL's `roll` output). Both `region.rs` and
-  `worldmap.rs` build their footer as one `Vec<(String, Style)>` before
-  drawing, so the row count and the draw loop can't drift apart the way
-  hand-maintained parallel tallies could.
+  (`Operation::board()` — placement does, realignment and coup don't,
+  since their rolls are already on the real board), adds a `+N`/`-N` net
+  badge (region) or turns a chip's flag into `+`/`!`/`#` for
+  placement/realignment/coup (world map), dims an illegal target (region
+  only), and appends an `operation_balance_line` footer. A realignment
+  additionally adds, once a country is also selected, that country's
+  modifier breakdown for both sides and its odds (`modifier_line`/
+  `odds_line`, shared with `render_country`'s own panel and the REPL's
+  `roll` output); a coup adds its target number and success odds instead
+  (`coup_target_line`/`coup_odds_line`) — no per-side modifiers to
+  itemise. Both `region.rs` and `worldmap.rs` build their footer as one
+  `Vec<(String, Style)>` before drawing, so the row count and the draw
+  loop can't drift apart the way hand-maintained parallel tallies could.
 - **`main.rs`** — a REPL (`cargo run`) plus one-shot mode
   (`cargo run -- <command>`). Type `help` inside the REPL for the command
   list. `ops`/`place`/`undo`/`confirm`/`cancel` stage and commit an
   influence placement; `realign`/`roll`/`confirm`/`cancel` run a
-  realignment, where `roll` resolves immediately and `undo` always
-  refuses. Either way, `set`/`add`/`remove`/`load` are refused while a
-  session (`Session.op: Option<Operation>`) is open, since they'd shift
-  the board an operation was judged legal against. `--seed <n>` (or the
-  REPL's `seed <n>`) controls `Session.dice`.
+  realignment and `coup`/`roll`/`confirm`/`cancel` a coup, where `roll`
+  resolves either kind immediately (a coup's `roll` spends every op on
+  its one attempt) and `undo` always refuses. Either way,
+  `set`/`add`/`remove`/`load` are refused while a session
+  (`Session.op: Option<Operation>`) is open, since they'd shift the board
+  an operation was judged legal against. `--seed <n>` (or the REPL's
+  `seed <n>`) controls `Session.dice`.
 - **`interactive.rs`** — the terminal-driving code for `worldmap`/`wm`
   when run interactively (a real TTY, not one-shot mode): raw mode, the
   alternate screen, and the arrow/Enter/Esc event loop. On the world map
@@ -111,9 +133,10 @@ DEFCON, coups, etc.) haven't been built yet.
   When an `Operation` session is open, `c` confirms/closes it into
   `board` and `X` cancels/closes it either way; an `InfluencePlacement`
   additionally binds `+`/`=` to place one point (region screen only) and
-  `u` to undo the last one, while a `Realignment` binds `r` to roll on
-  the selected country instead (region screen only) and `u` always
-  refuses — a resolved roll can't be taken back. `Esc`/`q` leave a
+  `u` to undo the last one, while a `Realignment` or `Coup` binds `r` to
+  roll (or attempt the coup) on the selected country instead (region
+  screen only) and `u` always refuses — a resolved roll or attempt can't
+  be taken back. `Esc`/`q` leave a
   still-open session untouched rather than clearing it, so it can be
   resumed from the REPL or by reopening the map. `run`'s return value
   (`Outcome`) tells the REPL which of those happened. A roll's outcome

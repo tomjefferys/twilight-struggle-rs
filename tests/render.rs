@@ -1,5 +1,5 @@
 use twilight_struggle::render::{render_country, render_region, render_world};
-use twilight_struggle::{Board, ColorMode, InfluencePlacement, MapLayout, Operation, Realignment, Region, Scenario, Superpower, WorldMap};
+use twilight_struggle::{Board, ColorMode, Coup, InfluencePlacement, MapLayout, Operation, Realignment, Region, Scenario, Superpower, WorldMap};
 
 fn standard() -> (WorldMap, MapLayout) {
     let map = WorldMap::standard().unwrap();
@@ -500,6 +500,124 @@ fn no_country_detail_line_exceeds_its_canvas_width() {
     board.set_influence(poland, Superpower::Ussr, 2);
 
     let op = Operation::Realign(Realignment::new(Superpower::Ussr, 5, &board));
+    let canvas = render_country(&map, &board, poland, Some(&op));
+    let text = canvas.render(ColorMode::Never);
+    for line in text.lines() {
+        assert!(line.chars().count() <= canvas.width(), "country detail view exceeded its own width: {line:?}");
+    }
+    assert!(text.contains("odds"), "expected the odds line to be present:\n{text}");
+}
+
+#[test]
+fn a_coup_adds_exactly_three_more_footer_rows_than_a_bare_selection() {
+    let (map, layout) = standard();
+    let mut board = Board::new(&map);
+    let italy = map.id_by_name("Italy").unwrap();
+    board.set_influence(italy, Superpower::Us, 3);
+    let op = Operation::Coup(Coup::new(Superpower::Ussr, 4, &board));
+
+    let plain = render_region(&map, &layout, &board, Region::Europe, None, None);
+    let selected_only = render_region(&map, &layout, &board, Region::Europe, Some(italy), None);
+    let with_coup = render_region(&map, &layout, &board, Region::Europe, Some(italy), Some(&op));
+
+    assert_eq!(selected_only.height(), plain.height() + 2, "selection alone should still add exactly two rows");
+    // Selection title, balance line, the target-number line, and the
+    // odds line: three more than a bare selection's title + hint.
+    assert_eq!(
+        with_coup.height(),
+        selected_only.height() + 3,
+        "a coup with a country selected should add exactly three more rows than a bare selection"
+    );
+}
+
+#[test]
+fn a_couped_country_shows_its_badge() {
+    let (map, layout) = standard();
+    let mut board = Board::new(&map);
+    let italy = map.id_by_name("Italy").unwrap();
+    board.set_influence(italy, Superpower::Us, 3);
+
+    // The coup's `base` is captured here, before the board is mutated
+    // below — exactly as a real attempt would leave it.
+    let op = Operation::Coup(Coup::new(Superpower::Ussr, 4, &board));
+    board.set_influence(italy, Superpower::Us, 1); // as if the attempt just removed 2
+
+    let canvas = render_region(&map, &layout, &board, Region::Europe, None, Some(&op));
+    let text = canvas.render(ColorMode::Never);
+    let italy_stats_line = line_after(&text, "Italy");
+    assert!(italy_stats_line.contains("-2"), "Italy should show a -2 badge for the US influence it lost: {italy_stats_line:?}");
+}
+
+#[test]
+fn a_country_with_no_opponent_influence_is_dimmed_during_a_coup() {
+    let (map, layout) = standard();
+    let board = Board::new(&map);
+    // On an empty board, the US has no influence anywhere in South
+    // America, so every country there is an illegal coup target for the
+    // USSR — a good, unambiguous "should be dimmed" case.
+    let op = Operation::Coup(Coup::new(Superpower::Ussr, 4, &board));
+
+    let canvas = render_region(&map, &layout, &board, Region::SouthAmerica, None, Some(&op));
+    let text = canvas.render(ColorMode::Always);
+    let chile_line = line_containing(&text, "Chile");
+    assert!(chile_line.contains("\x1b[2m") || chile_line.contains(";2m"), "an illegal target's name should be dimmed: {chile_line:?}");
+}
+
+#[test]
+fn the_coup_hint_replaces_the_selection_hint() {
+    let (map, layout) = standard();
+    let mut board = Board::new(&map);
+    let italy = map.id_by_name("Italy").unwrap();
+    board.set_influence(italy, Superpower::Us, 3);
+    let op = Operation::Coup(Coup::new(Superpower::Ussr, 4, &board));
+
+    let with_coup = render_region(&map, &layout, &board, Region::Europe, Some(italy), Some(&op));
+    let text = with_coup.render(ColorMode::Never);
+    assert!(text.contains("r coup"), "coup hint missing 'r coup':\n{text}");
+    assert!(text.contains("c done"), "coup hint missing 'c done':\n{text}");
+    assert!(!text.contains("u undo"), "a coup hint shouldn't offer undo, which isn't possible:\n{text}");
+    assert!(!text.contains("+ place"), "a coup hint shouldn't offer placement's '+ place':\n{text}");
+}
+
+#[test]
+fn the_coup_target_line_names_the_stability_and_ops() {
+    let (map, layout) = standard();
+    let mut board = Board::new(&map);
+    let italy = map.id_by_name("Italy").unwrap(); // stability 2
+    board.set_influence(italy, Superpower::Us, 3);
+    let op = Operation::Coup(Coup::new(Superpower::Ussr, 4, &board));
+
+    let canvas = render_region(&map, &layout, &board, Region::Europe, Some(italy), Some(&op));
+    let text = canvas.render(ColorMode::Never);
+    assert!(text.contains("vs 4"), "expected the doubled-stability target number:\n{text}");
+    assert!(text.contains("stability 2"), "expected the raw stability named:\n{text}");
+}
+
+#[test]
+fn no_region_line_exceeds_the_canvas_width_with_a_coup_active() {
+    let (map, layout) = standard();
+    let mut board = Board::new(&map);
+    let east_germany = map.id_by_name("East Germany").unwrap();
+    board.set_influence(east_germany, Superpower::Us, 3);
+
+    let op = Operation::Coup(Coup::new(Superpower::Ussr, 4, &board));
+    for &region in &Region::ALL {
+        let canvas = render_region(&map, &layout, &board, region, Some(east_germany), Some(&op));
+        let text = canvas.render(ColorMode::Never);
+        for line in text.lines() {
+            assert!(line.chars().count() <= canvas.width(), "region {region} coup view exceeded its own width: {line:?}");
+        }
+    }
+}
+
+#[test]
+fn no_country_detail_line_exceeds_its_canvas_width_with_a_coup_active() {
+    let (map, _layout) = standard();
+    let mut board = Board::new(&map);
+    let poland = map.id_by_name("Poland").unwrap();
+    board.set_influence(poland, Superpower::Us, 3);
+
+    let op = Operation::Coup(Coup::new(Superpower::Ussr, 4, &board));
     let canvas = render_country(&map, &board, poland, Some(&op));
     let text = canvas.render(ColorMode::Never);
     for line in text.lines() {

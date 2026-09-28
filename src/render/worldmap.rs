@@ -19,6 +19,10 @@ const WORLD_PLACEMENT_HINT: &str = "←→↑↓ select · Enter open · u undo 
 /// progress. No `u undo` — a resolved roll can't be taken back.
 const WORLD_REALIGN_HINT: &str = "←→↑↓ select · Enter open · r roll · c done · Esc back";
 
+/// Shown instead once a [`Coup`](crate::ops::Coup) is in progress. No
+/// `u undo` — a resolved attempt can't be taken back.
+const WORLD_COUP_HINT: &str = "←→↑↓ select · Enter open · r coup · c done · Esc back";
+
 /// The whole world on one grid, drawn to actually look like a map: real
 /// landmass shading underneath (rasterized once from public-domain
 /// coastline data — see [`MapLayout::background`]), with every country a
@@ -42,11 +46,11 @@ const WORLD_REALIGN_HINT: &str = "←→↑↓ select · Enter open · r roll ·
 /// `op`, when set, is an operation in progress. An
 /// [`InfluencePlacement`](crate::ops::InfluencePlacement) shows every
 /// country with pending influence as a `+` in place of its flag. A
-/// [`Realignment`](crate::ops::Realignment) shows `!` instead, on any
-/// country its net influence has actually changed (there's no
-/// speculative board here — see the module's own doc). Either way an
-/// extra footer line shows the side, its ops balance, and where it's
-/// acted so far.
+/// [`Realignment`](crate::ops::Realignment) shows `!` instead, and a
+/// [`Coup`](crate::ops::Coup) shows `#`, on any country its net influence
+/// has actually changed (there's no speculative board here — see the
+/// module's own doc). Either way an extra footer line shows the side, its
+/// ops balance, and where it's acted so far.
 pub fn render_world_map(
     map: &WorldMap,
     layout: &MapLayout,
@@ -57,8 +61,8 @@ pub fn render_world_map(
     // While a placement is in progress, every reader should see its
     // speculative board rather than the caller's, so control colours and
     // (were they ever added) influence figures stay live as points are
-    // staged. A realignment has no speculative board — its rolls are
-    // already on the real one, which is exactly what `board` already is.
+    // staged. A realignment or coup has no speculative board — its rolls
+    // are already on the real one, which is exactly what `board` already is.
     let board = op.and_then(Operation::board).unwrap_or(board);
     let background = layout.background();
     let height = background.len();
@@ -154,6 +158,7 @@ fn footer_lines(
         let hint = match op {
             Some(Operation::Influence(_)) => WORLD_PLACEMENT_HINT,
             Some(Operation::Realign(_)) => WORLD_REALIGN_HINT,
+            Some(Operation::Coup(_)) => WORLD_COUP_HINT,
             None => WORLD_HINT,
         };
         lines.push((hint.to_string(), Style::color(Color::Muted)));
@@ -297,11 +302,12 @@ fn draw_superpower_box(canvas: &mut Canvas, (y, x): (usize, usize), (rows, cols)
 /// marks a country an open operation has actually changed the net
 /// influence of: since a chip is only ever `flag + code`, there's no
 /// spare column for a count, so the flag slot is overridden — `+` for a
-/// placement's staged points, `!` for a realignment's live swing (a
-/// hyphen would read as just another dash among the chips, and `nz`
-/// already uses `-` to mean zero influence elsewhere) — trading away the
-/// battleground flag for the duration of the operation, an acceptable
-/// loss on this low-detail overview (the region view keeps both).
+/// placement's staged points, `!` for a realignment's live swing, `#` for
+/// a coup's (a hyphen would read as just another dash among the chips,
+/// and `nz` already uses `-` to mean zero influence elsewhere) — trading
+/// away the battleground flag for the duration of the operation, an
+/// acceptable loss on this low-detail overview (the region view keeps
+/// both).
 #[allow(clippy::too_many_arguments)]
 fn draw_chip(
     canvas: &mut Canvas,
@@ -336,6 +342,7 @@ fn draw_chip(
     let flag = match op {
         Some(Operation::Influence(_)) if touched => '+',
         Some(Operation::Realign(_)) if touched => '!',
+        Some(Operation::Coup(_)) if touched => '#',
         _ if country.battleground => '*',
         _ => ' ',
     };

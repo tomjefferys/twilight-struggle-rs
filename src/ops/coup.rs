@@ -1,0 +1,478 @@
+//! The coup operation (rule 6.3): an attempt to force opposing influence
+//! out of a country by force, with a chance of installing friendly
+//! influence in its place.
+//!
+//! Like [`Realignment`](super::Realignment), a [`Coup`] stages nothing —
+//! [`Coup::attempt`] resolves immediately onto the caller's real [`Board`]
+//! and can't be taken back, the way a die roll at a physical table can't.
+//! It keeps the same `base`-snapshot-for-display trick, and its maths is
+//! split into free functions (`coup_resolve`, `coup_odds`) the same way,
+//! so a preview can be computed with no [`Coup`] session open at all.
+//!
+//! Two things set it apart from realignment, though:
+//!
+//! - A card is spent all at once on a *single* attempt (rule 6.3.2 rolls
+//!   one die and adds the card's whole Ops value), not one roll per op.
+//!   Once [`Coup::attempt`] has resolved, the action is done — a second
+//!   attempt is refused, the same way a placement action with no ops left
+//!   would be.
+//! - Rule 6.3.4 (DEFCON degradation) and Military Operations are out of
+//!   scope here, the same way rule 6.1.3 is out of scope for realignment —
+//!   see that module's doc for the precedent.
+//!
+//! There is still no presence requirement (rule 6.3.1): the acting side
+//! need not have influence in or adjacent to the target, only the
+//! opponent needs to have something there to coup.
+
+use std::fmt;
+
+use crate::board::Board;
+use crate::country::{CountryId, Superpower};
+use crate::dice::Dice;
+use crate::map::WorldMap;
+
+/// The number a coup's modified roll must strictly exceed to succeed:
+/// the target country's stability, doubled (rule 6.3.2).
+pub fn coup_target_number(map: &WorldMap, id: CountryId) -> u8 {
+    map.country(id).stability * 2
+}
+
+/// One resolved (or would-be) coup attempt: the die, the ops added to it,
+/// and what actually happened on the board.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CoupResult {
+    pub target: CountryId,
+    pub die: u8,
+    pub ops: u8,
+    pub target_number: u8,
+    /// `(die + ops) - target_number` when that's positive, else 0 — the
+    /// total influence swing on a success, and the reason a tie fails
+    /// (rule 6.3.2 requires the modified roll to be *greater than*, not
+    /// merely equal to, the doubled stability).
+    pub margin: u8,
+    /// Opposing influence removed from the target, capped by what was
+    /// actually there.
+    pub removed: u8,
+    /// Friendly influence added to the target to make up any shortfall
+    /// between `margin` and `removed` (rule 6.3.3).
+    pub added: u8,
+}
+
+impl CoupResult {
+    pub fn success(&self) -> bool {
+        self.margin > 0
+    }
+}
+
+/// Resolves one coup attempt: a pure function of the die, the ops spent,
+/// the target's stability, and the opponent's influence actually present
+/// — factored out from [`Coup::attempt`] so every rules test can run
+/// without touching [`Dice`] at all.
+pub fn coup_resolve(target: CountryId, acting: Superpower, die: u8, ops: u8, target_number: u8, board: &Board) -> CoupResult {
+    let opponent = acting.opponent();
+    let modified = die as i32 + ops as i32;
+    let margin = (modified - target_number as i32).max(0) as u8;
+    let removed = margin.min(board.influence(target, opponent));
+    let added = margin - removed;
+    CoupResult { target, die, ops, target_number, margin, removed, added }
+}
+
+/// Win/fail odds for `side` couping `id` with `ops` operation points right
+/// now, counted in sixths (one d6, six outcomes) rather than stored as
+/// floats, so there's nothing to round and no drift between platforms.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct CoupOdds {
+    pub success: u8,
+    pub failure: u8,
+    /// Expected opponent influence removed, in 6ths — capped, per face,
+    /// by the opponent's actual influence present.
+    pub removed_6ths: u16,
+    /// Expected friendly influence added, in 6ths — the flip side of
+    /// `removed_6ths`: whatever margin the opponent's influence couldn't
+    /// absorb.
+    pub added_6ths: u16,
+}
+
+/// `side`'s odds couping `id` with `ops` operation points, enumerated over
+/// all six die faces. Unlike [`super::odds`], this takes `ops` explicitly
+/// — a coup's only modifier is the card's own Ops value, so there's no
+/// ops-free preview to compute.
+pub fn coup_odds(map: &WorldMap, board: &Board, id: CountryId, side: Superpower, ops: u8) -> CoupOdds {
+    let target_number = coup_target_number(map, id);
+    let mut result = CoupOdds::default();
+    for die in 1..=6u8 {
+        let roll = coup_resolve(id, side, die, ops, target_number, board);
+        if roll.success() {
+            result.success += 1;
+            result.removed_6ths += roll.removed as u16;
+            result.added_6ths += roll.added as u16;
+        } else {
+            result.failure += 1;
+        }
+    }
+    result
+}
+
+/// Why a coup attempt was refused.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CoupError {
+    /// The opponent has no influence in `country` for `side` to coup.
+    NoOpponentInfluence { country: String, side: Superpower },
+    /// This action has already resolved its one attempt.
+    AlreadyResolved { country: String },
+}
+
+impl fmt::Display for CoupError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            CoupError::NoOpponentInfluence { country, side } => {
+                write!(f, "{} has no influence in {country} for {side} to coup", side.opponent())
+            }
+            CoupError::AlreadyResolved { country } => {
+                write!(f, "this coup has already resolved its one attempt (against {country})")
+            }
+        }
+    }
+}
+
+impl std::error::Error for CoupError {}
+
+/// An open coup action: the ops it will spend, and its one attempt once
+/// resolved. Holds **no speculative board** — see the module doc for why.
+pub struct Coup {
+    side: Superpower,
+    ops_total: u8,
+    result: Option<CoupResult>,
+    /// The board as it stood when this action started — display only.
+    /// `delta` reads it; legality never does.
+    base: Board,
+}
+
+impl Coup {
+    pub fn new(side: Superpower, ops: u8, board: &Board) -> Self {
+        Coup { side, ops_total: ops, result: None, base: board.clone() }
+    }
+
+    pub fn side(&self) -> Superpower {
+        self.side
+    }
+
+    pub fn ops_total(&self) -> u8 {
+        self.ops_total
+    }
+
+    /// All the ops at once, once this action's one attempt has resolved;
+    /// zero until then.
+    pub fn ops_spent(&self) -> u8 {
+        if self.result.is_some() { self.ops_total } else { 0 }
+    }
+
+    pub fn remaining(&self) -> u8 {
+        self.ops_total - self.ops_spent()
+    }
+
+    /// The target number and odds for a coup on `id` right now — everything
+    /// the UI needs to show before spending the card. `board` should be
+    /// the caller's live board, not `base`.
+    pub fn preview(&self, map: &WorldMap, board: &Board, id: CountryId) -> (u8, CoupOdds) {
+        let target_number = coup_target_number(map, id);
+        let odds = coup_odds(map, board, id, self.side, self.ops_total);
+        (target_number, odds)
+    }
+
+    /// Whether `id` is a legal target right now: the opponent has any
+    /// influence there at all (rule 6.3.1). No presence of the acting
+    /// side's own is required. Deliberately doesn't check whether this
+    /// action's attempt has already resolved — like
+    /// [`Realignment::is_legal_target`](super::Realignment::is_legal_target),
+    /// that's `attempt`'s job, so a spent session doesn't dim every
+    /// country in the region.
+    pub fn is_legal_target(&self, _map: &WorldMap, board: &Board, id: CountryId) -> bool {
+        board.influence(id, self.side.opponent()) > 0
+    }
+
+    /// Resolves this action's one attempt against `id`, spending every op
+    /// at once and writing straight to `board`. Refused — with no die
+    /// drawn and no state changed — if this action has already resolved
+    /// or `id` isn't a legal target. Irreversible on success.
+    pub fn attempt(&mut self, map: &WorldMap, board: &mut Board, id: CountryId, dice: &mut Dice) -> Result<CoupResult, CoupError> {
+        if self.result.is_some() {
+            return Err(CoupError::AlreadyResolved { country: map.country(id).name.clone() });
+        }
+        if !self.is_legal_target(map, board, id) {
+            return Err(CoupError::NoOpponentInfluence { country: map.country(id).name.clone(), side: self.side });
+        }
+
+        let target_number = coup_target_number(map, id);
+        let die = dice.roll();
+        let result = coup_resolve(id, self.side, die, self.ops_total, target_number, board);
+
+        if result.removed > 0 {
+            board.remove_influence(id, self.side.opponent(), result.removed);
+        }
+        if result.added > 0 {
+            board.add_influence(id, self.side, result.added);
+        }
+        self.result = Some(result);
+        Ok(result)
+    }
+
+    /// How much `side`'s influence in `id` has changed, relative to
+    /// `board`, since this action began — positive or negative, since a
+    /// success can both remove opposing influence and add friendly
+    /// influence to the same country.
+    pub fn delta(&self, board: &Board, id: CountryId, side: Superpower) -> i8 {
+        let current = board.influence(id, side) as i16;
+        let original = self.base.influence(id, side) as i16;
+        (current - original) as i8
+    }
+
+    /// The target country, once this action has resolved — empty
+    /// before then.
+    pub fn touched(&self) -> Vec<CountryId> {
+        self.result.map(|r| vec![r.target]).unwrap_or_default()
+    }
+
+    pub fn result(&self) -> Option<&CoupResult> {
+        self.result.as_ref()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::country::Superpower::{Us, Ussr};
+
+    fn map() -> WorldMap {
+        WorldMap::standard().unwrap()
+    }
+
+    fn id(map: &WorldMap, name: &str) -> CountryId {
+        map.id_by_name(name).unwrap_or_else(|| panic!("no country named {name:?}"))
+    }
+
+    /// Brute-forces a seed whose first rolls are exactly `values` — see
+    /// `realign.rs`'s copy of this helper for why.
+    fn dice_rolling(values: &[u8]) -> Dice {
+        for seed in 0u64.. {
+            let mut probe = Dice::from_seed(seed);
+            if values.iter().all(|&v| probe.roll() == v) {
+                return Dice::from_seed(seed);
+            }
+        }
+        unreachable!("every u64 seed exhausted without a match")
+    }
+
+    // --- target number ---------------------------------------------------
+
+    #[test]
+    fn the_target_number_is_stability_doubled() {
+        let map = map();
+        let venezuela = id(&map, "Venezuela"); // stability 2
+        assert_eq!(map.country(venezuela).stability, 2);
+        assert_eq!(coup_target_number(&map, venezuela), 4);
+    }
+
+    // --- resolving an attempt ---------------------------------------------
+
+    #[test]
+    fn an_exactly_equal_modified_roll_fails() {
+        // Rule 6.3.2: the modified roll must be *greater than* the
+        // doubled stability, not merely equal to it.
+        let map = map();
+        let mut board = Board::new(&map);
+        let venezuela = id(&map, "Venezuela"); // stability 2, target number 4
+        board.set_influence(venezuela, Us, 3);
+
+        let mut coup = Coup::new(Ussr, 2, &board); // die 2 + ops 2 = 4, exactly the target
+        let mut dice = dice_rolling(&[2]);
+        let result = coup.attempt(&map, &mut board, venezuela, &mut dice).unwrap();
+
+        assert!(!result.success());
+        assert_eq!(result.margin, 0);
+        assert_eq!(result.removed, 0);
+        assert_eq!(board.influence(venezuela, Us), 3, "a failed coup changes nothing");
+    }
+
+    #[test]
+    fn a_roll_one_over_succeeds_by_exactly_one() {
+        let map = map();
+        let mut board = Board::new(&map);
+        let venezuela = id(&map, "Venezuela"); // target number 4
+        board.set_influence(venezuela, Us, 3);
+
+        let mut coup = Coup::new(Ussr, 2, &board); // die 3 + ops 2 = 5, one over
+        let mut dice = dice_rolling(&[3]);
+        let result = coup.attempt(&map, &mut board, venezuela, &mut dice).unwrap();
+
+        assert!(result.success());
+        assert_eq!(result.margin, 1);
+        assert_eq!(result.removed, 1);
+        assert_eq!(result.added, 0);
+        assert_eq!(board.influence(venezuela, Us), 2);
+    }
+
+    #[test]
+    fn removal_is_capped_and_the_surplus_becomes_friendly_influence() {
+        let map = map();
+        let mut board = Board::new(&map);
+        let venezuela = id(&map, "Venezuela"); // target number 4
+        board.set_influence(venezuela, Us, 1); // less than the margin below
+
+        let mut coup = Coup::new(Ussr, 4, &board); // die 6 + ops 4 = 10, margin 6
+        let mut dice = dice_rolling(&[6]);
+        let result = coup.attempt(&map, &mut board, venezuela, &mut dice).unwrap();
+
+        assert_eq!(result.margin, 6);
+        assert_eq!(result.removed, 1, "capped at the 1 that was actually there");
+        assert_eq!(result.added, 5, "the rest of the margin becomes friendly influence (rule 6.3.3)");
+        assert_eq!(board.influence(venezuela, Us), 0);
+        assert_eq!(board.influence(venezuela, Ussr), 5);
+    }
+
+    #[test]
+    fn total_swing_always_equals_the_margin() {
+        let map = map();
+        let venezuela = id(&map, "Venezuela");
+        for opponent_influence in 1..=6u8 {
+            // opponent_influence == 0 would make Venezuela an illegal
+            // target (rule 6.3.1) rather than exercise the removal/added
+            // split this test is after.
+            for die in 1..=6u8 {
+                let mut board = Board::new(&map);
+                board.set_influence(venezuela, Us, opponent_influence);
+                let mut coup = Coup::new(Ussr, 3, &board);
+                let mut dice = dice_rolling(&[die]);
+                let result = coup.attempt(&map, &mut board, venezuela, &mut dice).unwrap();
+                assert_eq!(result.removed + result.added, result.margin);
+            }
+        }
+    }
+
+    #[test]
+    fn a_failed_coup_still_spends_every_op() {
+        let map = map();
+        let mut board = Board::new(&map);
+        let venezuela = id(&map, "Venezuela"); // target number 4
+        board.set_influence(venezuela, Us, 3);
+
+        let mut coup = Coup::new(Ussr, 1, &board); // die 1 + ops 1 = 2, well short
+        let mut dice = dice_rolling(&[1]);
+        let result = coup.attempt(&map, &mut board, venezuela, &mut dice).unwrap();
+
+        assert!(!result.success());
+        assert_eq!(coup.ops_spent(), 1);
+        assert_eq!(coup.remaining(), 0);
+    }
+
+    // --- legality ----------------------------------------------------------
+
+    #[test]
+    fn no_presence_is_required_to_coup() {
+        let map = map();
+        let mut board = Board::new(&map);
+        let chile = id(&map, "Chile");
+        board.set_influence(chile, Us, 2);
+        let coup = Coup::new(Ussr, 3, &board);
+        assert!(coup.is_legal_target(&map, &board, chile));
+    }
+
+    #[test]
+    fn a_target_with_no_opponent_influence_is_refused() {
+        let map = map();
+        let mut board = Board::new(&map);
+        let venezuela = id(&map, "Venezuela");
+        let mut coup = Coup::new(Ussr, 3, &board);
+        let mut dice = Dice::from_seed(1);
+        let err = coup.attempt(&map, &mut board, venezuela, &mut dice).unwrap_err();
+        assert_eq!(err, CoupError::NoOpponentInfluence { country: "Venezuela".to_string(), side: Ussr });
+    }
+
+    #[test]
+    fn a_second_attempt_is_refused() {
+        let map = map();
+        let mut board = Board::new(&map);
+        let venezuela = id(&map, "Venezuela");
+        board.set_influence(venezuela, Us, 3);
+        let mut coup = Coup::new(Ussr, 3, &board);
+        let mut dice = Dice::from_seed(2);
+
+        coup.attempt(&map, &mut board, venezuela, &mut dice).unwrap();
+        let err = coup.attempt(&map, &mut board, venezuela, &mut dice).unwrap_err();
+        assert_eq!(err, CoupError::AlreadyResolved { country: "Venezuela".to_string() });
+    }
+
+    #[test]
+    fn a_refused_attempt_consumes_no_dice() {
+        let map = map();
+        let mut board = Board::new(&map);
+        let venezuela = id(&map, "Venezuela");
+        let mut coup = Coup::new(Ussr, 3, &board);
+        let mut dice = Dice::from_seed(555);
+        let mut control = Dice::from_seed(555);
+
+        // Illegal: no US influence in Venezuela yet.
+        let err = coup.attempt(&map, &mut board, venezuela, &mut dice).unwrap_err();
+        assert_eq!(err, CoupError::NoOpponentInfluence { country: "Venezuela".to_string(), side: Ussr });
+
+        // Now make it legal and attempt for real — the die drawn should
+        // be exactly what a fresh die from the same seed rolls first,
+        // proving the refused attempt above never touched the sequence.
+        board.set_influence(venezuela, Us, 3);
+        let result = coup.attempt(&map, &mut board, venezuela, &mut dice).unwrap();
+        assert_eq!(result.die, control.roll());
+    }
+
+    // --- odds ----------------------------------------------------------------
+
+    #[test]
+    fn success_and_failure_sum_to_six() {
+        let map = map();
+        let mut board = Board::new(&map);
+        let venezuela = id(&map, "Venezuela");
+        board.set_influence(venezuela, Us, 3);
+        let o = coup_odds(&map, &board, venezuela, Ussr, 2);
+        assert_eq!(o.success as u16 + o.failure as u16, 6);
+    }
+
+    #[test]
+    fn odds_expectations_agree_with_resolve_across_every_face() {
+        let map = map();
+        let mut board = Board::new(&map);
+        let venezuela = id(&map, "Venezuela");
+        board.set_influence(venezuela, Us, 3);
+        let target_number = coup_target_number(&map, venezuela);
+
+        let mut removed_total = 0u16;
+        let mut added_total = 0u16;
+        let mut success_total = 0u8;
+        for die in 1..=6u8 {
+            let result = coup_resolve(venezuela, Ussr, die, 2, target_number, &board);
+            if result.success() {
+                success_total += 1;
+                removed_total += result.removed as u16;
+                added_total += result.added as u16;
+            }
+        }
+
+        let o = coup_odds(&map, &board, venezuela, Ussr, 2);
+        assert_eq!(o.success, success_total);
+        assert_eq!(o.removed_6ths, removed_total);
+        assert_eq!(o.added_6ths, added_total);
+    }
+
+    #[test]
+    fn odds_never_show_an_impossible_success_when_ops_can_never_clear_the_target() {
+        let map = map();
+        let mut board = Board::new(&map);
+        let venezuela = id(&map, "Venezuela"); // target number 4
+        board.set_influence(venezuela, Us, 3);
+        let o = coup_odds(&map, &board, venezuela, Ussr, 0); // best possible roll: 6 + 0 = 6 > 4, still winnable
+        assert!(o.success > 0);
+
+        let brezhnev = id(&map, "Finland"); // stability 4, target number 8: unreachable with 0 ops (max 6)
+        board.set_influence(brezhnev, Us, 3);
+        let o2 = coup_odds(&map, &board, brezhnev, Ussr, 0);
+        assert_eq!(o2.success, 0, "die alone (max 6) can never exceed a target number of 8");
+    }
+}

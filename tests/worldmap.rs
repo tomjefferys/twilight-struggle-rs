@@ -1,5 +1,5 @@
 use twilight_struggle::render::render_world_map;
-use twilight_struggle::{Board, ColorMode, InfluencePlacement, MapLayout, Operation, Realignment, Region, Scenario, Superpower, WorldMap};
+use twilight_struggle::{Board, ColorMode, Coup, InfluencePlacement, MapLayout, Operation, Realignment, Region, Scenario, Superpower, WorldMap};
 
 fn standard() -> (WorldMap, MapLayout) {
     let map = WorldMap::standard().unwrap();
@@ -282,4 +282,46 @@ fn the_realignment_footer_is_not_clipped() {
     assert!(text.contains("USSR realigning"), "the full balance line should not be clipped:\n{text}");
     assert!(text.contains("r roll"), "the realign hint should not be clipped:\n{text}");
     assert!(!text.contains("u undo"), "the world map hint shouldn't offer undo during a realignment:\n{text}");
+}
+
+#[test]
+fn a_couped_chip_is_marked() {
+    let (map, layout) = standard();
+    let mut board = Board::new(&map);
+    let poland = map.id_by_name("Poland").unwrap();
+    board.set_influence(poland, Superpower::Us, 3);
+
+    // The coup's `base` is captured here, before the board is mutated
+    // below — exactly as a real attempt would leave it.
+    let op = Operation::Coup(Coup::new(Superpower::Ussr, 4, &board));
+    board.set_influence(poland, Superpower::Us, 1); // as if the attempt just removed 2
+
+    let canvas = render_world_map(&map, &layout, &board, None, Some(&op));
+    let text = canvas.render(ColorMode::Never);
+    assert!(text.contains("#Pol"), "Poland's chip should show a '#' once a coup has changed it:\n{text}");
+    let plain = render_world_map(&map, &layout, &board, None, None).render(ColorMode::Never);
+    assert!(!plain.contains("#Pol"), "sanity check: the plain view shouldn't already have a '#' before Pol");
+}
+
+#[test]
+fn the_coup_footer_is_not_clipped() {
+    let (map, layout) = standard();
+    let mut board = Board::new(&map);
+    let poland = map.id_by_name("Poland").unwrap();
+    board.set_influence(poland, Superpower::Us, 3);
+
+    let op = Operation::Coup(Coup::new(Superpower::Ussr, 4, &board));
+    board.set_influence(poland, Superpower::Us, 1);
+
+    let plain = render_world_map(&map, &layout, &board, None, None);
+    let with_coup = render_world_map(&map, &layout, &board, Some(Region::Europe), Some(&op));
+    assert_eq!(with_coup.height(), plain.height() + 3, "a region selection plus a coup should add exactly three rows");
+
+    let text = with_coup.render(ColorMode::Never);
+    for line in text.lines() {
+        assert!(line.chars().count() <= with_coup.width(), "world map coup view exceeded its own width: {line:?}");
+    }
+    assert!(text.contains("USSR couping"), "the full balance line should not be clipped:\n{text}");
+    assert!(text.contains("r coup"), "the coup hint should not be clipped:\n{text}");
+    assert!(!text.contains("u undo"), "the world map hint shouldn't offer undo during a coup:\n{text}");
 }
