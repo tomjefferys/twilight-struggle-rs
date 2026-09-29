@@ -1,5 +1,7 @@
 use twilight_struggle::render::{render_country, render_region, render_world};
-use twilight_struggle::{Board, ColorMode, Coup, InfluencePlacement, MapLayout, Operation, Realignment, Region, Scenario, Superpower, WorldMap};
+use twilight_struggle::{
+    Board, ColorMode, Coup, InfluencePlacement, MapLayout, Operation, Realignment, Region, Scenario, Superpower, ViewMode, WorldMap,
+};
 
 fn standard() -> (WorldMap, MapLayout) {
     let map = WorldMap::standard().unwrap();
@@ -126,7 +128,7 @@ fn a_country_selection_adds_its_name_and_the_key_hints() {
     let text = selected.render(ColorMode::Never);
     assert!(text.contains("▸ Italy ◂"), "selected country's name missing:\n{text}");
     assert!(text.contains("Esc back"), "key hints missing:\n{text}");
-    assert!(!text.contains("Enter"), "Enter is unbound in the region view, so shouldn't be hinted:\n{text}");
+    assert!(text.contains("Enter open"), "a selected country should hint that Enter opens its detail screen:\n{text}");
     assert_eq!(selected.height(), plain.height() + 2, "a selection should add exactly two rows");
 }
 
@@ -322,18 +324,18 @@ fn color_never_emits_no_escape_codes() {
     let canvas = render_world(&map, &layout, &scenario.board, &scenario.status, 104);
     assert!(!canvas.render(ColorMode::Never).contains('\x1b'));
 
-    let country_canvas = render_country(&map, &scenario.board, map.id_by_name("Italy").unwrap(), None);
+    let country_canvas = render_country(&map, &layout, &scenario.board, map.id_by_name("Italy").unwrap(), None, ViewMode::Static);
     assert!(!country_canvas.render(ColorMode::Never).contains('\x1b'));
 }
 
 #[test]
 fn color_always_wraps_styled_text_in_sgr_codes() {
-    let (map, _layout) = standard();
+    let (map, layout) = standard();
     let mut board = Board::new(&map);
     let italy = map.id_by_name("Italy").unwrap();
     board.set_influence(italy, Superpower::Us, 3);
 
-    let canvas = render_country(&map, &board, italy, None);
+    let canvas = render_country(&map, &layout, &board, italy, None, ViewMode::Static);
     let text = canvas.render(ColorMode::Always);
     assert!(text.contains('\x1b'), "coloured output should contain ANSI escapes");
     assert!(text.contains("\x1b[0m"), "styled runs should be reset");
@@ -341,13 +343,13 @@ fn color_always_wraps_styled_text_in_sgr_codes() {
 
 #[test]
 fn render_country_lists_every_neighbor_with_its_own_state() {
-    let (map, _layout) = standard();
+    let (map, layout) = standard();
     let mut board = Board::new(&map);
     let france = map.id_by_name("France").unwrap();
     board.set_influence(france, Superpower::Ussr, 5);
 
     let italy = map.id_by_name("Italy").unwrap();
-    let canvas = render_country(&map, &board, italy, None);
+    let canvas = render_country(&map, &layout, &board, italy, None, ViewMode::Static);
     let text = canvas.render(ColorMode::Never);
 
     for neighbor in &map.country(italy).adjacent {
@@ -438,12 +440,20 @@ fn the_realign_hint_replaces_the_selection_hint() {
     let poland = map.id_by_name("Poland").unwrap();
     let op = Operation::Realign(Realignment::new(Superpower::Ussr, 5, &board));
 
+    // The region screen no longer rolls — it just points at the country
+    // screen, which is where the roll (and its hint) actually live.
     let with_realign = render_region(&map, &layout, &board, Region::Europe, Some(poland), Some(&op));
     let text = with_realign.render(ColorMode::Never);
-    assert!(text.contains("r roll"), "realign hint missing 'r roll':\n{text}");
+    assert!(text.contains("Enter target"), "realign region hint should point at the country screen:\n{text}");
     assert!(text.contains("c done"), "realign hint missing 'c done':\n{text}");
+    assert!(!text.contains("r roll"), "rolling no longer happens on the region screen:\n{text}");
     assert!(!text.contains("u undo"), "a realignment hint shouldn't offer undo, which isn't possible:\n{text}");
     assert!(!text.contains("+ place"), "a realignment hint shouldn't offer placement's '+ place':\n{text}");
+
+    let country_view = render_country(&map, &layout, &board, poland, Some(&op), ViewMode::Interactive);
+    let country_text = country_view.render(ColorMode::Never);
+    assert!(country_text.contains("r roll"), "country screen hint missing 'r roll':\n{country_text}");
+    assert!(country_text.contains("c done"), "country screen hint missing 'c done':\n{country_text}");
 }
 
 #[test]
@@ -492,7 +502,7 @@ fn no_region_line_exceeds_the_canvas_width_with_a_realignment_active() {
 
 #[test]
 fn no_country_detail_line_exceeds_its_canvas_width() {
-    let (map, _layout) = standard();
+    let (map, layout) = standard();
     let mut board = Board::new(&map);
     let poland = map.id_by_name("Poland").unwrap();
     board.set_influence(map.id_by_name("East Germany").unwrap(), Superpower::Ussr, 3);
@@ -500,7 +510,7 @@ fn no_country_detail_line_exceeds_its_canvas_width() {
     board.set_influence(poland, Superpower::Ussr, 2);
 
     let op = Operation::Realign(Realignment::new(Superpower::Ussr, 5, &board));
-    let canvas = render_country(&map, &board, poland, Some(&op));
+    let canvas = render_country(&map, &layout, &board, poland, Some(&op), ViewMode::Static);
     let text = canvas.render(ColorMode::Never);
     for line in text.lines() {
         assert!(line.chars().count() <= canvas.width(), "country detail view exceeded its own width: {line:?}");
@@ -571,12 +581,20 @@ fn the_coup_hint_replaces_the_selection_hint() {
     board.set_influence(italy, Superpower::Us, 3);
     let op = Operation::Coup(Coup::new(Superpower::Ussr, 4, &board));
 
+    // The region screen no longer attempts the coup — it just points at
+    // the country screen, which is where the attempt (and its hint) live.
     let with_coup = render_region(&map, &layout, &board, Region::Europe, Some(italy), Some(&op));
     let text = with_coup.render(ColorMode::Never);
-    assert!(text.contains("r coup"), "coup hint missing 'r coup':\n{text}");
+    assert!(text.contains("Enter target"), "coup region hint should point at the country screen:\n{text}");
     assert!(text.contains("c done"), "coup hint missing 'c done':\n{text}");
+    assert!(!text.contains("r coup"), "couping no longer happens on the region screen:\n{text}");
     assert!(!text.contains("u undo"), "a coup hint shouldn't offer undo, which isn't possible:\n{text}");
     assert!(!text.contains("+ place"), "a coup hint shouldn't offer placement's '+ place':\n{text}");
+
+    let country_view = render_country(&map, &layout, &board, italy, Some(&op), ViewMode::Interactive);
+    let country_text = country_view.render(ColorMode::Never);
+    assert!(country_text.contains("r coup"), "country screen hint missing 'r coup':\n{country_text}");
+    assert!(country_text.contains("c done"), "country screen hint missing 'c done':\n{country_text}");
 }
 
 #[test]
@@ -612,13 +630,13 @@ fn no_region_line_exceeds_the_canvas_width_with_a_coup_active() {
 
 #[test]
 fn no_country_detail_line_exceeds_its_canvas_width_with_a_coup_active() {
-    let (map, _layout) = standard();
+    let (map, layout) = standard();
     let mut board = Board::new(&map);
     let poland = map.id_by_name("Poland").unwrap();
     board.set_influence(poland, Superpower::Us, 3);
 
     let op = Operation::Coup(Coup::new(Superpower::Ussr, 4, &board));
-    let canvas = render_country(&map, &board, poland, Some(&op));
+    let canvas = render_country(&map, &layout, &board, poland, Some(&op), ViewMode::Static);
     let text = canvas.render(ColorMode::Never);
     for line in text.lines() {
         assert!(line.chars().count() <= canvas.width(), "country detail view exceeded its own width: {line:?}");
@@ -628,17 +646,116 @@ fn no_country_detail_line_exceeds_its_canvas_width_with_a_coup_active() {
 
 #[test]
 fn country_detail_marks_the_neighbours_supplying_adjacent_controlled() {
-    let (map, _layout) = standard();
+    let (map, layout) = standard();
     let mut board = Board::new(&map);
     let poland = map.id_by_name("Poland").unwrap();
     let east_germany = map.id_by_name("East Germany").unwrap();
     board.set_influence(east_germany, Superpower::Ussr, 3);
 
     let op = Operation::Realign(Realignment::new(Superpower::Ussr, 5, &board));
-    let canvas = render_country(&map, &board, poland, Some(&op));
+    let canvas = render_country(&map, &layout, &board, poland, Some(&op), ViewMode::Static);
     let text = canvas.render(ColorMode::Never);
     let east_germany_line = line_containing(&text, "East Germany");
     assert!(east_germany_line.contains("+1 realign"), "the controlled neighbour should be marked: {east_germany_line:?}");
     let czechoslovakia_line = line_containing(&text, "Czechoslovakia");
     assert!(!czechoslovakia_line.contains("+1 realign"), "an uncontrolled neighbour shouldn't be marked: {czechoslovakia_line:?}");
+}
+
+#[test]
+fn country_detail_matches_snapshot() {
+    let (map, layout) = standard();
+    let scenario = Scenario::demo(&map).unwrap();
+    let poland = map.id_by_name("Poland").unwrap();
+    let canvas = render_country(&map, &layout, &scenario.board, poland, None, ViewMode::Static);
+    let expected = include_str!("snapshots/country_poland.txt");
+    assert_eq!(canvas.render(ColorMode::Never), expected.trim_end_matches('\n'));
+}
+
+#[test]
+fn the_country_view_has_one_divider_with_no_operation_and_two_with_one() {
+    let (map, layout) = standard();
+    let board = Board::new(&map);
+    let poland = map.id_by_name("Poland").unwrap();
+
+    // No operation: just the Neighbours panel divider. With one open,
+    // the Operation panel adds a second — regardless of which kind, since
+    // every kind draws exactly one divider for its own panel.
+    let plain = render_country(&map, &layout, &board, poland, None, ViewMode::Static);
+    assert_eq!(plain.render(ColorMode::Never).matches('├').count(), 1, "no operation should draw just the Neighbours divider");
+
+    for op in [
+        Operation::Influence(InfluencePlacement::new(Superpower::Ussr, 5, &board)),
+        Operation::Realign(Realignment::new(Superpower::Ussr, 5, &board)),
+        Operation::Coup(Coup::new(Superpower::Ussr, 5, &board)),
+    ] {
+        let canvas = render_country(&map, &layout, &board, poland, Some(&op), ViewMode::Static);
+        assert_eq!(canvas.render(ColorMode::Never).matches('├').count(), 2, "an open operation should add its own panel divider");
+    }
+}
+
+#[test]
+fn no_country_detail_line_exceeds_its_canvas_width_for_any_country() {
+    let (map, layout) = standard();
+    let mut board = Board::new(&map);
+    // Give every country influence on both sides, so a realignment or
+    // coup on any of them has real modifier/odds lines to draw rather
+    // than the short "no influence to remove" placeholder — the longer,
+    // more likely-to-overflow case.
+    for (id, _) in map.iter() {
+        board.set_influence(id, Superpower::Us, 1);
+        board.set_influence(id, Superpower::Ussr, 1);
+    }
+
+    let placement_op = Operation::Influence(InfluencePlacement::new(Superpower::Ussr, 5, &board));
+    let realign_op = Operation::Realign(Realignment::new(Superpower::Ussr, 5, &board));
+    let coup_op = Operation::Coup(Coup::new(Superpower::Ussr, 5, &board));
+
+    for (id, country) in map.iter() {
+        for op in [None, Some(&placement_op), Some(&realign_op), Some(&coup_op)] {
+            let canvas = render_country(&map, &layout, &board, id, op, ViewMode::Interactive);
+            let text = canvas.render(ColorMode::Never);
+            for line in text.lines() {
+                assert!(
+                    line.chars().count() <= canvas.width(),
+                    "{}: country detail view exceeded its own width: {line:?}",
+                    country.name
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn the_hint_row_only_appears_under_interactive_mode() {
+    let (map, layout) = standard();
+    let board = Board::new(&map);
+    let poland = map.id_by_name("Poland").unwrap();
+
+    let static_view = render_country(&map, &layout, &board, poland, None, ViewMode::Static);
+    let static_text = static_view.render(ColorMode::Never);
+    assert!(!static_text.contains("←→↑↓"), "a static print has no keys to hint at:\n{static_text}");
+
+    let interactive_view = render_country(&map, &layout, &board, poland, None, ViewMode::Interactive);
+    let interactive_text = interactive_view.render(ColorMode::Never);
+    assert!(interactive_text.contains("←→↑↓"), "an interactive view should hint its keys:\n{interactive_text}");
+    assert_eq!(interactive_view.height(), static_view.height() + 1, "the hint should add exactly one row");
+}
+
+#[test]
+fn pending_influence_is_marked_in_the_country_view() {
+    let (map, layout) = standard();
+    let board = Board::new(&map);
+    let poland = map.id_by_name("Poland").unwrap();
+    let mut placement = InfluencePlacement::new(Superpower::Ussr, 5, &board);
+    placement.place(&map, poland).unwrap();
+    placement.place(&map, poland).unwrap();
+
+    let op = Operation::Influence(placement);
+    let canvas = render_country(&map, &layout, &board, poland, Some(&op), ViewMode::Static);
+    let text = canvas.render(ColorMode::Never);
+    // Poland's own influence line should read the speculative board, not
+    // the caller's real (still-empty) one.
+    let poland_stats_line = line_after(&text, "Poland");
+    assert!(poland_stats_line.contains("USSR 2"), "Poland's USSR figure should be live: {poland_stats_line:?}");
+    assert!(text.contains("2 placed here"), "the Operation panel should say how much is pending here:\n{text}");
 }

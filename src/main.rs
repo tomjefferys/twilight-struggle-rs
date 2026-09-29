@@ -2,7 +2,10 @@ use std::fs;
 use std::io::{self, IsTerminal, Write};
 
 use twilight_struggle::render::{coup_result_line, log_text, operation_balance_line, render_country, render_log, render_region, render_world, render_world_map, roll_result_line};
-use twilight_struggle::{ColorMode, Dice, Found, Game, GameError, MapLayout, Operation, OperationKind, Region, RollOutcome, Scenario, Superpower, WorldMap, OPS_PER_ACTION_ROUND};
+use twilight_struggle::{
+    ColorMode, Dice, Found, Game, GameError, MapLayout, Operation, OperationKind, Region, RollOutcome, Scenario, Superpower, ViewMode, WorldMap,
+    OPS_PER_ACTION_ROUND,
+};
 
 mod interactive;
 
@@ -275,14 +278,13 @@ fn run_command(session: &mut Session, line: &str) {
 fn print_country(session: &Session, query: &str) {
     match session.map.find(query) {
         Found::One(id) => {
-            print_operation_banner(session);
-            let canvas = render_country(&session.map, session.game.view_board(), id, session.game.operation());
+            let canvas = render_country(&session.map, &session.layout, session.game.view_board(), id, session.game.operation(), ViewMode::Static);
             println!("{}", canvas.render(session.color));
         }
         Found::None => match session.layout.find_by_code(query) {
             Some(id) => {
-                print_operation_banner(session);
-                let canvas = render_country(&session.map, session.game.view_board(), id, session.game.operation());
+                let canvas =
+                    render_country(&session.map, &session.layout, session.game.view_board(), id, session.game.operation(), ViewMode::Static);
                 println!("{}", canvas.render(session.color));
             }
             None => println!("no country matches {query:?}"),
@@ -291,12 +293,13 @@ fn print_country(session: &Session, query: &str) {
     }
 }
 
-/// Printed above any view that has no room of its own to show pending
-/// operation state (the dashboard, a single country) — the region and
-/// world map views show this same line in their own footer instead. Reads
-/// the committed board, not the speculative one — the line only names the
-/// touched countries and remaining ops, both already tracked by the
-/// operation itself.
+/// Printed above the six-region dashboard, the one view left with no room
+/// of its own to show pending operation state — the region, world map,
+/// and country views all show this same information inline instead (the
+/// country view's own Operation panel is exactly this line, split across
+/// its title and first row). Reads the committed board, not the
+/// speculative one — the line only names the touched countries and
+/// remaining ops, both already tracked by the operation itself.
 fn print_operation_banner(session: &Session) {
     if let Some(op) = session.game.operation() {
         println!("{}", operation_balance_line(&session.layout, session.game.board(), op));
@@ -637,7 +640,11 @@ Commands:
   map, world              the six-region dashboard
   worldmap, wm            the whole world as one geographic map (codes, no names);
                           arrow keys select a region, Enter zooms in, Esc backs out
-                          (and the same arrow-key selection continues inside a region)
+                          (and the same arrow-key selection continues inside a
+                          region; Enter there opens that country's own detail
+                          screen — also where a realignment roll or coup
+                          attempt actually happens, with the calculation on
+                          screen above the key that resolves it)
   region <name>, 1-6      zoom into one region (europe/asia/middleeast/africa/centralamerica/southamerica)
   country <name>, /<name> a single country's detail, with all its neighbours (name or code)
   set <c> <us|ussr> <n>   set a country's influence
@@ -684,12 +691,15 @@ Commands:
                           close a realignment or coup, leaving any rolls
                           already made in place — the turn passes to the
                           other side either way
-                          (while a session is open: map/world/country show
-                          a balance banner; worldmap/region mark touched
-                          countries and are navigable the same way inside
-                          interactive mode — + place / r roll or coup,
-                          u undo, c confirm, X cancel; set/add/remove/load
-                          are refused until you confirm or cancel)
+                          (while a session is open: map/world show a balance
+                          banner, region/country show it inline; all three
+                          of worldmap/region/country mark touched countries
+                          and are navigable inside interactive mode — + place
+                          on region or country, u undo, c confirm, X cancel;
+                          r rolls or attempts a coup only on the country
+                          screen, opened from region with Enter or r;
+                          set/add/remove/load are refused until you confirm
+                          or cancel)
 
   log [n], history        the game's history so far (or just the last n
                           entries), colour-banded by side; a realignment

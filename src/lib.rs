@@ -21,6 +21,6 @@ pub use ops::{
     coup_odds, coup_resolve, coup_target_number, modifiers, odds, resolve, Coup, CoupError, CoupOdds, CoupResult, InfluencePlacement,
     Modifiers, Odds, Operation, PlacementError, RealignError, Realignment, RollResult,
 };
-pub use render::ColorMode;
+pub use render::{ColorMode, ViewMode};
 pub use scenario::{Scenario, ScenarioError};
 pub use status::GameStatus;

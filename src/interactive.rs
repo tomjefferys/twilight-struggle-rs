@@ -12,8 +12,8 @@ use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
 use crossterm::terminal::{self, Clear, ClearType, EnterAlternateScreen, LeaveAlternateScreen};
 use crossterm::{execute, queue};
 
-use twilight_struggle::render::{coup_result_line, render_region, render_world_map, roll_result_line};
-use twilight_struggle::{ColorMode, CountryId, Dice, Direction, Game, GameError, MapLayout, Operation, Region, RollOutcome, WorldMap};
+use twilight_struggle::render::{coup_result_line, render_country, render_region, render_world_map, roll_result_line};
+use twilight_struggle::{ColorMode, CountryId, Dice, Direction, Game, GameError, MapLayout, Operation, Region, RollOutcome, ViewMode, WorldMap};
 
 /// Which screen is currently showing.
 enum Screen {
@@ -22,6 +22,12 @@ enum Screen {
     /// One region's zoomed-in view, with its own country selection —
     /// `Esc` returns to `World` with the region still selected.
     Region { region: Region, selected: CountryId },
+    /// One country's detail screen, opened from `Region` with `Enter` or
+    /// `r` — `Esc` returns to `Region` with the same country still
+    /// selected. This is where a realignment roll or coup attempt
+    /// actually happens: the full calculation is on screen above the key
+    /// that resolves it, rather than firing straight from the region grid.
+    Country { region: Region, selected: CountryId },
 }
 
 /// How the user left interactive mode, so the REPL can print a matching
@@ -72,14 +78,17 @@ impl Drop for TerminalGuard {
 /// board — and hands the turn to the other side; `X` cancels/closes it,
 /// also handing the turn over. For an
 /// [`InfluencePlacement`](twilight_struggle::InfluencePlacement), `+`/`=`
-/// places one point in the selected country (region screen only) and `u`
-/// undoes the last one. For a
+/// places one point in the selected country (region or country screen) and
+/// `u` undoes the last one — placement is undoable, so it never needs the
+/// country screen's confirmation step. For a
 /// [`Realignment`](twilight_struggle::Realignment) or a
-/// [`Coup`](twilight_struggle::Coup), `r` resolves a roll (or the coup's
-/// one attempt) on the selected country (region screen only) —
-/// immediately and permanently, since there's nothing to undo, and
-/// without ending the turn (only `c`/`X` do that). Leaving via `Esc`/`q`
-/// keeps a still-open session intact.
+/// [`Coup`](twilight_struggle::Coup), the region screen's `Enter`/`r` both
+/// open the selected country's own detail screen instead of rolling
+/// directly — that screen shows the full modifier/odds calculation, and
+/// `r` there resolves the roll (or the coup's one attempt) — immediately
+/// and permanently, since there's nothing to undo, and without ending the
+/// turn (only `c`/`X` do that). Leaving via `Esc`/`q` keeps a still-open
+/// session intact.
 pub fn run(map: &WorldMap, layout: &MapLayout, game: &mut Game, dice: &mut Dice, color: ColorMode) -> io::Result<Outcome> {
     let _guard = TerminalGuard::enter()?;
     let mut screen = Screen::World { selected: Region::Europe };
@@ -109,7 +118,7 @@ pub fn run(map: &WorldMap, layout: &MapLayout, game: &mut Game, dice: &mut Dice,
                 // any other key that would otherwise clear it doesn't
                 // touch it.
                 let rolled = matches!(key.code, KeyCode::Char('r'))
-                    && matches!(screen, Screen::Region { .. })
+                    && matches!(screen, Screen::Country { .. })
                     && matches!(game.operation(), Some(Operation::Realign(_)) | Some(Operation::Coup(_)));
                 if !rolled {
                     message = None;
@@ -157,6 +166,25 @@ pub fn run(map: &WorldMap, layout: &MapLayout, game: &mut Game, dice: &mut Dice,
                                     message = Some(format!("{}: {e}", map.country(*selected).name));
                                 }
                             }
+                            KeyCode::Enter | KeyCode::Char('r') => {
+                                screen = Screen::Country { region: *region, selected: *selected };
+                            }
+                            KeyCode::Esc => {
+                                last_selected.insert(*region, *selected);
+                                screen = Screen::World { selected: *region };
+                            }
+                            _ => continue,
+                        },
+                        Screen::Country { region, selected } => match key.code {
+                            KeyCode::Left => *selected = layout.step_country(map, *region, *selected, Direction::Left).unwrap_or(*selected),
+                            KeyCode::Right => *selected = layout.step_country(map, *region, *selected, Direction::Right).unwrap_or(*selected),
+                            KeyCode::Up => *selected = layout.step_country(map, *region, *selected, Direction::Up).unwrap_or(*selected),
+                            KeyCode::Down => *selected = layout.step_country(map, *region, *selected, Direction::Down).unwrap_or(*selected),
+                            KeyCode::Char('+') | KeyCode::Char('=') => {
+                                if let Err(GameError::Placement(e)) = game.place(map, *selected) {
+                                    message = Some(format!("{}: {e}", map.country(*selected).name));
+                                }
+                            }
                             KeyCode::Char('r') => {
                                 let side = game.active();
                                 match game.roll(map, *selected, dice) {
@@ -169,7 +197,7 @@ pub fn run(map: &WorldMap, layout: &MapLayout, game: &mut Game, dice: &mut Dice,
                             }
                             KeyCode::Esc => {
                                 last_selected.insert(*region, *selected);
-                                screen = Screen::World { selected: *region };
+                                screen = Screen::Region { region: *region, selected: *selected };
                             }
                             _ => continue,
                         },
@@ -189,6 +217,7 @@ fn draw(screen: &Screen, map: &WorldMap, layout: &MapLayout, game: &Game, messag
     let canvas = match screen {
         Screen::World { selected } => render_world_map(map, layout, board, Some(*selected), op),
         Screen::Region { region, selected } => render_region(map, layout, board, *region, Some(*selected), op),
+        Screen::Country { selected, .. } => render_country(map, layout, board, *selected, op, ViewMode::Interactive),
     };
 
     let rows = terminal::size().map(|(_, h)| h as usize).unwrap_or(canvas.height());

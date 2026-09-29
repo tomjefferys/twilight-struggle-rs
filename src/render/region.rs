@@ -15,20 +15,26 @@ const PITCH_ROW: usize = BOX_H + 1;
 const LEFT_MARGIN: usize = 2;
 const TOP_MARGIN: usize = 2; // title line + blank
 
-/// No `Enter` here — unlike the world map's equivalent hint, there's
-/// nothing for it to open yet.
-const SELECTION_HINT: &str = "←→↑↓ select · Esc back";
+/// `Enter` opens the selected country's own detail screen
+/// (`render::render_country`) — the region view keeps no roll or odds
+/// preview of its own worth a key for beyond that.
+const SELECTION_HINT: &str = "←→↑↓ select · Enter open · Esc back";
 
 /// Shown instead, once an [`InfluencePlacement`](crate::ops::InfluencePlacement) is in progress.
-const PLACEMENT_HINT: &str = "←→↑↓ select · + place · u undo · c confirm · Esc back";
+/// Placement stays bound here too — it's undoable, so it doesn't need the
+/// country screen's confirmation step the way a roll does.
+const PLACEMENT_HINT: &str = "←→↑↓ select · Enter open · + place · u undo · c confirm · Esc back";
 
 /// Shown instead of [`SELECTION_HINT`], once a [`Realignment`](crate::ops::Realignment)
-/// is in progress. No `u undo` — a resolved roll can't be taken back.
-const REALIGN_HINT: &str = "←→↑↓ select · r roll · c done · Esc back";
+/// is in progress. No `r roll` here any more — a roll is irreversible the
+/// instant it's made, so it only happens on the country screen `Enter`
+/// opens, where the odds are the whole screen rather than a footer.
+const REALIGN_HINT: &str = "←→↑↓ select · Enter target · c done · Esc back";
 
 /// Shown instead of [`SELECTION_HINT`], once a [`Coup`](crate::ops::Coup) is
-/// in progress. No `u undo` — a resolved attempt can't be taken back.
-const COUP_HINT: &str = "←→↑↓ select · r coup · c done · Esc back";
+/// in progress. Same reasoning as [`REALIGN_HINT`] — the attempt itself
+/// only happens on the country screen.
+const COUP_HINT: &str = "←→↑↓ select · Enter target · c done · Esc back";
 
 /// A geographic zoom into one region: every country in it drawn as a box
 /// on its layout grid cell, connected to its in-region neighbours by line

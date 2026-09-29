@@ -1,0 +1,8 @@
+┌─ * Poland ──────────────────────── Europe · stability 3 ─┐
+│ US  -   >   USSR 4    USSR control                       │
+│ sub-regions: Eastern Europe                              │
+├─ Neighbours ─────────────────────────────────────────────┤
+│ East Germany    US  -   >   USSR 4                       │
+│ Czechoslovakia  US  -   >   USSR 3                       │
+│ USSR (superpower)                                        │
+└──────────────────────────────────────────────────────────┘
