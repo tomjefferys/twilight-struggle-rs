@@ -179,11 +179,11 @@ Operations, scoring, etc.) haven't been built yet.
 - **`main.rs`** — a REPL (`cargo run`) plus one-shot mode
   (`cargo run -- <command>`). Type `help` inside the REPL for the command
   list. `Session` holds a `Game` (`src/game.rs`), so turns are enforced
-  everywhere the REPL touches the board: `ops`/`realign`/`coup` take no
-  arguments any more — the side and the 4 ops are always `Game::begin`'s,
+  everywhere the REPL touches the board: `influence`/`realign`/`coup` take
+  no arguments any more — the side and the 4 ops are always `Game::begin`'s,
   never typed in — and `place`/`undo`/`confirm`/`cancel`/`roll` all read
   and write through `Session.game` rather than a bare `Board` and
-  `Option<Operation>`. `ops`/`place`/`undo`/`confirm`/`cancel` stage and
+  `Option<Operation>`. `influence`/`place`/`undo`/`confirm`/`cancel` stage and
   commit an influence placement; `realign`/`roll`/`confirm`/`cancel` run a
   realignment and `coup`/`roll`/`confirm`/`cancel` a coup, where `roll`
   resolves either kind immediately (a coup's `roll` spends every op on its
@@ -220,7 +220,7 @@ Operations, scoring, etc.) haven't been built yet.
   confirms/closes the open operation via `Game::confirm` and `X`
   cancels/closes it via `Game::cancel` — either way handing the turn to
   the other side, which is also why interactive mode itself still can't
-  *open* an operation (that stays a REPL-only `ops`/`realign`/`coup`, so
+  *open* an operation (that stays a REPL-only `influence`/`realign`/`coup`, so
   there's no side to infer from a keypress alone). An `InfluencePlacement`
   additionally binds `+`/`=` to place one point (region screen only) and
   `u` to undo the last one, while a `Realignment` or `Coup` binds `r` to

@@ -21,7 +21,7 @@ use super::{Canvas, Color, Style};
 const STAMP_WIDTH: usize = 4;
 const AR_WIDTH: usize = 5;
 const SIDE_WIDTH: usize = 5;
-const ACTION_WIDTH: usize = 9;
+const ACTION_WIDTH: usize = 11;
 
 /// The canonical text of one entry, with no trailing whitespace — matching
 /// what [`Canvas::render`] would emit for the same row, since both trim
@@ -105,10 +105,10 @@ fn side_label(side: Option<Superpower>) -> String {
 /// differently without duplicating the match.
 fn action_and_detail(map: &WorldMap, entry: &LogEntry) -> (&'static str, String) {
     match &entry.event {
-        // The placement analogue of a resolved roll: its own "ops" line,
-        // pushed just before the `Closed` entry that reports whether it
-        // was confirmed or cancelled.
-        Event::Placed { countries } => ("ops", placed_detail(map, countries)),
+        // The placement analogue of a resolved roll: its own "influence"
+        // line, pushed just before the `Closed` entry that reports whether
+        // it was confirmed or cancelled.
+        Event::Placed { countries } => ("influence", placed_detail(map, countries)),
         Event::Realign(result) => {
             let side = entry.side.expect("a realignment roll is always stamped with the acting side");
             ("realign", realign_detail(map, side, result))
@@ -149,7 +149,7 @@ fn closed_detail(kind: OperationKind, rolls: u8, spent: u8, total: u8) -> String
             format!("realign, {rolls} {noun}, {ops}")
         }
         OperationKind::Coup => format!("coup, {ops}"),
-        OperationKind::Influence => format!("ops, {ops}"),
+        OperationKind::Influence => format!("influence, {ops}"),
     }
 }
 

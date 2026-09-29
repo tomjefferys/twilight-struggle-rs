@@ -11,9 +11,9 @@ struct Session {
     layout: MapLayout,
     /// Status, board, and whichever operation is open — see [`Game`]'s own
     /// doc for why these three move together. Turns are enforced entirely
-    /// through this: `ops`/`realign`/`coup` no longer take a side or an
-    /// ops count, because `Game::begin` always uses the active side and a
-    /// full turn's allowance.
+    /// through this: `influence`/`realign`/`coup` no longer take a side or
+    /// an ops count, because `Game::begin` always uses the active side and
+    /// a full turn's allowance.
     game: Game,
     width: usize,
     color: ColorMode,
@@ -235,7 +235,7 @@ fn run_command(session: &mut Session, line: &str) {
                 println!("usage: load demo");
             }
         }
-        "ops" => run_begin_command(session, OperationKind::Influence, &words),
+        "influence" => run_begin_command(session, OperationKind::Influence, &words),
         "realign" => run_begin_command(session, OperationKind::Realign, &words),
         "coup" => run_begin_command(session, OperationKind::Coup, &words),
         "place" => run_place_command(session, &words),
@@ -308,8 +308,8 @@ fn print_ambiguous(session: &Session, ids: &[twilight_struggle::CountryId]) {
     println!("ambiguous: {}", names.join(", "));
 }
 
-/// `ops`/`realign`/`coup` open an operation for the active side with a
-/// full turn's ops — no arguments, since enforcing turns means there's
+/// `influence`/`realign`/`coup` open an operation for the active side with
+/// a full turn's ops — no arguments, since enforcing turns means there's
 /// nothing left for a caller to name. Refused if a session is already
 /// open, per [`Game::begin`].
 fn run_begin_command(session: &mut Session, kind: OperationKind, words: &[&str]) {
@@ -352,7 +352,7 @@ fn run_place_command(session: &mut Session, words: &[&str]) {
             return;
         }
         None => {
-            println!("no placement session open. Start one with: ops");
+            println!("no placement session open. Start one with: influence");
             return;
         }
     }
@@ -542,7 +542,7 @@ fn run_cancel_command(session: &mut Session) {
 
 /// Reports whose turn it is, the turn/action-round counters, and — if
 /// one's open — the balance of the current operation. Takes over the
-/// reporting role bare `ops`/`realign`/`coup` used to have, now that those
+/// reporting role bare `influence`/`realign`/`coup` used to have, now that those
 /// always start a new operation instead.
 fn run_status_command(session: &Session) {
     let status = session.game.status();
@@ -649,7 +649,7 @@ Commands:
                           open operation's balance, if any
   pass                    forfeit the active side's turn with no operation
 
-  ops                     start placing influence for the active side with
+  influence               start placing influence for the active side with
                           this turn's 4 ops
   place <country> [n]     place n influence (default 1); 1 op, or 2 in an
                           opponent-controlled country — refused if there's

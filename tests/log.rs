@@ -54,11 +54,12 @@ fn scripted_game() -> (WorldMap, Game) {
 }
 
 /// A closed placement should read the same way a closed realignment or
-/// coup does: an "ops" line naming what was placed (the placement analogue
-/// of a resolved roll), followed by its own `confirm`/`cancel` line —
-/// never merged onto one line the way a bare `ops` summary used to be.
+/// coup does: an "influence" line naming what was placed (the placement
+/// analogue of a resolved roll), followed by its own `confirm`/`cancel`
+/// line — never merged onto one line the way a bare `influence` summary
+/// used to be.
 #[test]
-fn a_cancelled_placement_gets_an_ops_line_and_its_own_cancel_line() {
+fn a_cancelled_placement_gets_an_influence_line_and_its_own_cancel_line() {
     use twilight_struggle::render::log_entry_line;
 
     let (map, mut game) = started_game();
@@ -68,15 +69,15 @@ fn a_cancelled_placement_gets_an_ops_line_and_its_own_cancel_line() {
     game.cancel().unwrap();
 
     let entries = game.log().entries();
-    assert_eq!(entries.len(), 2, "expected an ops line and a separate cancel line");
+    assert_eq!(entries.len(), 2, "expected an influence line and a separate cancel line");
 
-    let ops_line = log_entry_line(&map, &entries[0]);
-    assert!(ops_line.contains("Poland +1"), "expected the placed points, got {ops_line:?}");
-    assert!(!ops_line.contains("cancel"), "the ops line itself shouldn't say cancel: {ops_line:?}");
+    let influence_line = log_entry_line(&map, &entries[0]);
+    assert!(influence_line.contains("Poland +1"), "expected the placed points, got {influence_line:?}");
+    assert!(!influence_line.contains("cancel"), "the influence line itself shouldn't say cancel: {influence_line:?}");
 
     let cancel_line = log_entry_line(&map, &entries[1]);
     assert!(cancel_line.contains("cancel"), "expected a cancel line, got {cancel_line:?}");
-    assert!(cancel_line.contains("ops,"), "expected the kind named in the detail, got {cancel_line:?}");
+    assert!(cancel_line.contains("influence,"), "expected the kind named in the detail, got {cancel_line:?}");
 }
 
 #[test]
