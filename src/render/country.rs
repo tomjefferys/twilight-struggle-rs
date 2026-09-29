@@ -1,9 +1,12 @@
+use std::collections::HashMap;
+
 use crate::board::Board;
 use crate::country::{CountryId, Superpower};
-use crate::layout::MapLayout;
+use crate::layout::{Cell, GuestEntity, MapLayout};
 use crate::map::WorldMap;
 use crate::ops::Operation;
 
+use super::chip::{ChipGrid, ChipRole, CHIP_H, REGION_CHIP_W};
 use super::{
     control_glyph, coup_odds_line, coup_target_line, modifier_line, nz, odds_line, operation_header, operation_touched_line,
     put_border_title, Canvas, Color, Style, ViewMode,
@@ -16,11 +19,84 @@ const PLACEMENT_HINT: &str = "←→↑↓ select · + place · u undo · c conf
 const REALIGN_HINT: &str = "←→↑↓ select · r roll · c done · Esc back";
 const COUP_HINT: &str = "←→↑↓ select · r coup · c done · Esc back";
 
+/// What occupies one cell of the neighbourhood mini-map: either a country
+/// (the one viewed, or one of its neighbours) or a superpower guest chip.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Occupant {
+    Country(CountryId),
+    Superpower(Superpower),
+}
+
+impl Occupant {
+    fn label(self, map: &WorldMap) -> String {
+        match self {
+            Occupant::Country(id) => map.country(id).name.clone(),
+            Occupant::Superpower(sp) => sp.to_string(),
+        }
+    }
+
+    /// Whether `self` and `other` actually border each other on the game
+    /// map — as opposed to merely sharing a grid-adjacent cell, which is
+    /// all [`ChipGrid::draw_edge`] itself checks.
+    fn really_adjacent(self, map: &WorldMap, other: Occupant) -> bool {
+        match (self, other) {
+            (Occupant::Country(a), Occupant::Country(b)) => map.country(a).adjacent.contains(&b),
+            (Occupant::Country(a), Occupant::Superpower(sp)) | (Occupant::Superpower(sp), Occupant::Country(a)) => {
+                map.country(a).adjacent_superpowers.contains(&sp)
+            }
+            (Occupant::Superpower(_), Occupant::Superpower(_)) => false,
+        }
+    }
+}
+
+/// Every chip the neighbourhood mini-map should draw for `id` — the
+/// country itself plus each of its immediate neighbours — placed at the
+/// cell (native, or a guest cell in `id`'s own region) that's actually
+/// grid-adjacent to it, alongside whatever adjacency couldn't be placed
+/// that way. Empty on the standard layout (every adjacency of every
+/// country has a grid-adjacent cell somewhere in that country's own
+/// region — see `tests/layout.rs::standard_layout_has_no_undrawn_links`,
+/// which pins the same property for the region view), so this is the
+/// fallback for a future layout edit that doesn't get every guest cell
+/// right; see `every_country_places_all_its_neighbours_on_the_country_view_grid`.
+fn neighbourhood(map: &WorldMap, layout: &MapLayout, id: CountryId) -> (Vec<(Cell, Occupant)>, Vec<Occupant>) {
+    let country = map.country(id);
+    let region = country.region;
+    let here = layout.cell(id);
+    let guests = layout.guests(region);
+
+    let mut placed = vec![(here, Occupant::Country(id))];
+    let mut unplaced = Vec::new();
+
+    for &n in &country.adjacent {
+        let neighbor = map.country(n);
+        let found = if neighbor.region == region {
+            here.is_adjacent(layout.cell(n)).then(|| layout.cell(n))
+        } else {
+            guests.iter().find(|g| g.entity == GuestEntity::Country(n) && here.is_adjacent(g.cell)).map(|g| g.cell)
+        };
+        match found {
+            Some(cell) => placed.push((cell, Occupant::Country(n))),
+            None => unplaced.push(Occupant::Country(n)),
+        }
+    }
+
+    for &sp in &country.adjacent_superpowers {
+        let found = guests.iter().find(|g| g.entity == GuestEntity::Superpower(sp) && here.is_adjacent(g.cell)).map(|g| g.cell);
+        match found {
+            Some(cell) => placed.push((cell, Occupant::Superpower(sp))),
+            None => unplaced.push(Occupant::Superpower(sp)),
+        }
+    }
+
+    (placed, unplaced)
+}
+
 /// A single country in detail, as a titled box with up to three panels:
-/// the country itself, its neighbours, and — while an operation is open —
-/// that operation's live preview. This is the interactive world map's
-/// third screen (opened from the region view with `Enter` or `r`) and
-/// also the REPL's `country <name>` / `/<name>` command.
+/// the country itself, a neighbourhood mini-map, and — while an operation
+/// is open — that operation's live preview. This is the interactive world
+/// map's third screen (opened from the region view with `Enter` or `r`)
+/// and also the REPL's `country <name>` / `/<name>` command.
 ///
 /// `op`, when it's a [`Realignment`](crate::ops::Realignment) in
 /// progress, adds an Operation panel with both sides' itemised modifiers
@@ -41,7 +117,11 @@ pub fn render_country(map: &WorldMap, layout: &MapLayout, board: &Board, id: Cou
     let country = map.country(id);
 
     // --- Panel 1: Country. Its title lives on the box's own top border
-    // rather than a divider, so it's built as a (left, right) pair. ---
+    // rather than a divider, so it's built as a (left, right) pair. The
+    // sub-regions row is always reserved, blank when there are none,
+    // rather than only present sometimes — so the box is exactly the
+    // same height for every country, the same reasoning behind the
+    // Neighbours mini-map's own fixed size below. ---
     let title_left = if country.battleground { format!("* {}", country.name) } else { country.name.clone() };
     let title_right = format!("{} · stability {}", country.region, country.stability);
     let sub_region_line = if country.sub_regions.is_empty() {
@@ -50,18 +130,73 @@ pub fn render_country(map: &WorldMap, layout: &MapLayout, board: &Board, id: Cou
         let names: Vec<String> = country.sub_regions.iter().map(|s| s.to_string()).collect();
         Some(format!("sub-regions: {}", names.join(", ")))
     };
-    let country_row_count = 1 + sub_region_line.is_some() as usize;
+    let country_row_count = 2;
 
-    // --- Panel 2: Neighbours. Each neighbour line needs its own
-    // multi-style influence readout, so these are drawn directly rather
-    // than collected as (String, Style) pairs like the other panels. ---
+    // --- Panel 2: Neighbours, drawn as a mini-map — a fixed 3×3 window
+    // of the region view's own grid, centred on the viewed country
+    // rather than cropped to whoever's actually adjacent, so it's always
+    // the same size and the country itself is always the middle chip,
+    // even sitting on a region's own edge with no neighbour on one or
+    // more sides. Each immediate neighbour is placed at whichever cell
+    // (native, or a guest cell in this country's own region) is really
+    // grid-adjacent to it. A neighbour is tinted with its own region's
+    // colour exactly like a region view's guest chip, so where a
+    // neighbour sits — and whether it's a visibly different colour — is
+    // exactly where this screen's arrow keys go.
     let realign_side = match op {
         Some(Operation::Realign(r)) => Some(r.side()),
         _ => None,
     };
+    let (placed, unplaced) = neighbourhood(map, layout, id);
+    // Turn a realignment's "adjacent controlled" modifier from a bare
+    // number into a visible derivation: name exactly the neighbours that
+    // are actually supplying it. This can't be a marker on the chip
+    // itself — "+1 realign" is wider than a chip's only free stats-row
+    // slot — so it's footnoted below the grid instead.
+    let realign_markers: Vec<CountryId> = match realign_side {
+        Some(side) => placed
+            .iter()
+            .filter_map(|&(_, occ)| match occ {
+                Occupant::Country(n) if n != id && board.is_controlled_by(map, n, side) => Some(n),
+                _ => None,
+            })
+            .collect(),
+        None => Vec::new(),
+    };
+
+    // Always a fixed 3×3 window centred on `here` — every country's
+    // neighbours (native or guest) land within one cell of it in every
+    // direction, so this always has room for all of them — rather than
+    // cropped to whichever cells happen to be occupied, so the viewed
+    // country is always in the middle cell, even directly on a region
+    // grid's own edge with no neighbour at all on one or more sides.
+    let here = layout.cell(id);
+    let grid_rows = 3;
+    let grid_cols = 3;
+    let anchor = (here.row as i32 - 1, here.col as i32 - 1);
+    // Wide enough for the longest country name in the whole game — a
+    // full name, not `MapLayout::short_name`, since this view has the
+    // room and a neighbour list previously named each one in full — not
+    // just the longest label actually shown here: what varies while
+    // arrowing between countries is which neighbours are shown, not how
+    // much room a name might need, so sizing off only the current
+    // neighbourhood would make the box jump width on every move. Never
+    // narrower than the region view's own chip width either.
+    let chip_w = map.iter().map(|(_, c)| c.name.chars().count() + 3).max().unwrap_or(REGION_CHIP_W).max(REGION_CHIP_W);
+    let grid_height = grid_rows * (CHIP_H + 1) - 1;
+    let grid_width = grid_cols * (chip_w + 1) - 1;
+
+    let mut footnotes: Vec<(String, Style)> = unplaced
+        .iter()
+        .map(|occ| (format!("(not shown on this grid: {})", occ.label(map)), Style::color(Color::Muted)))
+        .collect();
+    if !realign_markers.is_empty() {
+        let names: Vec<&str> = realign_markers.iter().map(|&n| map.country(n).name.as_str()).collect();
+        footnotes.push((format!("+1 realign from {}", names.join(", ")), Style::color(Color::Selected)));
+    }
 
     // --- Panel 3: Operation, only when one is open. Every one of these
-    // rows is single-style, so — unlike the two panels above — they're
+    // rows is single-style, so — unlike the panels above — they're
     // collected up front as plain (String, Style) pairs. ---
     let op_panel: Option<(String, Vec<(String, Style)>)> = op.map(|operation| {
         let mut rows = vec![(operation_touched_line(layout, board, operation), Style::color(Color::Muted))];
@@ -108,33 +243,20 @@ pub fn render_country(map: &WorldMap, layout: &MapLayout, board: &Board, id: Cou
     // --- Sizing. Every panel's content is already known above; take the
     // width the widest of it needs, since `Canvas` clips silently rather
     // than erroring on an under-sized write. ---
-    let neighbour_rows = country.adjacent.len() + country.adjacent_superpowers.len();
     let box_height = 2 // top + bottom border
         + country_row_count
-        + 1 + neighbour_rows // "Neighbours" divider + its rows
+        + 1 + grid_height + footnotes.len() // "Neighbours" divider + its grid + footnotes
         + op_panel.as_ref().map_or(0, |(_, rows)| 1 + rows.len()); // "{header}" divider + its rows
     let height = box_height + hint.is_some() as usize;
 
-    let neighbour_name_width = country.adjacent.iter().map(|&n| map.country(n).name.chars().count()).max().unwrap_or(0);
-    // Left margin, the name field, the gap before it, and `draw_influence`'s
-    // own fixed 19-column readout — then either a plain right margin, or,
-    // while a realignment is open, room for the "+1 realign" marker too.
-    const INFLUENCE_WIDTH: usize = 19;
-    let neighbour_width = 2 + neighbour_name_width + 2 + INFLUENCE_WIDTH
-        + if realign_side.is_some() { 2 + "+1 realign".chars().count() + 2 } else { 2 };
     let content_width = [
         // Left/right border margins (2 each), the space-padded left and
         // right title halves, and a one-column gap of bare dash between
         // them so the two never touch.
         4 + (title_left.chars().count() + 2) + (title_right.chars().count() + 2) + 1,
         sub_region_line.as_ref().map_or(0, |l| l.chars().count() + 4),
-        neighbour_width,
-        country
-            .adjacent_superpowers
-            .iter()
-            .map(|sp| format!("{sp} (superpower)").chars().count() + 4)
-            .max()
-            .unwrap_or(0),
+        4 + grid_width,
+        footnotes.iter().map(|(l, _)| l.chars().count() + 4).max().unwrap_or(0),
         op_panel.as_ref().map_or(0, |(title, rows)| {
             rows.iter().map(|(l, _)| l.chars().count() + 4).chain([title.chars().count() + 6]).max().unwrap_or(0)
         }),
@@ -161,31 +283,45 @@ pub fn render_country(map: &WorldMap, layout: &MapLayout, board: &Board, id: Cou
     };
     canvas.put(row, after + 3, control_str, Style::default());
     row += 1;
+    // Always reserved, left blank with no sub-regions, so this row's
+    // presence never changes the box's height.
     if let Some(line) = &sub_region_line {
         canvas.put(row, 2, line, Style::color(Color::Muted));
-        row += 1;
     }
+    row += 1;
 
     canvas.draw_divider(row, 0, content_width, "Neighbours", Style::default());
     row += 1;
-    for &neighbor_id in &country.adjacent {
-        let n = map.country(neighbor_id);
-        let nctl = board.controller(map, neighbor_id);
-        canvas.put(row, 2, &format!("{:<width$}", n.name, width = neighbour_name_width), Style::default());
-        draw_influence(&mut canvas, row, 4 + neighbour_name_width, board, neighbor_id, nctl);
-        // Turn a realignment's "adjacent controlled" modifier from a bare
-        // number into a visible derivation: mark exactly the neighbours
-        // that are actually supplying it.
-        if let Some(side) = realign_side
-            && board.is_controlled_by(map, neighbor_id, side)
-        {
-            let marker = "+1 realign";
-            canvas.put(row, content_width - 2 - marker.chars().count(), marker, Style::color(Color::Selected));
+
+    // Centred inside whatever width the box ended up — the grid is
+    // usually what drives `content_width`, but a wide title or Operation
+    // panel can leave it with room either side.
+    let grid_col = 2 + content_width.saturating_sub(4).saturating_sub(grid_width) / 2;
+    let grid = ChipGrid { origin: (row, grid_col), anchor, chip_w };
+    for &(cell, occ) in &placed {
+        match occ {
+            Occupant::Country(n) => {
+                let role = if n == id { ChipRole::Selected } else { ChipRole::Foreign };
+                grid.draw_country(&mut canvas, map, board, cell, n, &occ.label(map), role, op);
+            }
+            Occupant::Superpower(sp) => grid.draw_superpower(&mut canvas, cell, sp),
         }
-        row += 1;
     }
-    for &sp in &country.adjacent_superpowers {
-        canvas.put(row, 2, &format!("{sp} (superpower)"), Style::color(Color::Muted));
+    let mut glyphs = HashMap::new();
+    for i in 0..placed.len() {
+        for j in (i + 1)..placed.len() {
+            let (cell_a, occ_a) = placed[i];
+            let (cell_b, occ_b) = placed[j];
+            if occ_a.really_adjacent(map, occ_b) {
+                grid.draw_edge(&mut glyphs, cell_a, cell_b);
+            }
+        }
+    }
+    grid.flush_edges(&mut canvas, &glyphs);
+    row += grid_height;
+
+    for (line, style) in &footnotes {
+        canvas.put(row, 2, line, *style);
         row += 1;
     }
 

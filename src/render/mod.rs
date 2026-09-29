@@ -7,6 +7,7 @@
 //! presented (a REPL printing to stdout today, perhaps a full-screen TUI
 //! later) entirely outside this module.
 
+mod chip;
 pub mod country;
 pub mod log;
 pub mod region;

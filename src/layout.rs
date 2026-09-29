@@ -28,7 +28,7 @@ const MAX_CODE: usize = 4;
 /// A country's position on its region's display grid. Coordinates are
 /// scoped to the region: two countries in different regions may share the
 /// same cell.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct Cell {
     pub row: u8,
     pub col: u8,
@@ -37,7 +37,7 @@ pub struct Cell {
 impl Cell {
     /// Whether two cells are grid-neighbours: orthogonally or diagonally
     /// adjacent (Chebyshev distance of exactly 1).
-    fn is_adjacent(self, other: Cell) -> bool {
+    pub(crate) fn is_adjacent(self, other: Cell) -> bool {
         let dr = (self.row as i16 - other.row as i16).abs();
         let dc = (self.col as i16 - other.col as i16).abs();
         dr.max(dc) == 1

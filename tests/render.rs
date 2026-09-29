@@ -1,7 +1,7 @@
 use twilight_struggle::render::{render_country, render_region, render_world};
 use twilight_struggle::{
-    Board, ColorMode, Coup, GuestEntity, InfluencePlacement, LinkTarget, MapLayout, Operation, Realignment, Region, Scenario, Superpower,
-    ViewMode, WorldMap,
+    Board, ColorMode, CountryId, Coup, GuestEntity, InfluencePlacement, LinkTarget, MapLayout, Operation, Realignment, Region, Scenario,
+    Superpower, ViewMode, WorldMap,
 };
 
 fn standard() -> (WorldMap, MapLayout) {
@@ -382,9 +382,106 @@ fn render_country_lists_every_neighbor_with_its_own_state() {
         let name = &map.country(*neighbor).name;
         assert!(text.contains(name.as_str()), "expected neighbour {name} in country view");
     }
-    // France's own influence (not Italy's) should show up on its line.
-    let france_line = line_containing(&text, "France");
-    assert!(france_line.contains('5'), "France's USSR influence should appear: {france_line:?}");
+    // France's own influence (not Italy's) should show up on its chip's
+    // stats row, immediately below the row naming it.
+    let france_stats_line = line_after(&text, "France");
+    assert!(france_stats_line.contains('5'), "France's USSR influence should appear: {france_stats_line:?}");
+}
+
+#[test]
+fn every_country_places_all_its_neighbours_on_the_country_view_grid() {
+    // The country-view analogue of
+    // `tests/layout.rs::standard_layout_has_no_undrawn_links`: every
+    // adjacency, in-region or cross-region/superpower, should land on a
+    // grid-adjacent cell in the viewed country's own region and never
+    // fall back to the "not shown on this grid" footnote.
+    let (map, layout) = standard();
+    let board = Board::new(&map);
+    for (id, country) in map.iter() {
+        let canvas = render_country(&map, &layout, &board, id, None, ViewMode::Static);
+        let text = canvas.render(ColorMode::Never);
+        assert!(
+            !text.contains("not shown on this grid"),
+            "{}: every neighbour should be placed on the mini-map:\n{text}",
+            country.name
+        );
+    }
+}
+
+#[test]
+fn the_selected_country_is_always_the_middle_row_of_the_mini_map() {
+    // The mini-map is a fixed 3×3 window centred on the viewed country,
+    // not cropped to whoever's actually adjacent — so its size (and the
+    // viewed country's row within it) shouldn't depend on how many
+    // neighbours that country has, or on which sides they're missing.
+    let (map, layout) = standard();
+    let board = Board::new(&map);
+
+    let poland = map.id_by_name("Poland").unwrap(); // neighbours on every side
+    let reference = centre_chip_offset(&map, &layout, &board, poland, "Poland");
+
+    for name in ["Canada", "South Africa", "Panama", "Ivory Coast"] {
+        let id = map.id_by_name(name).unwrap();
+        let offset = centre_chip_offset(&map, &layout, &board, id, name);
+        assert_eq!(offset, reference, "{name}: the viewed country should sit at the same fixed row as Poland's, regardless of its own neighbour count");
+    }
+}
+
+/// The centre chip's name row, as a line offset from the "Neighbours"
+/// divider — the same for every country once the mini-map's size no
+/// longer depends on how many neighbours are actually shown.
+fn centre_chip_offset(map: &WorldMap, layout: &MapLayout, board: &Board, id: CountryId, name: &str) -> usize {
+    let canvas = render_country(map, layout, board, id, None, ViewMode::Static);
+    let text = canvas.render(ColorMode::Never);
+    let lines: Vec<&str> = text.lines().collect();
+    let divider = lines.iter().position(|l| l.contains("Neighbours")).unwrap();
+    // The country's full name appears exactly twice: once in the box's
+    // own title border, once as the mini-map's centre chip label.
+    let name_rows: Vec<usize> = lines.iter().enumerate().filter(|(_, l)| l.contains(name)).map(|(i, _)| i).collect();
+    assert_eq!(name_rows.len(), 2, "{name}: expected the title and the centre chip to both name it in full: {name_rows:?}");
+    name_rows[1] - divider
+}
+
+#[test]
+fn the_box_height_does_not_depend_on_whether_the_country_has_sub_regions() {
+    // The sub-regions row is always reserved, blank when there are none,
+    // rather than only present sometimes — so the box is exactly the
+    // same height whether or not the viewed country happens to have any.
+    let (map, layout) = standard();
+    let board = Board::new(&map);
+
+    let poland = map.id_by_name("Poland").unwrap(); // has a sub-region
+    let with_sub_region = render_country(&map, &layout, &board, poland, None, ViewMode::Static);
+
+    let canada = map.id_by_name("Canada").unwrap(); // has none
+    let without_sub_region = render_country(&map, &layout, &board, canada, None, ViewMode::Static);
+
+    assert_eq!(with_sub_region.height(), without_sub_region.height(), "the box height shouldn't depend on whether the country has sub-regions");
+    // And the blank row is really there, not just coincidentally equal
+    // heights: the Neighbours divider should land on the same row either
+    // way.
+    let divider_row = |canvas: &twilight_struggle::render::Canvas| canvas.render(ColorMode::Never).lines().position(|l| l.contains("Neighbours")).unwrap();
+    assert_eq!(divider_row(&with_sub_region), divider_row(&without_sub_region));
+}
+
+#[test]
+fn the_box_width_does_not_depend_on_which_country_is_shown() {
+    // The mini-map's chips are sized off the longest country name in the
+    // whole game, not just whoever's actually a neighbour here — so
+    // arrowing from a country with short-named neighbours (Poland) to
+    // one with long-named ones (Ivory Coast, whose neighbours include
+    // "West African States") shouldn't move the box's right border.
+    let (map, layout) = standard();
+    let board = Board::new(&map);
+
+    let poland = map.id_by_name("Poland").unwrap();
+    let reference = render_country(&map, &layout, &board, poland, None, ViewMode::Static).width();
+
+    for name in ["Canada", "South Africa", "Panama", "Ivory Coast", "West African States"] {
+        let id = map.id_by_name(name).unwrap();
+        let width = render_country(&map, &layout, &board, id, None, ViewMode::Static).width();
+        assert_eq!(width, reference, "{name}: the box width shouldn't depend on which country is shown");
+    }
 }
 
 #[test]
@@ -681,10 +778,12 @@ fn country_detail_marks_the_neighbours_supplying_adjacent_controlled() {
     let op = Operation::Realign(Realignment::new(Superpower::Ussr, 5, &board));
     let canvas = render_country(&map, &layout, &board, poland, Some(&op), ViewMode::Static);
     let text = canvas.render(ColorMode::Never);
-    let east_germany_line = line_containing(&text, "East Germany");
-    assert!(east_germany_line.contains("+1 realign"), "the controlled neighbour should be marked: {east_germany_line:?}");
-    let czechoslovakia_line = line_containing(&text, "Czechoslovakia");
-    assert!(!czechoslovakia_line.contains("+1 realign"), "an uncontrolled neighbour shouldn't be marked: {czechoslovakia_line:?}");
+    // A chip has no room for the marker text itself, so the controlled
+    // neighbours supplying the modifier are named on their own footnote
+    // line instead.
+    let marker_line = line_containing(&text, "+1 realign");
+    assert!(marker_line.contains("East Germany"), "the controlled neighbour should be named: {marker_line:?}");
+    assert!(!marker_line.contains("Czechoslovakia"), "an uncontrolled neighbour shouldn't be named: {marker_line:?}");
 }
 
 #[test]
