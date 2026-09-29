@@ -1,9 +1,10 @@
 # Twilight Struggle
 
 A Rust CLI implementation of the board game *Twilight Struggle*. Currently
-focused on the data model and terminal display, plus a handful of the
-ops-spending actions (influence placement, realignment, coups); full game
-rules (cards, DEFCON, Military Operations, etc.) haven't been built yet.
+focused on the data model and terminal display, a handful of the
+ops-spending actions (influence placement, realignment, coups), and
+enforced alternating turns; full game rules (cards, DEFCON, Military
+Operations, scoring, etc.) haven't been built yet.
 
 ## Architecture
 
@@ -22,7 +23,10 @@ rules (cards, DEFCON, Military Operations, etc.) haven't been built yet.
   `world_cell`, etc.) with a fail-loud `LayoutError`.
 - **`Scenario`** (`src/scenario.rs`) / **`GameStatus`** (`src/status.rs`)
   — a named starting state (currently just `data/demo_state.json`): a
-  `Board` snapshot plus turn/DEFCON/VP/space-race/China-card status.
+  `Board` snapshot plus turn/active-side/DEFCON/VP/space-race/China-card
+  status. `GameStatus` itself is plain data with no rules attached — the
+  `Game` type below is the only thing that ever mutates `active`, `turn`,
+  or `action_round`.
 - **`ops`** (`src/ops/`) — the game's ops-spending operations. Three kinds
   so far, sharing the `Operation` enum (`src/ops/mod.rs`) as the seam the
   rest of the crate reads through:
@@ -76,6 +80,30 @@ rules (cards, DEFCON, Military Operations, etc.) haven't been built yet.
   A card-play operation would add a fourth `Operation` variant; whether
   it stages like placement or resolves immediately like realignment/coup
   is a per-operation call, not a rule of the enum.
+
+  `InfluencePlacement`, `Realignment`, `Coup`, and `Operation` all derive
+  `Clone` — cheap, per `Board`'s own design note — for the same reason:
+  `Game` (below) needs to be clonable for AI lookahead.
+- **`Game`** (`src/game.rs`) — turns. Owns the status, the board, and
+  whichever `Operation` is open, so "an operation belongs to the active
+  side, and closing it passes the turn" lives in one place rather than
+  being duplicated between the REPL and interactive mode. `begin(kind)` is
+  the entire enforcement mechanism: it always opens with `active()` and a
+  full turn's ops (`OPS_PER_ACTION_ROUND`, 4), so there's no argument
+  through which a caller could name the wrong side, and it's refused while
+  an operation is already open. One turn spends exactly one operation —
+  `confirm`/`cancel` are the only two ways to close one, and both hand the
+  turn to the other side via the private `advance` (USSR → USA; USA → USSR
+  plus `action_round += 1`, rolling `turn` over once `action_round`
+  exceeds `action_rounds_per_turn`). `pass` is the same handover with no
+  operation opened. Ending a turn with ops unspent is allowed and simply
+  forfeits them, the same as `InfluencePlacement` never requiring every op
+  to be spent. `Game` takes no `WorldMap` or `Dice` of its own — both are
+  passed per call, matching how the ops modules already split `Board` out
+  — and is cheap to `Clone`, which is the whole point: nothing in this
+  module touches a terminal, so it's the complete surface a future AI
+  opponent drives, and lookahead means cloning a `Game` to try a line of
+  play without touching the real one.
 - **`render`** (`src/render/`) — every view is a pure function
   `(WorldMap, MapLayout, Board, ...) -> Canvas`; nothing in this module
   touches the terminal directly, which keeps every view snapshot-testable.
@@ -112,15 +140,27 @@ rules (cards, DEFCON, Military Operations, etc.) haven't been built yet.
   loop can't drift apart the way hand-maintained parallel tallies could.
 - **`main.rs`** — a REPL (`cargo run`) plus one-shot mode
   (`cargo run -- <command>`). Type `help` inside the REPL for the command
-  list. `ops`/`place`/`undo`/`confirm`/`cancel` stage and commit an
-  influence placement; `realign`/`roll`/`confirm`/`cancel` run a
+  list. `Session` holds a `Game` (`src/game.rs`), so turns are enforced
+  everywhere the REPL touches the board: `ops`/`realign`/`coup` take no
+  arguments any more — the side and the 4 ops are always `Game::begin`'s,
+  never typed in — and `place`/`undo`/`confirm`/`cancel`/`roll` all read
+  and write through `Session.game` rather than a bare `Board` and
+  `Option<Operation>`. `ops`/`place`/`undo`/`confirm`/`cancel` stage and
+  commit an influence placement; `realign`/`roll`/`confirm`/`cancel` run a
   realignment and `coup`/`roll`/`confirm`/`cancel` a coup, where `roll`
-  resolves either kind immediately (a coup's `roll` spends every op on
-  its one attempt) and `undo` always refuses. Either way,
-  `set`/`add`/`remove`/`load` are refused while a session
-  (`Session.op: Option<Operation>`) is open, since they'd shift the board
-  an operation was judged legal against. `--seed <n>` (or the REPL's
-  `seed <n>`) controls `Session.dice`.
+  resolves either kind immediately (a coup's `roll` spends every op on its
+  one attempt) without ending the turn, and `undo` always refuses for
+  either. `confirm` and `cancel` are the only two ways to close an
+  operation, and both hand the turn to the other side (reported in the
+  next prompt, which names the active side and the AR counter); `pass`
+  does the same handover with no operation open, refused if one is.
+  `status` reports the turn/AR/active side and the open operation's
+  balance. Either way, `set`/`add`/`remove`/`load` are refused while a
+  session (`Game::operation()`) is open, since they'd shift the board an
+  operation was judged legal against. `--seed <n>` (or the REPL's
+  `seed <n>`) controls `Session.dice`, which stays outside `Game` so it
+  can be seeded independently and so `Game::roll` stays deterministic
+  given its inputs.
 - **`interactive.rs`** — the terminal-driving code for `worldmap`/`wm`
   when run interactively (a real TTY, not one-shot mode): raw mode, the
   alternate screen, and the arrow/Enter/Esc event loop. On the world map
@@ -130,13 +170,18 @@ rules (cards, DEFCON, Military Operations, etc.) haven't been built yet.
   `layout.rs` — a nearest-in-that-direction search over `Cell` positions,
   not a hand-written table, since the grids are sparse with interior
   holes). Each region remembers its last-selected country across visits.
-  When an `Operation` session is open, `c` confirms/closes it into
-  `board` and `X` cancels/closes it either way; an `InfluencePlacement`
+  `run` takes `&mut Game` (not a bare `Board`/`Option<Operation>`), so
+  every key handler goes through it and turns stay enforced here too: `c`
+  confirms/closes the open operation via `Game::confirm` and `X`
+  cancels/closes it via `Game::cancel` — either way handing the turn to
+  the other side, which is also why interactive mode itself still can't
+  *open* an operation (that stays a REPL-only `ops`/`realign`/`coup`, so
+  there's no side to infer from a keypress alone). An `InfluencePlacement`
   additionally binds `+`/`=` to place one point (region screen only) and
   `u` to undo the last one, while a `Realignment` or `Coup` binds `r` to
   roll (or attempt the coup) on the selected country instead (region
-  screen only) and `u` always refuses — a resolved roll or attempt can't
-  be taken back. `Esc`/`q` leave a
+  screen only, and not ending the turn) and `u` always refuses — a
+  resolved roll or attempt can't be taken back. `Esc`/`q` leave a
   still-open session untouched rather than clearing it, so it can be
   resumed from the REPL or by reopening the map. `run`'s return value
   (`Outcome`) tells the REPL which of those happened. A roll's outcome

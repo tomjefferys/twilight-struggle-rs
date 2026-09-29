@@ -1,15 +1,19 @@
 use std::io::{self, IsTerminal, Write};
 
 use twilight_struggle::render::{coup_result_line, operation_balance_line, render_country, render_region, render_world, render_world_map, roll_result_line};
-use twilight_struggle::{Board, ColorMode, Coup, Dice, Found, InfluencePlacement, MapLayout, Operation, Realignment, Region, Scenario, Superpower, WorldMap};
+use twilight_struggle::{ColorMode, Dice, Found, Game, GameError, MapLayout, Operation, OperationKind, Region, RollOutcome, Scenario, Superpower, WorldMap, OPS_PER_ACTION_ROUND};
 
 mod interactive;
 
 struct Session {
     map: WorldMap,
     layout: MapLayout,
-    board: Board,
-    scenario: Scenario,
+    /// Status, board, and whichever operation is open — see [`Game`]'s own
+    /// doc for why these three move together. Turns are enforced entirely
+    /// through this: `ops`/`realign`/`coup` no longer take a side or an
+    /// ops count, because `Game::begin` always uses the active side and a
+    /// full turn's allowance.
+    game: Game,
     width: usize,
     color: ColorMode,
     /// False in one-shot mode, so `worldmap`/`wm` always falls back to a
@@ -17,12 +21,6 @@ struct Session {
     /// (`cargo run -- --color never worldmap`) runs on a TTY and must keep
     /// producing a single static render, never the interactive view.
     interactive_ok: bool,
-    /// An open operation, if `ops`, `realign`, or `coup` has started one.
-    /// While it's open, every view renders its speculative board (if it
-    /// has one — a realignment or coup doesn't) instead of `board`, and
-    /// `set`/`add`/`remove`/`load` are refused so the board an operation
-    /// was judged legal against can't shift underneath it.
-    op: Option<Operation>,
     /// Rolls a realignment's or coup's dice. Seeded from entropy in the
     /// REPL, or from a fixed default (overridable with `--seed`) in
     /// one-shot mode, so the documented snapshot-regeneration workflow
@@ -30,19 +28,11 @@ struct Session {
     dice: Dice,
 }
 
-/// The board every view should read: an operation's speculative one
-/// while a session is open (placement has one; realignment and coup
-/// don't, since their rolls already land on the real board), otherwise
-/// the committed board.
-fn view_board(session: &Session) -> &Board {
-    session.op.as_ref().and_then(Operation::board).unwrap_or(&session.board)
-}
-
 fn main() {
     let map = WorldMap::standard().expect("standard map should be valid");
     let layout = MapLayout::standard(&map).expect("standard layout should be valid");
     let scenario = Scenario::demo(&map).expect("demo scenario should be valid");
-    let board = scenario.board.clone();
+    let game = Game::from_scenario(&scenario);
 
     let mut args = std::env::args().skip(1).peekable();
     let mut width = detect_width();
@@ -90,12 +80,10 @@ fn main() {
     let mut session = Session {
         map,
         layout,
-        board,
-        scenario,
+        game,
         width,
         color,
         interactive_ok: !one_shot,
-        op: None,
         dice,
     };
 
@@ -109,7 +97,7 @@ fn main() {
     println!("Twilight Struggle — terminal map. Type `help` for commands, `quit` to exit.");
     let stdin = io::stdin();
     loop {
-        print!("> ");
+        print!("{}", prompt(&session));
         io::stdout().flush().ok();
         let mut line = String::new();
         if stdin.read_line(&mut line).unwrap_or(0) == 0 {
@@ -126,6 +114,13 @@ fn main() {
     }
 }
 
+/// A turn-aware prompt — e.g. `USSR AR 3/7 > ` — so whose turn it is
+/// never needs a separate `status` call to see.
+fn prompt(session: &Session) -> String {
+    let status = session.game.status();
+    format!("{} AR {}/{} > ", session.game.active(), status.action_round, status.action_rounds_per_turn)
+}
+
 fn detect_width() -> usize {
     terminal_size::terminal_size()
         .map(|(w, _)| w.0 as usize)
@@ -139,14 +134,14 @@ fn run_command(session: &mut Session, line: &str) {
     match cmd {
         "map" | "world" => {
             print_operation_banner(session);
-            let canvas = render_world(&session.map, &session.layout, view_board(session), &session.scenario.status, session.width);
+            let canvas = render_world(&session.map, &session.layout, session.game.view_board(), session.game.status(), session.width);
             println!("{}", canvas.render(session.color));
         }
         "worldmap" | "wm" => {
             if session.interactive_ok && io::stdin().is_terminal() && io::stdout().is_terminal() {
-                match interactive::run(&session.map, &session.layout, &mut session.board, &mut session.op, &mut session.dice, session.color) {
+                match interactive::run(&session.map, &session.layout, &mut session.game, &mut session.dice, session.color) {
                     Ok(interactive::Outcome::Left) => {
-                        if let Some(op) = &session.op {
+                        if let Some(op) = session.game.operation() {
                             println!(
                                 "left the map — {} {} still open ({} of {} ops left): confirm or cancel",
                                 op.side(),
@@ -156,25 +151,25 @@ fn run_command(session: &mut Session, line: &str) {
                             );
                         }
                     }
-                    Ok(interactive::Outcome::Confirmed) => println!("operation confirmed"),
-                    Ok(interactive::Outcome::Cancelled) => println!("operation cancelled"),
+                    Ok(interactive::Outcome::Confirmed) => println!("operation confirmed — {} to act", session.game.active()),
+                    Ok(interactive::Outcome::Cancelled) => println!("operation cancelled — {} to act", session.game.active()),
                     Err(e) => println!("interactive mode failed: {e}"),
                 }
             } else {
-                let canvas = render_world_map(&session.map, &session.layout, view_board(session), None, session.op.as_ref());
+                let canvas = render_world_map(&session.map, &session.layout, session.game.view_board(), None, session.game.operation());
                 println!("{}", canvas.render(session.color));
             }
         }
         "region" => match words.get(1).and_then(|s| parse_region(s)) {
             Some(region) => {
-                let canvas = render_region(&session.map, &session.layout, view_board(session), region, None, session.op.as_ref());
+                let canvas = render_region(&session.map, &session.layout, session.game.view_board(), region, None, session.game.operation());
                 println!("{}", canvas.render(session.color));
             }
             None => println!("unknown region {:?}. Try: europe, asia, middleeast, africa, centralamerica, southamerica, or 1-6", words.get(1)),
         },
         "1" | "2" | "3" | "4" | "5" | "6" => {
             if let Some(region) = region_by_index(cmd.parse().unwrap()) {
-                let canvas = render_region(&session.map, &session.layout, view_board(session), region, None, session.op.as_ref());
+                let canvas = render_region(&session.map, &session.layout, session.game.view_board(), region, None, session.game.operation());
                 println!("{}", canvas.render(session.color));
             }
         }
@@ -186,7 +181,7 @@ fn run_command(session: &mut Session, line: &str) {
             print_country(session, &query);
         }
         "set" | "add" | "remove" => {
-            if let Some(op) = &session.op {
+            if let Some(op) = session.game.operation() {
                 println!("finish or cancel the {} first ({} of {} ops left)", op.verb(), op.remaining(), op.ops_total());
                 return;
             }
@@ -206,16 +201,16 @@ fn run_command(session: &mut Session, line: &str) {
             match session.map.find(country_query) {
                 Found::One(id) => {
                     match cmd {
-                        "set" => session.board.set_influence(id, superpower, amount),
-                        "add" => session.board.add_influence(id, superpower, amount),
-                        "remove" => session.board.remove_influence(id, superpower, amount),
+                        "set" => session.game.board_mut().set_influence(id, superpower, amount),
+                        "add" => session.game.board_mut().add_influence(id, superpower, amount),
+                        "remove" => session.game.board_mut().remove_influence(id, superpower, amount),
                         _ => unreachable!(),
                     }
                     println!(
                         "{}  US {}  USSR {}",
                         session.map.country(id).name,
-                        session.board.influence(id, Superpower::Us),
-                        session.board.influence(id, Superpower::Ussr),
+                        session.game.board().influence(id, Superpower::Us),
+                        session.game.board().influence(id, Superpower::Ussr),
                     );
                 }
                 Found::None => println!("no country matches {country_query:?}"),
@@ -223,26 +218,28 @@ fn run_command(session: &mut Session, line: &str) {
             }
         }
         "load" => {
-            if let Some(op) = &session.op {
+            if let Some(op) = session.game.operation() {
                 println!("finish or cancel the {} first ({} of {} ops left)", op.verb(), op.remaining(), op.ops_total());
                 return;
             }
             if words.get(1) == Some(&"demo") {
-                session.scenario = Scenario::demo(&session.map).expect("demo scenario should be valid");
-                session.board = session.scenario.board.clone();
+                let scenario = Scenario::demo(&session.map).expect("demo scenario should be valid");
+                session.game = Game::from_scenario(&scenario);
                 println!("loaded demo scenario");
             } else {
                 println!("usage: load demo");
             }
         }
-        "ops" => run_ops_command(session, &words),
+        "ops" => run_begin_command(session, OperationKind::Influence, &words),
+        "realign" => run_begin_command(session, OperationKind::Realign, &words),
+        "coup" => run_begin_command(session, OperationKind::Coup, &words),
         "place" => run_place_command(session, &words),
-        "realign" => run_realign_command(session, &words),
-        "coup" => run_coup_command(session, &words),
         "roll" => run_roll_command(session, &words),
         "undo" => run_undo_command(session),
         "confirm" => run_confirm_command(session),
         "cancel" => run_cancel_command(session),
+        "status" => run_status_command(session),
+        "pass" => run_pass_command(session),
         "seed" => match words.get(1).and_then(|s| s.parse().ok()) {
             Some(s) => {
                 session.dice = Dice::from_seed(s);
@@ -272,13 +269,13 @@ fn print_country(session: &Session, query: &str) {
     match session.map.find(query) {
         Found::One(id) => {
             print_operation_banner(session);
-            let canvas = render_country(&session.map, view_board(session), id, session.op.as_ref());
+            let canvas = render_country(&session.map, session.game.view_board(), id, session.game.operation());
             println!("{}", canvas.render(session.color));
         }
         Found::None => match session.layout.find_by_code(query) {
             Some(id) => {
                 print_operation_banner(session);
-                let canvas = render_country(&session.map, view_board(session), id, session.op.as_ref());
+                let canvas = render_country(&session.map, session.game.view_board(), id, session.game.operation());
                 println!("{}", canvas.render(session.color));
             }
             None => println!("no country matches {query:?}"),
@@ -289,10 +286,13 @@ fn print_country(session: &Session, query: &str) {
 
 /// Printed above any view that has no room of its own to show pending
 /// operation state (the dashboard, a single country) — the region and
-/// world map views show this same line in their own footer instead.
+/// world map views show this same line in their own footer instead. Reads
+/// the committed board, not the speculative one — the line only names the
+/// touched countries and remaining ops, both already tracked by the
+/// operation itself.
 fn print_operation_banner(session: &Session) {
-    if let Some(op) = &session.op {
-        println!("{}", operation_balance_line(&session.layout, &session.board, op));
+    if let Some(op) = session.game.operation() {
+        println!("{}", operation_balance_line(&session.layout, session.game.board(), op));
     }
 }
 
@@ -301,137 +301,54 @@ fn print_ambiguous(session: &Session, ids: &[twilight_struggle::CountryId]) {
     println!("ambiguous: {}", names.join(", "));
 }
 
-/// `ops <us|ussr> <n>` starts a placement session; bare `ops` reports the
-/// currently open operation (any kind), if any.
-fn run_ops_command(session: &mut Session, words: &[&str]) {
-    if words.len() == 1 {
-        match &session.op {
-            Some(_) => print_operation_banner(session),
-            None => println!("no operation session open. Start one with: ops <us|ussr> <n>, realign <us|ussr> <n>, or coup <us|ussr> <n>"),
-        }
-        return;
-    }
-    if let Some(op) = &session.op {
+/// `ops`/`realign`/`coup` open an operation for the active side with a
+/// full turn's ops — no arguments, since enforcing turns means there's
+/// nothing left for a caller to name. Refused if a session is already
+/// open, per [`Game::begin`].
+fn run_begin_command(session: &mut Session, kind: OperationKind, words: &[&str]) {
+    if words.len() != 1 {
         println!(
-            "a {} session is already open ({} of {} ops left) — confirm or cancel it first",
-            op.verb(),
-            op.remaining(),
-            op.ops_total()
+            "{} takes no arguments now — it always starts for {}, the active side, with {} ops",
+            words[0],
+            session.game.active(),
+            OPS_PER_ACTION_ROUND,
         );
         return;
     }
-    if words.len() != 3 {
-        println!("usage: ops <us|ussr> <n>");
-        return;
-    }
-    let Some(side) = parse_superpower(words[1]) else {
-        println!("expected 'us' or 'ussr', got {:?}", words[1]);
-        return;
-    };
-    let Ok(ops) = words[2].parse::<u8>() else {
-        println!("expected a number, got {:?}", words[2]);
-        return;
-    };
-    if ops == 0 {
-        println!("ops must be at least 1");
-        return;
-    }
-    session.op = Some(Operation::Influence(InfluencePlacement::new(side, ops, &session.board)));
-    println!("started an influence placement for {side} with {ops} ops");
-}
-
-/// `realign <us|ussr> <n>` starts a realignment session; bare `realign`
-/// reports the open one, if any.
-fn run_realign_command(session: &mut Session, words: &[&str]) {
-    if words.len() == 1 {
-        match &session.op {
-            Some(_) => print_operation_banner(session),
-            None => println!("no operation session open. Start one with: realign <us|ussr> <n>, ops <us|ussr> <n>, or coup <us|ussr> <n>"),
+    match session.game.begin(kind) {
+        Ok(()) => {
+            let op = session.game.operation().expect("begin just opened one");
+            let side = op.side();
+            let ops = op.ops_total();
+            match kind {
+                OperationKind::Influence => println!("started an influence placement for {side} with {ops} ops"),
+                OperationKind::Realign => {
+                    println!("started a {side} realignment with {ops} ops — each roll resolves immediately onto the board and cannot be taken back")
+                }
+                OperationKind::Coup => println!(
+                    "started a {side} coup with {ops} ops — `roll <country>` spends all {ops} on one attempt, \
+                     resolved immediately onto the board and cannot be taken back"
+                ),
+            }
         }
-        return;
+        Err(e) => println!("{e}"),
     }
-    if let Some(op) = &session.op {
-        println!(
-            "a {} session is already open ({} of {} ops left) — confirm or cancel it first",
-            op.verb(),
-            op.remaining(),
-            op.ops_total()
-        );
-        return;
-    }
-    if words.len() != 3 {
-        println!("usage: realign <us|ussr> <n>");
-        return;
-    }
-    let Some(side) = parse_superpower(words[1]) else {
-        println!("expected 'us' or 'ussr', got {:?}", words[1]);
-        return;
-    };
-    let Ok(ops) = words[2].parse::<u8>() else {
-        println!("expected a number, got {:?}", words[2]);
-        return;
-    };
-    if ops == 0 {
-        println!("ops must be at least 1");
-        return;
-    }
-    session.op = Some(Operation::Realign(Realignment::new(side, ops, &session.board)));
-    println!("started a {side} realignment with {ops} ops — each roll resolves immediately onto the board and cannot be taken back");
-}
-
-/// `coup <us|ussr> <n>` starts a coup session; bare `coup` reports the
-/// open one, if any. The whole card's ops are spent on a single attempt
-/// (rule 6.3.2) — `roll <country>` resolves it.
-fn run_coup_command(session: &mut Session, words: &[&str]) {
-    if words.len() == 1 {
-        match &session.op {
-            Some(_) => print_operation_banner(session),
-            None => println!("no operation session open. Start one with: coup <us|ussr> <n>, ops <us|ussr> <n>, or realign <us|ussr> <n>"),
-        }
-        return;
-    }
-    if let Some(op) = &session.op {
-        println!(
-            "a {} session is already open ({} of {} ops left) — confirm or cancel it first",
-            op.verb(),
-            op.remaining(),
-            op.ops_total()
-        );
-        return;
-    }
-    if words.len() != 3 {
-        println!("usage: coup <us|ussr> <n>");
-        return;
-    }
-    let Some(side) = parse_superpower(words[1]) else {
-        println!("expected 'us' or 'ussr', got {:?}", words[1]);
-        return;
-    };
-    let Ok(ops) = words[2].parse::<u8>() else {
-        println!("expected a number, got {:?}", words[2]);
-        return;
-    };
-    if ops == 0 {
-        println!("ops must be at least 1");
-        return;
-    }
-    session.op = Some(Operation::Coup(Coup::new(side, ops, &session.board)));
-    println!(
-        "started a {side} coup with {ops} ops — `roll <country>` spends all {ops} on one attempt, \
-         resolved immediately onto the board and cannot be taken back"
-    );
 }
 
 /// `place <country> [n]` places `n` (default 1) points of influence, one
 /// at a time, stopping and reporting on the first one that's refused.
 fn run_place_command(session: &mut Session, words: &[&str]) {
-    let Some(Operation::Influence(placement)) = &mut session.op else {
-        match &session.op {
-            Some(op) => println!("a {} session is open, not a placement — `place` only works while placing influence", op.verb()),
-            None => println!("no placement session open. Start one with: ops <us|ussr> <n>"),
+    match session.game.operation() {
+        Some(Operation::Influence(_)) => {}
+        Some(op) => {
+            println!("a {} session is open, not a placement — `place` only works while placing influence", op.verb());
+            return;
         }
-        return;
-    };
+        None => {
+            println!("no placement session open. Start one with: ops");
+            return;
+        }
+    }
     let rest = &words[1..];
     if rest.is_empty() {
         println!("usage: place <country> [n]");
@@ -461,9 +378,10 @@ fn run_place_command(session: &mut Session, words: &[&str]) {
         }
     };
     for placed in 0..amount {
-        match placement.place(&session.map, id) {
+        match session.game.place(&session.map, id) {
             Ok(cost) => {
                 let name = &session.map.country(id).name;
+                let placement = session.game.placement().expect("place just succeeded on an open placement");
                 println!(
                     "{name}  US {}  USSR {}  (pending +{}, cost {cost}, {} of {} ops left)",
                     placement.board().influence(id, Superpower::Us),
@@ -487,7 +405,8 @@ fn run_place_command(session: &mut Session, words: &[&str]) {
 
 /// `roll <country>` resolves one realignment roll, or a coup's one
 /// attempt, immediately — whichever kind of session is open. There's no
-/// "current target" to default to, so the country is required.
+/// "current target" to default to, so the country is required. Doesn't
+/// advance the turn; only `confirm`/`cancel`/`pass` do that.
 fn run_roll_command(session: &mut Session, words: &[&str]) {
     let rest = &words[1..];
     if rest.is_empty() {
@@ -506,40 +425,35 @@ fn run_roll_command(session: &mut Session, words: &[&str]) {
             return;
         }
     };
-    match &mut session.op {
-        Some(Operation::Realign(realignment)) => match realignment.roll(&session.map, &mut session.board, id, &mut session.dice) {
-            Ok(result) => println!("{}", roll_result_line(&session.map, realignment.side(), &result)),
-            Err(e) => println!("cannot roll in {}: {e}", session.map.country(id).name),
-        },
-        Some(Operation::Coup(coup)) => match coup.attempt(&session.map, &mut session.board, id, &mut session.dice) {
-            Ok(result) => println!("{}", coup_result_line(&session.map, coup.side(), &result)),
-            Err(e) => println!("cannot coup {}: {e}", session.map.country(id).name),
-        },
-        Some(op) => println!("a {} session is open, not a realignment or coup — `roll` only works during one of those", op.verb()),
-        None => println!("no realignment or coup session open. Start one with: realign <us|ussr> <n> or coup <us|ussr> <n>"),
+    let side = session.game.active();
+    match session.game.roll(&session.map, id, &mut session.dice) {
+        Ok(RollOutcome::Realign(result)) => println!("{}", roll_result_line(&session.map, side, &result)),
+        Ok(RollOutcome::Coup(result)) => println!("{}", coup_result_line(&session.map, side, &result)),
+        Err(GameError::Realign(e)) => println!("cannot roll in {}: {e}", session.map.country(id).name),
+        Err(GameError::Coup(e)) => println!("cannot coup {}: {e}", session.map.country(id).name),
+        Err(GameError::WrongKind { open }) => {
+            println!("a {open} session is open, not a realignment or coup — `roll` only works during one of those")
+        }
+        Err(GameError::NoOperation) => println!("no realignment or coup session open. Start one with: realign or coup"),
+        Err(e) => println!("{e}"),
     }
 }
 
 fn run_undo_command(session: &mut Session) {
-    match &mut session.op {
-        Some(Operation::Influence(placement)) => match placement.undo_last(&session.map) {
-            Some(id) => println!(
-                "undid a point in {} — {} of {} ops left",
-                session.map.country(id).name,
-                placement.remaining(),
-                placement.ops_total(),
-            ),
-            None => println!("nothing to undo"),
-        },
-        Some(Operation::Realign(_)) => println!("a resolved realignment roll can't be taken back"),
-        Some(Operation::Coup(_)) => println!("a resolved coup can't be taken back"),
-        None => println!("no operation session open"),
+    match session.game.undo(&session.map) {
+        Ok(id) => println!(
+            "undid a point in {} — {} of {} ops left",
+            session.map.country(id).name,
+            session.game.ops_available(),
+            OPS_PER_ACTION_ROUND,
+        ),
+        Err(e) => println!("{e}"),
     }
 }
 
 fn run_confirm_command(session: &mut Session) {
-    match session.op.take() {
-        Some(Operation::Influence(placement)) => {
+    match session.game.confirm() {
+        Ok(Operation::Influence(placement)) => {
             let side = placement.side();
             let spent = placement.ops_spent();
             let total = placement.ops_total();
@@ -549,14 +463,13 @@ fn run_confirm_command(session: &mut Session) {
                 .map(|&(id, n)| format!("{} +{n}", session.map.country(id).name))
                 .collect::<Vec<_>>()
                 .join(", ");
-            session.board = placement.commit();
             if spent == total {
                 println!("committed {spent} ops for {side}: {summary}");
             } else {
                 println!("committed {spent} of {total} ops for {side} ({} unspent): {summary}", total - spent);
             }
         }
-        Some(Operation::Realign(realignment)) => {
+        Ok(Operation::Realign(realignment)) => {
             let side = realignment.side();
             let spent = realignment.ops_spent();
             let total = realignment.ops_total();
@@ -570,7 +483,7 @@ fn run_confirm_command(session: &mut Session) {
                 );
             }
         }
-        Some(Operation::Coup(coup)) => {
+        Ok(Operation::Coup(coup)) => {
             let side = coup.side();
             let total = coup.ops_total();
             match coup.result() {
@@ -581,34 +494,70 @@ fn run_confirm_command(session: &mut Session) {
                 None => println!("closed — {side}'s coup never attempted; all {total} ops are simply lost"),
             }
         }
-        None => println!("no operation session open"),
+        Err(e) => {
+            println!("{e}");
+            return;
+        }
     }
+    println!("{} to act", session.game.active());
 }
 
 fn run_cancel_command(session: &mut Session) {
-    match session.op.take() {
-        Some(Operation::Influence(placement)) => {
+    match session.game.cancel() {
+        Ok(Operation::Influence(placement)) => {
             println!(
                 "cancelled — discarded {} pending marker(s), {} ops returned",
                 placement.pending_countries().iter().map(|&(_, n)| n as u32).sum::<u32>(),
                 placement.ops_spent(),
             );
         }
-        Some(Operation::Realign(realignment)) => {
+        Ok(Operation::Realign(realignment)) => {
             println!(
                 "closed — {} roll(s) already resolved on the board can't be undone; {} unspent ops are simply lost",
                 realignment.history().len(),
                 realignment.remaining(),
             );
         }
-        Some(Operation::Coup(coup)) => match coup.result() {
+        Ok(Operation::Coup(coup)) => match coup.result() {
             Some(result) => println!(
                 "closed — the coup on {} already resolved on the board and can't be undone",
                 session.map.country(result.target).name,
             ),
             None => println!("closed — the coup never attempted; all {} ops are simply lost", coup.ops_total()),
         },
-        None => println!("no operation session open"),
+        Err(e) => {
+            println!("{e}");
+            return;
+        }
+    }
+    println!("{} to act", session.game.active());
+}
+
+/// Reports whose turn it is, the turn/action-round counters, and — if
+/// one's open — the balance of the current operation. Takes over the
+/// reporting role bare `ops`/`realign`/`coup` used to have, now that those
+/// always start a new operation instead.
+fn run_status_command(session: &Session) {
+    let status = session.game.status();
+    println!(
+        "TURN {}   AR {}/{}   {} to act   {} of {} ops available",
+        status.turn,
+        status.action_round,
+        status.action_rounds_per_turn,
+        session.game.active(),
+        session.game.ops_available(),
+        OPS_PER_ACTION_ROUND,
+    );
+    print_operation_banner(session);
+}
+
+/// `pass` forfeits the active side's turn without opening an operation.
+/// Refused while one is already open — cancel it first.
+fn run_pass_command(session: &mut Session) {
+    let passing = session.game.active();
+    match session.game.pass() {
+        Ok(()) => println!("{passing} passes — {} to act", session.game.active()),
+        Err(e) => println!("{e}"),
     }
 }
 
@@ -659,26 +608,31 @@ Commands:
   remove <c> <us|ussr> <n> remove influence (saturates at 0)
   load demo               reload the bundled demo scenario
 
-  ops <us|ussr> <n>       start placing influence with n operation points
-  ops                     show the open session's ops balance (any kind)
+  status                  whose turn it is, the turn/AR counters, and the
+                          open operation's balance, if any
+  pass                    forfeit the active side's turn with no operation
+
+  ops                     start placing influence for the active side with
+                          this turn's 4 ops
   place <country> [n]     place n influence (default 1); 1 op, or 2 in an
                           opponent-controlled country — refused if there's
                           no influence there, in a neighbour, or a border
                           with your own superpower
   undo                    take back the last point placed, refunding it
 
-  realign <us|ussr> <n>   start realigning with n operation points; view a
-                          country (country <name>, region, or worldmap)
-                          to see the modifier and odds breakdown first
+  realign                 start realigning for the active side with this
+                          turn's 4 ops; view a country (country <name>,
+                          region, or worldmap) to see the modifier and
+                          odds breakdown first
   roll <country>          resolve one realignment roll for 1 op — resolves
                           immediately onto the board and CANNOT be undone
   undo                    (during a realignment) refuses: rolls can't be
                           taken back, only placement points can
 
-  coup <us|ussr> <n>      start a coup with n operation points; view a
-                          country to see its target number (stability ×2)
-                          and success odds first
-  roll <country>          resolve the coup's one attempt, spending all n
+  coup                    start a coup for the active side with this
+                          turn's 4 ops; view a country to see its target
+                          number (stability ×2) and success odds first
+  roll <country>          resolve the coup's one attempt, spending all 4
                           ops at once — resolves immediately onto the
                           board and CANNOT be undone; a second `roll`
                           in the same session is refused
@@ -687,10 +641,12 @@ Commands:
 
   confirm                 commit a pending placement, or close a finished
                           realignment or coup (whose rolls are already on
-                          the board)
+                          the board) — either way, the turn passes to the
+                          other side; unspent ops are simply lost
   cancel                  discard an unconfirmed placement, unspent; or
                           close a realignment or coup, leaving any rolls
-                          already made in place
+                          already made in place — the turn passes to the
+                          other side either way
                           (while a session is open: map/world/country show
                           a balance banner; worldmap/region mark touched
                           countries and are navigable the same way inside

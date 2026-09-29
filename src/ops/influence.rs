@@ -25,6 +25,7 @@ use crate::map::WorldMap;
 /// One step in the placement history, so undoing it can refund the exact
 /// number of ops it cost — not always 1, since a point placed before
 /// control flipped may have cost 2.
+#[derive(Clone)]
 struct Step {
     id: CountryId,
     cost: u8,
@@ -35,6 +36,10 @@ struct Step {
 /// game state. The player can keep adding to it, undo their most recent
 /// point, and either [`commit`](InfluencePlacement::commit) it to a
 /// [`Board`] or drop it entirely by discarding this value.
+///
+/// `Clone` (like [`Board`]'s own) is cheap and exists for the same
+/// reason: a [`crate::game::Game`] needs to be clonable for AI lookahead.
+#[derive(Clone)]
 pub struct InfluencePlacement {
     side: Superpower,
     ops_total: u8,

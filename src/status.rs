@@ -4,8 +4,8 @@ use crate::country::Superpower;
 
 /// The parts of the overall game state that aren't per-country influence:
 /// turn tracking, DEFCON, victory points, the space race, and the China
-/// Card. Plain data with no rules attached — later stages will grow the
-/// logic that changes these fields; this stage only needs somewhere to put
+/// Card. Plain data with no rules attached — [`crate::game::Game`] is what
+/// actually advances `turn`/`action_round`/`active`; this struct just holds
 /// the values so the display header can show them.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 #[serde(default)]
@@ -13,6 +13,9 @@ pub struct GameStatus {
     pub turn: u8,
     pub action_round: u8,
     pub action_rounds_per_turn: u8,
+    /// The side whose turn it is to act this action round. USSR acts
+    /// first in each action round, per the real rules.
+    pub active: Superpower,
     pub defcon: u8,
     /// Victory points: positive favours the USA, negative the USSR.
     pub vp: i8,
@@ -30,6 +33,7 @@ impl Default for GameStatus {
             turn: 1,
             action_round: 1,
             action_rounds_per_turn: 6,
+            active: Superpower::Ussr,
             defcon: 5,
             vp: 0,
             space_race_us: 0,

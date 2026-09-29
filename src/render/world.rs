@@ -117,10 +117,11 @@ fn header_line(status: &GameStatus) -> String {
         format!("USSR +{}", -(status.vp as i16))
     };
     format!(
-        "  TURN {}   AR {}/{}   DEFCON {}   VP {}   Space US {} USSR {}   MilOps US {} USSR {}   China Card: {} ({})",
+        "  TURN {}   AR {}/{} ({})   DEFCON {}   VP {}   Space US {} USSR {}   MilOps US {} USSR {}   China Card: {} ({})",
         status.turn,
         status.action_round,
         status.action_rounds_per_turn,
+        status.active,
         status.defcon,
         vp,
         status.space_race_us,

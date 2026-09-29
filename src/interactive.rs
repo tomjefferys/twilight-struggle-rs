@@ -13,7 +13,7 @@ use crossterm::terminal::{self, Clear, ClearType, EnterAlternateScreen, LeaveAlt
 use crossterm::{execute, queue};
 
 use twilight_struggle::render::{coup_result_line, render_region, render_world_map, roll_result_line};
-use twilight_struggle::{Board, ColorMode, CountryId, Dice, Direction, MapLayout, Operation, Region, WorldMap};
+use twilight_struggle::{ColorMode, CountryId, Dice, Direction, Game, GameError, MapLayout, Operation, Region, RollOutcome, WorldMap};
 
 /// Which screen is currently showing.
 enum Screen {
@@ -25,16 +25,18 @@ enum Screen {
 }
 
 /// How the user left interactive mode, so the REPL can print a matching
-/// line: leaving a placement session open is not the same as confirming
-/// or discarding it.
+/// line: leaving an operation open is not the same as confirming or
+/// cancelling it.
 pub enum Outcome {
-    /// `Esc`/`q`/Ctrl-C. Any open placement is left untouched — it stays
-    /// in `Session.placement`, resumable from the REPL or by reopening
+    /// `Esc`/`q`/Ctrl-C. A still-open operation is left untouched — it
+    /// stays in `Session.game`, resumable from the REPL or by reopening
     /// the map.
     Left,
-    /// The open placement was committed to `board`.
+    /// The open operation was confirmed, and the turn has passed to the
+    /// other side.
     Confirmed,
-    /// The open placement was discarded, unspent.
+    /// The open operation was cancelled, and the turn has passed to the
+    /// other side.
     Cancelled,
 }
 
@@ -64,26 +66,21 @@ impl Drop for TerminalGuard {
 /// Drives the interactive world map until the user backs all the way out
 /// (`Esc` from the world view, `q`, or Ctrl-C).
 ///
-/// `op`, when `Some` on entry (or started implicitly never — a session
-/// can only be opened from the REPL today), is an operation in progress.
-/// `c` confirms/closes it into `board` (a placement commits; a
-/// realignment's or coup's rolls are already there) and `X` cancels/closes
-/// it. For an [`InfluencePlacement`](twilight_struggle::InfluencePlacement),
-/// `+`/`=` places one point in the selected country (region screen only)
-/// and `u` undoes the last one. For a
+/// `game`'s open operation, if any (a session can only be opened from the
+/// REPL today), is the one in progress. `c` confirms/closes it — a
+/// placement commits, a realignment's or coup's rolls are already on the
+/// board — and hands the turn to the other side; `X` cancels/closes it,
+/// also handing the turn over. For an
+/// [`InfluencePlacement`](twilight_struggle::InfluencePlacement), `+`/`=`
+/// places one point in the selected country (region screen only) and `u`
+/// undoes the last one. For a
 /// [`Realignment`](twilight_struggle::Realignment) or a
 /// [`Coup`](twilight_struggle::Coup), `r` resolves a roll (or the coup's
 /// one attempt) on the selected country (region screen only) —
-/// immediately and permanently, since there's nothing to undo. Leaving
-/// via `Esc`/`q` keeps a still-open session intact.
-pub fn run(
-    map: &WorldMap,
-    layout: &MapLayout,
-    board: &mut Board,
-    op: &mut Option<Operation>,
-    dice: &mut Dice,
-    color: ColorMode,
-) -> io::Result<Outcome> {
+/// immediately and permanently, since there's nothing to undo, and
+/// without ending the turn (only `c`/`X` do that). Leaving via `Esc`/`q`
+/// keeps a still-open session intact.
+pub fn run(map: &WorldMap, layout: &MapLayout, game: &mut Game, dice: &mut Dice, color: ColorMode) -> io::Result<Outcome> {
     let _guard = TerminalGuard::enter()?;
     let mut screen = Screen::World { selected: Region::Europe };
     // Remembers the last country selected in each region, so leaving a
@@ -99,7 +96,7 @@ pub fn run(
     // reading after it appears.
     let mut message: Option<String> = None;
 
-    draw(&screen, map, layout, board, op.as_ref(), message.as_deref(), color)?;
+    draw(&screen, map, layout, game, message.as_deref(), color)?;
     loop {
         match event::read()? {
             Event::Key(key) if key.kind == KeyEventKind::Press => {
@@ -113,7 +110,7 @@ pub fn run(
                 // touch it.
                 let rolled = matches!(key.code, KeyCode::Char('r'))
                     && matches!(screen, Screen::Region { .. })
-                    && matches!(op, Some(Operation::Realign(_)) | Some(Operation::Coup(_)));
+                    && matches!(game.operation(), Some(Operation::Realign(_)) | Some(Operation::Coup(_)));
                 if !rolled {
                     message = None;
                 }
@@ -121,32 +118,19 @@ pub fn run(
                     KeyCode::Esc if matches!(screen, Screen::World { .. }) => return Ok(Outcome::Left),
                     KeyCode::Char('q') => return Ok(Outcome::Left),
                     KeyCode::Char('c') => {
-                        if let Some(operation) = op.take() {
-                            if let Operation::Influence(p) = operation {
-                                *board = p.commit();
-                            }
+                        if game.confirm().is_ok() {
                             return Ok(Outcome::Confirmed);
                         }
                     }
                     KeyCode::Char('X') => {
-                        if op.take().is_some() {
+                        if game.cancel().is_ok() {
                             return Ok(Outcome::Cancelled);
                         }
                     }
-                    KeyCode::Char('u') => {
-                        match op.as_mut() {
-                            Some(Operation::Influence(p)) => {
-                                p.undo_last(map);
-                            }
-                            Some(Operation::Realign(_)) => {
-                                message = Some("a resolved realignment roll can't be taken back".to_string());
-                            }
-                            Some(Operation::Coup(_)) => {
-                                message = Some("a resolved coup can't be taken back".to_string());
-                            }
-                            None => {}
-                        }
-                    }
+                    KeyCode::Char('u') => match game.undo(map) {
+                        Ok(_) | Err(GameError::NothingToUndo) | Err(GameError::NoOperation) => {}
+                        Err(e) => message = Some(e.to_string()),
+                    },
                     _ => match &mut screen {
                         Screen::World { selected } => match key.code {
                             KeyCode::Left => *selected = selected.step(Direction::Left).unwrap_or(*selected),
@@ -169,27 +153,20 @@ pub fn run(
                             KeyCode::Up => *selected = layout.step_country(map, *region, *selected, Direction::Up).unwrap_or(*selected),
                             KeyCode::Down => *selected = layout.step_country(map, *region, *selected, Direction::Down).unwrap_or(*selected),
                             KeyCode::Char('+') | KeyCode::Char('=') => {
-                                if let Some(Operation::Influence(p)) = op.as_mut()
-                                    && let Err(e) = p.place(map, *selected)
-                                {
+                                if let Err(GameError::Placement(e)) = game.place(map, *selected) {
                                     message = Some(format!("{}: {e}", map.country(*selected).name));
                                 }
                             }
-                            KeyCode::Char('r') => match op.as_mut() {
-                                Some(Operation::Realign(r)) => {
-                                    message = Some(match r.roll(map, board, *selected, dice) {
-                                        Ok(result) => roll_result_line(map, r.side(), &result),
-                                        Err(e) => format!("{}: {e}", map.country(*selected).name),
-                                    });
+                            KeyCode::Char('r') => {
+                                let side = game.active();
+                                match game.roll(map, *selected, dice) {
+                                    Ok(RollOutcome::Realign(result)) => message = Some(roll_result_line(map, side, &result)),
+                                    Ok(RollOutcome::Coup(result)) => message = Some(coup_result_line(map, side, &result)),
+                                    Err(GameError::Realign(e)) => message = Some(format!("{}: {e}", map.country(*selected).name)),
+                                    Err(GameError::Coup(e)) => message = Some(format!("{}: {e}", map.country(*selected).name)),
+                                    Err(_) => {}
                                 }
-                                Some(Operation::Coup(c)) => {
-                                    message = Some(match c.attempt(map, board, *selected, dice) {
-                                        Ok(result) => coup_result_line(map, c.side(), &result),
-                                        Err(e) => format!("{}: {e}", map.country(*selected).name),
-                                    });
-                                }
-                                _ => {}
-                            },
+                            }
                             KeyCode::Esc => {
                                 last_selected.insert(*region, *selected);
                                 screen = Screen::World { selected: *region };
@@ -198,24 +175,17 @@ pub fn run(
                         },
                     },
                 }
-                draw(&screen, map, layout, board, op.as_ref(), message.as_deref(), color)?;
+                draw(&screen, map, layout, game, message.as_deref(), color)?;
             }
-            Event::Resize(_, _) => draw(&screen, map, layout, board, op.as_ref(), message.as_deref(), color)?,
+            Event::Resize(_, _) => draw(&screen, map, layout, game, message.as_deref(), color)?,
             _ => {}
         }
     }
 }
 
-#[allow(clippy::too_many_arguments)]
-fn draw(
-    screen: &Screen,
-    map: &WorldMap,
-    layout: &MapLayout,
-    board: &Board,
-    op: Option<&Operation>,
-    message: Option<&str>,
-    color: ColorMode,
-) -> io::Result<()> {
+fn draw(screen: &Screen, map: &WorldMap, layout: &MapLayout, game: &Game, message: Option<&str>, color: ColorMode) -> io::Result<()> {
+    let board = game.board();
+    let op = game.operation();
     let canvas = match screen {
         Screen::World { selected } => render_world_map(map, layout, board, Some(*selected), op),
         Screen::Region { region, selected } => render_region(map, layout, board, *region, Some(*selected), op),

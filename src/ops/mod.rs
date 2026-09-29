@@ -29,6 +29,10 @@ use crate::map::WorldMap;
 /// Whichever ops-spending operation is currently open, if any — the
 /// shared handle every view and every REPL command reads through rather
 /// than matching on the concrete type itself.
+///
+/// `Clone` (like [`Board`]'s own) is cheap and exists for the same
+/// reason: a [`crate::game::Game`] needs to be clonable for AI lookahead.
+#[derive(Clone)]
 pub enum Operation {
     Influence(InfluencePlacement),
     Realign(Realignment),
