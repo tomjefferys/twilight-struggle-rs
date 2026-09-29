@@ -103,7 +103,34 @@ Operations, scoring, etc.) haven't been built yet.
   — and is cheap to `Clone`, which is the whole point: nothing in this
   module touches a terminal, so it's the complete surface a future AI
   opponent drives, and lookahead means cloning a `Game` to try a line of
-  play without touching the real one.
+  play without touching the real one. `Game::lookahead` clones status,
+  board, and open operation like `Clone` does, but starts the copy's log
+  empty, since the log is the one field whose size isn't bounded and a
+  search cloning many nodes shouldn't drag a growing history through every
+  branch it never plays out.
+- **`log`** (`src/log.rs`) — `GameLog`, the game's append-only history, a
+  `Vec<LogEntry>` built up entirely inside `Game` — the one place every
+  mutation already funnels through — so the REPL and `interactive.rs` are
+  both covered without either having to remember to log anything. Every
+  operation closes with an `Event::Closed` entry (pushed from
+  `confirm`/`cancel`, stamped with the turn/AR/side *before* `advance`
+  runs) naming the operation kind and its final ops balance — a
+  realignment's or coup's dice already have their own entries by then
+  (`Event::Realign`/`Event::Coup`, pushed the instant `Game::roll`
+  resolves, since a roll is irreversible the moment it happens), and an
+  influence placement's points get the same treatment: `Event::Placed`,
+  pushed by `log_close` immediately before `Closed`, the placement
+  analogue of a resolved roll (omitted entirely if nothing was placed, the
+  same way zero rolls simply mean zero `Event::Realign` entries) — so
+  `log`/`export` show `confirm`/`cancel` as its own line for every
+  operation kind, never merged onto the line reporting what happened.
+  `Event::Pass` covers `Game::pass`. `Game::board_mut` is the one mutator
+  `Game` can't observe by itself (`set`/`add`/`remove` in `main.rs` bypass
+  the operation system entirely), so `Game::record_edit` and
+  `Game::record_note` exist for a caller to report an edit or an
+  annotation (e.g. `load demo` resetting the board) explicitly. This
+  module holds no formatting and touches no map — the same split `ops/`
+  keeps between rules and display.
 - **`render`** (`src/render/`) — every view is a pure function
   `(WorldMap, MapLayout, Board, ...) -> Canvas`; nothing in this module
   touches the terminal directly, which keeps every view snapshot-testable.
@@ -119,6 +146,17 @@ Operations, scoring, etc.) haven't been built yet.
     long list of hand-tuned fixes, so a future adjustment doesn't have to
     start from scratch.
   - `country.rs` — a single country's detail view.
+  - `log.rs` — turns a `GameLog` into text: `log_entry_line` is the
+    canonical rendering of one entry, fixed-column and tagged so a roll's
+    numbers can't be mistaken for each other (`d6:` only ever the actual
+    die; `mod:`/`ops:`/`target:`/`sum:` label everything else by where it
+    came from — a bare `4+4=8` doesn't say which 4 was rolled).
+    `log_text` joins a header plus every `log_entry_line` into the exact
+    string `export` writes to a file; `render_log` draws the same lines
+    into a `Canvas`, coloured by side (`Color::Us`/`Color::Ussr`, `Muted`
+    for a debug edit or note) — `render_log(..).render(ColorMode::Never)`
+    is byte-identical to `log_text`, so the on-screen `log` command and
+    the exported file are guaranteed to be one format, not two.
 
   `render_region` and `render_world_map` both take an optional
   `&Operation` (`region.rs`/`worldmap.rs`); `render_country` takes one
@@ -157,10 +195,17 @@ Operations, scoring, etc.) haven't been built yet.
   `status` reports the turn/AR/active side and the open operation's
   balance. Either way, `set`/`add`/`remove`/`load` are refused while a
   session (`Game::operation()`) is open, since they'd shift the board an
-  operation was judged legal against. `--seed <n>` (or the REPL's
-  `seed <n>`) controls `Session.dice`, which stays outside `Game` so it
-  can be seeded independently and so `Game::roll` stays deterministic
-  given its inputs.
+  operation was judged legal against; when they do run, they call
+  `Game::record_edit`/`record_note` themselves, since `Game::board_mut`
+  can't observe what a caller does with it. `log [n]` (or `history`)
+  prints the game's history so far, or just the last `n` entries, via
+  `render::render_log`; `export <path>` writes it to a file as plain text
+  via `render::log_text` — the same bytes `log` shows, minus colour — and
+  is the crate's first use of `std::fs`, since every other data file is
+  `include_str!`-embedded rather than read or written at runtime.
+  `--seed <n>` (or the REPL's `seed <n>`) controls `Session.dice`, which
+  stays outside `Game` so it can be seeded independently and so
+  `Game::roll` stays deterministic given its inputs.
 - **`interactive.rs`** — the terminal-driving code for `worldmap`/`wm`
   when run interactively (a real TTY, not one-shot mode): raw mode, the
   alternate screen, and the arrow/Enter/Esc event loop. On the world map

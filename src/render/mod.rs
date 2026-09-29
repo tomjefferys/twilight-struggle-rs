@@ -8,11 +8,13 @@
 //! later) entirely outside this module.
 
 pub mod country;
+pub mod log;
 pub mod region;
 pub mod world;
 pub mod worldmap;
 
 pub use country::render_country;
+pub use log::{log_entry_line, log_text, render_log};
 pub use region::render_region;
 pub use world::render_world;
 pub use worldmap::render_world_map;

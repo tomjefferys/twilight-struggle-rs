@@ -25,6 +25,7 @@ use std::fmt;
 use crate::board::Board;
 use crate::country::{CountryId, Superpower};
 use crate::dice::Dice;
+use crate::log::{Event, GameLog, LogEntry};
 use crate::map::WorldMap;
 use crate::ops::{
     CoupError, InfluencePlacement, Operation, PlacementError, RealignError, Realignment, RollResult,
@@ -122,16 +123,59 @@ pub struct Game {
     status: GameStatus,
     board: Board,
     op: Option<Operation>,
+    log: GameLog,
 }
 
 impl Game {
-    /// Starts from a scenario's status and board, with no operation open.
+    /// Starts from a scenario's status and board, with no operation open
+    /// and an empty history.
     pub fn from_scenario(scenario: &Scenario) -> Self {
-        Game { status: scenario.status, board: scenario.board.clone(), op: None }
+        Game { status: scenario.status, board: scenario.board.clone(), op: None, log: GameLog::new() }
     }
 
     pub fn status(&self) -> &GameStatus {
         &self.status
+    }
+
+    /// The game's history so far.
+    pub fn log(&self) -> &GameLog {
+        &self.log
+    }
+
+    /// Records a `set`/`add`/`remove`-style debug edit made through
+    /// [`Game::board_mut`], which — unlike every other mutator here —
+    /// bypasses the operation system entirely and so cannot be observed
+    /// by `Game` itself. Callers should read the country's influence
+    /// before and after their edit and report both.
+    pub fn record_edit(&mut self, country: CountryId, side: Superpower, before: u8, after: u8) {
+        self.log.push(LogEntry {
+            turn: self.status.turn,
+            action_round: self.status.action_round,
+            side: None,
+            event: Event::Edit { country, side, before, after },
+        });
+    }
+
+    /// Records a free-text annotation with no side and no board effect of
+    /// its own — e.g. reloading a scenario, which resets the board out
+    /// from under whatever history came before it.
+    pub fn record_note(&mut self, text: impl Into<String>) {
+        self.log.push(LogEntry {
+            turn: self.status.turn,
+            action_round: self.status.action_round,
+            side: None,
+            event: Event::Note(text.into()),
+        });
+    }
+
+    /// A copy for AI lookahead: same status, board, and open operation,
+    /// but an empty history. `Game` is cheap to clone by design (see the
+    /// module doc), and the log is the one field whose size isn't
+    /// bounded — a search that clones many nodes should use this instead
+    /// of [`Clone::clone`], so lookahead doesn't drag a growing `Vec`
+    /// through every branch it never plays out.
+    pub fn lookahead(&self) -> Game {
+        Game { status: self.status, board: self.board.clone(), op: self.op.clone(), log: GameLog::new() }
     }
 
     /// The committed board — never the speculative one. This is what a
@@ -219,12 +263,19 @@ impl Game {
     /// back. Doesn't advance the turn; only [`Game::confirm`],
     /// [`Game::cancel`], and [`Game::pass`] do that.
     pub fn roll(&mut self, map: &WorldMap, id: CountryId, dice: &mut Dice) -> Result<RollOutcome, GameError> {
-        match &mut self.op {
-            Some(Operation::Realign(r)) => Ok(RollOutcome::Realign(r.roll(map, &mut self.board, id, dice)?)),
-            Some(Operation::Coup(c)) => Ok(RollOutcome::Coup(c.attempt(map, &mut self.board, id, dice)?)),
-            Some(op) => Err(GameError::WrongKind { open: op.verb() }),
-            None => Err(GameError::NoOperation),
-        }
+        let side = self.status.active;
+        let outcome = match &mut self.op {
+            Some(Operation::Realign(r)) => RollOutcome::Realign(r.roll(map, &mut self.board, id, dice)?),
+            Some(Operation::Coup(c)) => RollOutcome::Coup(c.attempt(map, &mut self.board, id, dice)?),
+            Some(op) => return Err(GameError::WrongKind { open: op.verb() }),
+            None => return Err(GameError::NoOperation),
+        };
+        let event = match outcome {
+            RollOutcome::Realign(result) => Event::Realign(result),
+            RollOutcome::Coup(result) => Event::Coup(result),
+        };
+        self.log.push(LogEntry { turn: self.status.turn, action_round: self.status.action_round, side: Some(side), event });
+        Ok(outcome)
     }
 
     /// Takes back the single most recently placed influence point,
@@ -255,6 +306,7 @@ impl Game {
         if let Operation::Influence(p) = &op {
             self.board = p.board().clone();
         }
+        self.log_close(&op, true);
         self.advance();
         Ok(op)
     }
@@ -265,6 +317,7 @@ impl Game {
     /// the other side.
     pub fn cancel(&mut self) -> Result<Operation, GameError> {
         let op = self.op.take().ok_or(GameError::NoOperation)?;
+        self.log_close(&op, false);
         self.advance();
         Ok(op)
     }
@@ -275,8 +328,44 @@ impl Game {
         if let Some(op) = &self.op {
             return Err(GameError::OperationOpen { verb: op.verb(), remaining: op.remaining(), total: op.ops_total() });
         }
+        self.log.push(LogEntry {
+            turn: self.status.turn,
+            action_round: self.status.action_round,
+            side: Some(self.status.active),
+            event: Event::Pass,
+        });
         self.advance();
         Ok(())
+    }
+
+    /// Pushes the log entry (entries, for a placement) for a closing
+    /// operation — called from `confirm`/`cancel` *before* [`Game::advance`],
+    /// so they carry the turn/AR the operation actually happened in, not
+    /// the next one.
+    fn log_close(&mut self, op: &Operation, committed: bool) {
+        let turn = self.status.turn;
+        let action_round = self.status.action_round;
+        let side = Some(op.side());
+        let mut push = |event| self.log.push(LogEntry { turn, action_round, side, event });
+
+        let (kind, rolls, ops_spent, ops_total) = match op {
+            Operation::Influence(p) => {
+                // The placement analogue of a resolved roll: its own entry,
+                // pushed just before the `Closed` line below — mirroring
+                // how a realignment's or coup's rolls already have their
+                // own entries by the time `Closed` is pushed. Omitted
+                // entirely if nothing was placed, the same way zero rolls
+                // simply mean zero `Event::Realign` entries.
+                let countries = p.pending_countries();
+                if !countries.is_empty() {
+                    push(Event::Placed { countries });
+                }
+                (OperationKind::Influence, 0, p.ops_spent(), p.ops_total())
+            }
+            Operation::Realign(r) => (OperationKind::Realign, r.history().len() as u8, r.ops_spent(), r.ops_total()),
+            Operation::Coup(c) => (OperationKind::Coup, c.result().is_some() as u8, c.ops_spent(), c.ops_total()),
+        };
+        push(Event::Closed { kind, committed, rolls, ops_spent, ops_total });
     }
 
     /// Hands the turn to the other side: USSR to USA, or USA to USSR —
@@ -465,5 +554,115 @@ mod tests {
         assert_eq!(game.active(), Ussr);
         game.confirm().unwrap();
         assert_eq!(game.active(), Us);
+    }
+
+    #[test]
+    fn a_scripted_sequence_produces_the_expected_log_entries_in_order() {
+        let map = map();
+        let mut game = Game::from_scenario(&Scenario::from_json(&map, "{}").unwrap());
+        let poland = id(&map, "Poland");
+
+        game.begin(OperationKind::Influence).unwrap(); // USSR
+        game.place(&map, poland).unwrap();
+        game.place(&map, poland).unwrap();
+        game.confirm().unwrap(); // -> US
+
+        let mut dice = Dice::from_seed(0);
+        game.begin(OperationKind::Realign).unwrap(); // US
+        game.roll(&map, poland, &mut dice).unwrap();
+        game.cancel().unwrap(); // -> USSR
+
+        game.pass().unwrap(); // USSR -> US
+
+        let events: Vec<_> = game.log().entries().iter().map(|e| &e.event).collect();
+        assert!(matches!(events[0], Event::Placed { .. }));
+        assert!(matches!(events[1], Event::Closed { kind: OperationKind::Influence, committed: true, .. }));
+        assert!(matches!(events[2], Event::Realign(_)));
+        assert!(matches!(events[3], Event::Closed { kind: OperationKind::Realign, committed: false, .. }));
+        assert!(matches!(events[4], Event::Pass));
+        assert_eq!(events.len(), 5);
+    }
+
+    #[test]
+    fn a_confirm_entry_carries_the_turn_and_side_it_actually_happened_in() {
+        let map = map();
+        let json = r#"{"status":{"turn":1,"action_round":2,"action_rounds_per_turn":2}}"#;
+        let mut game = Game::from_scenario(&Scenario::from_json(&map, json).unwrap());
+
+        game.begin(OperationKind::Influence).unwrap();
+        game.confirm().unwrap(); // USSR -> US, rolls the turn over on the *next* US confirm
+
+        let entry = &game.log().entries()[0];
+        assert_eq!(entry.turn, 1);
+        assert_eq!(entry.action_round, 2);
+        assert_eq!(entry.side, Some(Ussr));
+        // advance() has already run, so status has moved on from what the entry recorded.
+        assert_eq!(game.active(), Us);
+    }
+
+    #[test]
+    fn a_cancelled_placement_gets_its_own_placed_line_and_a_cancel_line() {
+        let map = map();
+        let poland = id(&map, "Poland");
+        let mut game = Game::from_scenario(&Scenario::from_json(&map, "{}").unwrap());
+        game.begin(OperationKind::Influence).unwrap();
+        game.place(&map, poland).unwrap();
+        game.cancel().unwrap();
+
+        let entries = game.log().entries();
+        assert_eq!(entries.len(), 2);
+        match &entries[0].event {
+            Event::Placed { countries } => assert_eq!(countries, &vec![(poland, 1)]),
+            other => panic!("expected a Placed event, got {other:?}"),
+        }
+        assert!(matches!(
+            entries[1].event,
+            Event::Closed { kind: OperationKind::Influence, committed: false, .. }
+        ));
+        assert_eq!(game.board().influence(poland, Ussr), 0);
+    }
+
+    #[test]
+    fn an_immediately_cancelled_placement_with_nothing_placed_has_no_placed_line() {
+        let map = map();
+        let mut game = Game::from_scenario(&Scenario::from_json(&map, "{}").unwrap());
+        game.begin(OperationKind::Influence).unwrap();
+        game.cancel().unwrap();
+
+        let entries = game.log().entries();
+        assert_eq!(entries.len(), 1);
+        assert!(matches!(
+            entries[0].event,
+            Event::Closed { kind: OperationKind::Influence, committed: false, .. }
+        ));
+    }
+
+    #[test]
+    fn a_realignment_roll_is_logged_before_the_operation_closes() {
+        let map = map();
+        let poland = id(&map, "Poland");
+        let mut game = Game::from_scenario(&scenario_with(&map, "Poland", 1, 0));
+        let mut dice = Dice::from_seed(0);
+        game.begin(OperationKind::Realign).unwrap();
+        game.roll(&map, poland, &mut dice).unwrap();
+
+        assert_eq!(game.log().len(), 1);
+        assert!(matches!(game.log().entries()[0].event, Event::Realign(_)));
+
+        game.confirm().unwrap();
+        assert_eq!(game.log().len(), 2);
+    }
+
+    #[test]
+    fn lookahead_clones_state_but_starts_with_an_empty_log() {
+        let map = map();
+        let mut game = Game::from_scenario(&Scenario::from_json(&map, "{}").unwrap());
+        game.pass().unwrap();
+        assert_eq!(game.log().len(), 1);
+
+        let ahead = game.lookahead();
+        assert!(ahead.log().is_empty());
+        assert_eq!(ahead.status(), game.status());
+        assert_eq!(ahead.active(), game.active());
     }
 }
