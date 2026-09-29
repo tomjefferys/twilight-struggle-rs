@@ -212,6 +212,10 @@ impl std::error::Error for RealignError {}
 /// An open realignment action: ops still to spend, plus the log of
 /// every roll this action has already resolved. Holds **no speculative
 /// board** — see the module doc for why.
+///
+/// `Clone` (like [`Board`]'s own) is cheap and exists for the same
+/// reason: a [`crate::game::Game`] needs to be clonable for AI lookahead.
+#[derive(Clone)]
 pub struct Realignment {
     side: Superpower,
     ops_total: u8,

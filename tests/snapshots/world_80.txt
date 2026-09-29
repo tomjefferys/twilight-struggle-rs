@@ -1,4 +1,4 @@
-  TURN 5   AR 3/7   DEFCON 3   VP US +4   Space US 4 USSR 2   MilOps US 2 USSR 3
+  TURN 5   AR 3/7 (USSR)   DEFCON 3   VP US +4   Space US 4 USSR 2   MilOps US 2
 
 ┌ Europe  bg 3-2  ctry 7-5 ───────────────────────────────────────┐
 │  Norway    2:-   Sweden    -:-   Finland   -:1   Canada    2:-  │
