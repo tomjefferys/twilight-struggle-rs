@@ -1,6 +1,7 @@
+use std::fs;
 use std::io::{self, IsTerminal, Write};
 
-use twilight_struggle::render::{coup_result_line, operation_balance_line, render_country, render_region, render_world, render_world_map, roll_result_line};
+use twilight_struggle::render::{coup_result_line, log_text, operation_balance_line, render_country, render_log, render_region, render_world, render_world_map, roll_result_line};
 use twilight_struggle::{ColorMode, Dice, Found, Game, GameError, MapLayout, Operation, OperationKind, Region, RollOutcome, Scenario, Superpower, WorldMap, OPS_PER_ACTION_ROUND};
 
 mod interactive;
@@ -200,12 +201,15 @@ fn run_command(session: &mut Session, line: &str) {
             };
             match session.map.find(country_query) {
                 Found::One(id) => {
+                    let before = session.game.board().influence(id, superpower);
                     match cmd {
                         "set" => session.game.board_mut().set_influence(id, superpower, amount),
                         "add" => session.game.board_mut().add_influence(id, superpower, amount),
                         "remove" => session.game.board_mut().remove_influence(id, superpower, amount),
                         _ => unreachable!(),
                     }
+                    let after = session.game.board().influence(id, superpower);
+                    session.game.record_edit(id, superpower, before, after);
                     println!(
                         "{}  US {}  USSR {}",
                         session.map.country(id).name,
@@ -225,6 +229,7 @@ fn run_command(session: &mut Session, line: &str) {
             if words.get(1) == Some(&"demo") {
                 let scenario = Scenario::demo(&session.map).expect("demo scenario should be valid");
                 session.game = Game::from_scenario(&scenario);
+                session.game.record_note("loaded the demo scenario");
                 println!("loaded demo scenario");
             } else {
                 println!("usage: load demo");
@@ -240,6 +245,8 @@ fn run_command(session: &mut Session, line: &str) {
         "cancel" => run_cancel_command(session),
         "status" => run_status_command(session),
         "pass" => run_pass_command(session),
+        "log" | "history" => run_log_command(session, &words),
+        "export" => run_export_command(session, &words),
         "seed" => match words.get(1).and_then(|s| s.parse().ok()) {
             Some(s) => {
                 session.dice = Dice::from_seed(s);
@@ -561,6 +568,36 @@ fn run_pass_command(session: &mut Session) {
     }
 }
 
+/// `log` prints the whole history, colour-banded by side; `log <n>` shows
+/// only the last `n` entries. Reads the log at any time, including mid-
+/// operation — the in-progress operation simply isn't in it yet, which is
+/// correct, since nothing about it is final until `confirm`/`cancel`.
+fn run_log_command(session: &Session, words: &[&str]) {
+    if session.game.log().is_empty() {
+        println!("no history yet");
+        return;
+    }
+    let tail = words.get(1).and_then(|s| s.parse().ok());
+    let canvas = render_log(&session.map, session.game.log(), tail);
+    println!("{}", canvas.render(session.color));
+}
+
+/// `export <path>` writes the whole history to `path` as plain text —
+/// exactly what `log` shows, minus colour. Refuses nothing: the log is
+/// readable (and exportable) regardless of whether an operation is open.
+fn run_export_command(session: &Session, words: &[&str]) {
+    let Some(&path) = words.get(1) else {
+        println!("usage: export <path>");
+        return;
+    };
+    let mut text = log_text(&session.map, session.game.log());
+    text.push('\n');
+    match fs::write(path, text) {
+        Ok(()) => println!("wrote {} entries to {path}", session.game.log().len()),
+        Err(e) => println!("could not write {path}: {e}"),
+    }
+}
+
 fn parse_superpower(s: &str) -> Option<Superpower> {
     match s.to_lowercase().as_str() {
         "us" | "usa" => Some(Superpower::Us),
@@ -653,6 +690,14 @@ Commands:
                           interactive mode — + place / r roll or coup,
                           u undo, c confirm, X cancel; set/add/remove/load
                           are refused until you confirm or cancel)
+
+  log [n], history        the game's history so far (or just the last n
+                          entries), colour-banded by side; a realignment
+                          or coup roll appears the instant it resolves, a
+                          placement as one entry when it's confirmed or
+                          cancelled
+  export <path>           write the history to a file as plain text —
+                          exactly what `log` shows, minus colour
 
   seed <n>                reseed the dice (for reproducible play)
   width <n>               set the render width
