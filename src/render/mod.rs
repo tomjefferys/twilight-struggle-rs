@@ -80,6 +80,18 @@ pub enum ColorMode {
     Never,
 }
 
+/// Whether a view is being drawn once into scrollback (`Static`, the REPL's
+/// one-shot commands) or redrawn every keypress by [`crate::interactive`]
+/// (`Interactive`). The only view that reads this today is
+/// [`country::render_country`], which draws a key-hint row under
+/// `Interactive` and omits it under `Static` — there's nothing to hint at
+/// in a view that isn't listening for keys.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ViewMode {
+    Static,
+    Interactive,
+}
+
 /// Resolves a [`Style`] to an ANSI SGR sequence.
 struct Theme;
 
@@ -185,6 +197,24 @@ impl Canvas {
     /// invisible.
     pub fn draw_thick_box(&mut self, row: usize, col: usize, w: usize, h: usize, style: Style) {
         self.draw_box_glyphs(row, col, w, h, style, ['┏', '┓', '┗', '┛', '━', '┃']);
+    }
+
+    /// A `├── Title ───┤` row inside an existing box: the section
+    /// separator the country view's panels are built from. `title` is
+    /// written two columns in, with a space either side; passing `""`
+    /// draws a plain rule with no label.
+    pub fn draw_divider(&mut self, row: usize, col: usize, w: usize, title: &str, style: Style) {
+        if w < 2 {
+            return;
+        }
+        self.put_char(row, col, '├', style);
+        self.put_char(row, col + w - 1, '┤', style);
+        for c in (col + 1)..(col + w - 1) {
+            self.put_char(row, c, '─', style);
+        }
+        if !title.is_empty() {
+            self.put(row, col + 2, &format!(" {title} "), style);
+        }
     }
 
     fn draw_box_glyphs(&mut self, row: usize, col: usize, w: usize, h: usize, style: Style, glyphs: [char; 6]) {
@@ -295,6 +325,25 @@ pub(crate) fn nz(value: u8) -> String {
     }
 }
 
+/// Writes a box's top-border title pair: `left` two columns in with a
+/// space either side, `right` the same way flush to the border's right
+/// edge — the `┌─ * Poland ─────────── Europe · stability 3 ─┐` pattern
+/// the country view's outer box uses, matching the space padding
+/// [`Canvas::draw_divider`] already gives its own titles. Each half keeps
+/// its own style (the name is bolded, or battleground-coloured; the
+/// region/stability half stays plain) — both are written directly over
+/// the border characters `draw_box`/`draw_thick_box` already drew there,
+/// leaving the dash immediately after the corner untouched on each side.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn put_border_title(canvas: &mut Canvas, row: usize, col: usize, left: &str, left_style: Style, right: &str, right_style: Style, w: usize) {
+    canvas.put(row, col + 2, &format!(" {left} "), left_style);
+    if !right.is_empty() {
+        let text = format!(" {right} ");
+        let start = (col + w).saturating_sub(2 + text.chars().count());
+        canvas.put(row, start, &text, right_style);
+    }
+}
+
 /// The control-marker glyph: `<` for US, `>` for USSR, `:` for contested —
 /// doubling as the separator between the two influence numbers.
 pub(crate) fn control_glyph(controller: Option<crate::country::Superpower>) -> char {
@@ -319,8 +368,23 @@ pub(crate) fn control_glyph(controller: Option<crate::country::Superpower>) -> c
 /// influence (a later roll there went the other way) gets that named
 /// too; a pure tie reads as "tied" rather than a bare `+0`.
 pub fn operation_balance_line(layout: &crate::layout::MapLayout, board: &crate::board::Board, op: &crate::ops::Operation) -> String {
+    format!("{} · {}", operation_header(op), operation_touched_line(layout, board, op))
+}
+
+/// The side/verb/ops-remaining half of [`operation_balance_line`] on its
+/// own — the country view's Operation panel uses this as its title and
+/// draws [`operation_touched_line`] as a row inside instead of gluing the
+/// two together on one line the way the region and world-map footers do.
+pub fn operation_header(op: &crate::ops::Operation) -> String {
+    format!("{} {} · {} of {} ops left", op.side(), op.verb(), op.remaining(), op.ops_total())
+}
+
+/// The "where has this operation acted so far" half of
+/// [`operation_balance_line`] on its own. See that function's own doc for
+/// what each operation kind's per-country summary says.
+pub fn operation_touched_line(layout: &crate::layout::MapLayout, board: &crate::board::Board, op: &crate::ops::Operation) -> String {
     let touched = op.touched();
-    let where_touched = if touched.is_empty() {
+    if touched.is_empty() {
         "nothing yet".to_string()
     } else {
         touched
@@ -328,14 +392,7 @@ pub fn operation_balance_line(layout: &crate::layout::MapLayout, board: &crate::
             .map(|&id| touched_country_summary(layout, board, op, id))
             .collect::<Vec<_>>()
             .join(", ")
-    };
-    format!(
-        "{} {} · {} of {} ops left · {where_touched}",
-        op.side(),
-        op.verb(),
-        op.remaining(),
-        op.ops_total(),
-    )
+    }
 }
 
 fn touched_country_summary(

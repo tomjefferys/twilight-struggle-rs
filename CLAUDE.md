@@ -145,7 +145,27 @@ Operations, scoring, etc.) haven't been built yet.
     projection warp, region-colour tinting) and the reasoning behind a
     long list of hand-tuned fixes, so a future adjustment doesn't have to
     start from scratch.
-  - `country.rs` — a single country's detail view.
+  - `country.rs` — a single country's detail view, drawn as a titled box
+    with up to three panels: Country (influence, control, sub-regions),
+    Neighbours (one line each, plus a `+1 realign` marker on whichever
+    ones are supplying a realignment's `adjacent_controlled` modifier),
+    and — only while an operation is open — Operation, showing exactly
+    what the region footer's own breakdown shows (a placement's cost and
+    pending count; a realignment's per-side modifiers and odds; a coup's
+    target number and odds), titled with `operation_header` and its first
+    row always `operation_touched_line`. `render_country` takes a
+    `MapLayout` (for that touched-line and `short_name`) and a `ViewMode`
+    (`Static`/`Interactive`) that gates a key-hint row below the box —
+    `Static` for the REPL's one-shot prints, `Interactive` for the
+    screen `interactive.rs` opens. Like `region.rs`/`worldmap.rs`, it
+    opens by substituting `op.board()` when the operation has a
+    speculative one, so a placement's pending influence shows here too.
+    Every panel but Neighbours' own influence readouts is built as a
+    `Vec<(String, Style)>` before drawing, mirroring `region.rs`'s
+    `build_footer_lines`; two small `Canvas` primitives exist for this
+    layout specifically — `draw_divider` for the `├─ Title ─┤` rows
+    between panels, and the free function `put_border_title` for the
+    outer box's own `┌─ * Poland ─── Europe · stability 3 ─┐` top border.
   - `log.rs` — turns a `GameLog` into text: `log_entry_line` is the
     canonical rendering of one entry, fixed-column and tagged so a roll's
     numbers can't be mistaken for each other (`d6:` only ever the actual
@@ -158,24 +178,29 @@ Operations, scoring, etc.) haven't been built yet.
     is byte-identical to `log_text`, so the on-screen `log` command and
     the exported file are guaranteed to be one format, not two.
 
-  `render_region` and `render_world_map` both take an optional
-  `&Operation` (`region.rs`/`worldmap.rs`); `render_country` takes one
-  too. `None` reproduces the plain view byte-for-byte (every
-  `render_world` call, and every static call with no session open);
-  `Some` swaps in the operation's speculative board where it has one
-  (`Operation::board()` — placement does, realignment and coup don't,
-  since their rolls are already on the real board), adds a `+N`/`-N` net
-  badge (region) or turns a chip's flag into `+`/`!`/`#` for
-  placement/realignment/coup (world map), dims an illegal target (region
-  only), and appends an `operation_balance_line` footer. A realignment
-  additionally adds, once a country is also selected, that country's
-  modifier breakdown for both sides and its odds (`modifier_line`/
-  `odds_line`, shared with `render_country`'s own panel and the REPL's
-  `roll` output); a coup adds its target number and success odds instead
-  (`coup_target_line`/`coup_odds_line`) — no per-side modifiers to
-  itemise. Both `region.rs` and `worldmap.rs` build their footer as one
-  `Vec<(String, Style)>` before drawing, so the row count and the draw
-  loop can't drift apart the way hand-maintained parallel tallies could.
+  `render_region`, `render_world_map`, and `render_country` all take an
+  optional `&Operation` (`region.rs`/`worldmap.rs`/`country.rs`). `None`
+  reproduces the plain view byte-for-byte (every `render_world` call, and
+  every static call with no session open); `Some` swaps in the
+  operation's speculative board where it has one (`Operation::board()` —
+  placement does, realignment and coup don't, since their rolls are
+  already on the real board), adds a `+N`/`-N` net badge (region) or
+  turns a chip's flag into `+`/`!`/`#` for placement/realignment/coup
+  (world map), dims an illegal target (region only), and shows the
+  operation's balance — `operation_balance_line` as one footer line
+  (region, world map, and `main.rs`'s dashboard banner), or split into
+  `operation_header` (a panel title) and `operation_touched_line` (its
+  first row) on the country view, which has room to give the balance a
+  panel of its own instead of gluing it into one line. A realignment
+  additionally adds, once a country is also selected (region) or is the
+  one being viewed (country), that country's modifier breakdown for both
+  sides and its odds (`modifier_line`/`odds_line`, shared by both views
+  and the REPL's `roll` output); a coup adds its target number and
+  success odds instead (`coup_target_line`/`coup_odds_line`) — no
+  per-side modifiers to itemise. All three views build their footer or
+  panels as `Vec<(String, Style)>` before drawing, so the row count and
+  the draw loop can't drift apart the way hand-maintained parallel
+  tallies could.
 - **`main.rs`** — a REPL (`cargo run`) plus one-shot mode
   (`cargo run -- <command>`). Type `help` inside the REPL for the command
   list. `Session` holds a `Game` (`src/game.rs`), so turns are enforced
@@ -208,13 +233,20 @@ Operations, scoring, etc.) haven't been built yet.
   `Game::roll` stays deterministic given its inputs.
 - **`interactive.rs`** — the terminal-driving code for `worldmap`/`wm`
   when run interactively (a real TTY, not one-shot mode): raw mode, the
-  alternate screen, and the arrow/Enter/Esc event loop. On the world map
-  it moves a `Region` selection (`Region::step`, in `country.rs`); Enter
-  zooms into `render_region`, where arrow keys move a country selection
-  on that region's display grid instead (`MapLayout::step_country`, in
+  alternate screen, and the arrow/Enter/Esc event loop over three screens
+  (`Screen::World`/`Region`/`Country`). On the world map it moves a
+  `Region` selection (`Region::step`, in `country.rs`); Enter zooms into
+  `render_region`, where arrow keys move a country selection on that
+  region's display grid instead (`MapLayout::step_country`, in
   `layout.rs` — a nearest-in-that-direction search over `Cell` positions,
   not a hand-written table, since the grids are sparse with interior
-  holes). Each region remembers its last-selected country across visits.
+  holes). From there, Enter *or* `r` opens that country's own detail
+  screen (`render_country`, `ViewMode::Interactive`) — the region screen
+  no longer rolls or attempts a coup directly; it only gets you to the
+  country screen, where the full modifier/odds calculation is on screen
+  above the key that resolves it. Each region remembers its last-selected
+  country across visits, and the country screen carries the same
+  selection back to `Region` on `Esc`.
   `run` takes `&mut Game` (not a bare `Board`/`Option<Operation>`), so
   every key handler goes through it and turns stay enforced here too: `c`
   confirms/closes the open operation via `Game::confirm` and `X`
@@ -222,11 +254,13 @@ Operations, scoring, etc.) haven't been built yet.
   the other side, which is also why interactive mode itself still can't
   *open* an operation (that stays a REPL-only `influence`/`realign`/`coup`, so
   there's no side to infer from a keypress alone). An `InfluencePlacement`
-  additionally binds `+`/`=` to place one point (region screen only) and
-  `u` to undo the last one, while a `Realignment` or `Coup` binds `r` to
-  roll (or attempt the coup) on the selected country instead (region
-  screen only, and not ending the turn) and `u` always refuses — a
-  resolved roll or attempt can't be taken back. `Esc`/`q` leave a
+  binds `+`/`=` to place one point and `u` to undo the last one on
+  *both* the region and country screens — placement is undoable, so it
+  never needs the country screen's confirmation step, and stays a fast,
+  stay-on-one-screen action from the region grid too. A `Realignment` or
+  `Coup`, by contrast, only binds `r` — to roll (or attempt the coup) on
+  the selected country — on the country screen, and `u` always refuses
+  there: a resolved roll or attempt can't be taken back. `Esc`/`q` leave a
   still-open session untouched rather than clearing it, so it can be
   resumed from the REPL or by reopening the map. `run`'s return value
   (`Outcome`) tells the REPL which of those happened. A roll's outcome
@@ -235,8 +269,8 @@ Operations, scoring, etc.) haven't been built yet.
   wants to keep reading.
   The only place in the crate that touches the terminal directly —
   everything it draws still comes from `render::render_world_map`/
-  `render_region`, which stay pure `Canvas` producers. Uses `crossterm`,
-  the one non-serde dependency.
+  `render_region`/`render_country`, which stay pure `Canvas` producers.
+  Uses `crossterm`, the one non-serde dependency.
 
 ## Data files (`data/`)
 
