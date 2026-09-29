@@ -170,12 +170,28 @@ Operations, scoring, etc.) haven't been built yet.
   touches the terminal directly, which keeps every view snapshot-testable.
   A `Canvas` only turns into a `String` via `.render(ColorMode)`.
   - `world.rs` — the six-region dashboard (`map`/`world` command).
+  - `chip.rs` — the shared country-box chip (flag, name, influence,
+    control glyph, `st<n>`, and the operation badge) and the connector
+    glyph drawn between two grid-adjacent chips (`ChipGrid::draw_edge`,
+    merging a `╲`/`╱` collision into `╳`), both placed at a pitch derived
+    from a caller-chosen chip width and anchored wherever a caller's own
+    cell space starts — `anchor` is a signed row/col pair rather than a
+    `Cell`, since the country view's mini-map centres on a cell that can
+    sit on a region grid's own top or left edge, one row/column short of
+    a real (non-negative) `Cell` to anchor on. Pulled out of `region.rs`
+    (below) once `country.rs`'s neighbourhood mini-map needed the
+    identical drawing at a different (wider, differently-anchored) pitch;
+    `ChipRole` (`Selected`/`Native`/`Foreign`) captures the three ways a
+    chip is styled — thick bright border, region-tinted,
+    region-tinted-but-never-dimmed — that both callers need.
   - `region.rs` — one region zoomed in, with real adjacency connectors
-    (`region <name>` / `1`-`6`). Every adjacency that leaves the region —
-    to another region's country, or to a superpower — is drawn too, as a
-    guest chip (`MapLayout::guests`): a foreign country tinted with
-    `region_color` for *its own* region (never thick-bordered, since a
-    guest can't be the selection, and never dimmed for operation
+    (`region <name>` / `1`-`6`), its chips drawn via `chip.rs` at
+    `REGION_CHIP_W` (`ChipRole::Selected`/`Native` for a native country,
+    `ChipRole::Foreign` for a guest). Every adjacency that leaves the
+    region — to another region's country, or to a superpower — is drawn
+    too, as a guest chip (`MapLayout::guests`): a foreign country tinted
+    with `region_color` for *its own* region (never thick-bordered, since
+    a guest can't be the selection, and never dimmed for operation
     illegality, since it isn't a target from this screen), or a
     superpower tinted like its own box and never selectable. This is what
     makes the whole map walkable by arrow keys alone without ever
@@ -191,26 +207,57 @@ Operations, scoring, etc.) haven't been built yet.
     long list of hand-tuned fixes, so a future adjustment doesn't have to
     start from scratch.
   - `country.rs` — a single country's detail view, drawn as a titled box
-    with up to three panels: Country (influence, control, sub-regions),
-    Neighbours (one line each, plus a `+1 realign` marker on whichever
-    ones are supplying a realignment's `adjacent_controlled` modifier),
-    and — only while an operation is open — Operation, showing exactly
-    what the region footer's own breakdown shows (a placement's cost and
-    pending count; a realignment's per-side modifiers and odds; a coup's
-    target number and odds), titled with `operation_header` and its first
-    row always `operation_touched_line`. `render_country` takes a
-    `MapLayout` (for that touched-line and `short_name`) and a `ViewMode`
-    (`Static`/`Interactive`) that gates a key-hint row below the box —
-    `Static` for the REPL's one-shot prints, `Interactive` for the
-    screen `interactive.rs` opens. Like `region.rs`/`worldmap.rs`, it
+    with up to three panels, each sized so navigating between countries
+    with arrow keys never moves the box's own borders — see each panel
+    below for how. Country (influence, control, sub-regions) always
+    reserves a sub-regions row, left blank for a country with none,
+    rather than only drawing it sometimes, so the box is the same height
+    whether or not the viewed country happens to have one. Neighbours —
+    a mini-map (`neighbourhood`), not a text list: the country itself as
+    its own centre chip (`ChipRole::Selected`) and each immediate
+    neighbour (`Country::adjacent`/`adjacent_superpowers`) placed, via
+    `chip.rs`, at whichever cell — native, or a guest cell in this
+    country's own region — is really grid-adjacent to it, the same
+    geometry `region.rs` draws a whole region's grid from. The mini-map
+    is a fixed 3×3 window of that grid centred on the viewed country
+    (`ChipGrid`'s `anchor` one row/column above-left of its own cell) —
+    every country's neighbours land within it, so the size never changes
+    and the country itself is always the middle chip, even sitting on a
+    region's own edge with no neighbour on one or more sides. Its chips
+    are sized off the longest country name in the *whole game* (not
+    `MapLayout::short_name` — this view has the room, and a neighbour
+    list previously named each one in full), not just whoever's actually
+    a neighbour here, so the box is exactly as wide for a country whose
+    neighbours have short names as one whose neighbours don't — what
+    changes while arrowing between countries is only which chips are
+    filled in, never their size. A neighbour is `ChipRole::Foreign`,
+    tinted by its own region exactly like a region view's guest chip, so
+    a neighbour in a different region reads as visibly foreign — and
+    where a chip sits is where this screen's own arrow keys go, since
+    both walk the same `MapLayout::step_country` geometry. Anything that
+    couldn't be placed this way (empty on the standard layout — see
+    `every_country_places_all_its_neighbours_on_the_country_view_grid` in
+    `tests/render.rs`) is footnoted below the grid, alongside — while a
+    realignment is open — which neighbours are supplying its
+    `adjacent_controlled` modifier (`+1 realign from …`; a chip has no
+    free stats-row slot left for that marker itself). Third,
+    only while an operation is open, Operation, showing exactly what the
+    region footer's own breakdown shows (a placement's cost and pending
+    count; a realignment's per-side modifiers and odds; a coup's target
+    number and odds), titled with `operation_header` and its first row
+    always `operation_touched_line`. `render_country` takes a `MapLayout`
+    (for that touched-line and the country/neighbour cells) and a
+    `ViewMode` (`Static`/`Interactive`) that gates a key-hint row below
+    the box — `Static` for the REPL's one-shot prints, `Interactive` for
+    the screen `interactive.rs` opens. Like `region.rs`/`worldmap.rs`, it
     opens by substituting `op.board()` when the operation has a
     speculative one, so a placement's pending influence shows here too.
-    Every panel but Neighbours' own influence readouts is built as a
-    `Vec<(String, Style)>` before drawing, mirroring `region.rs`'s
-    `build_footer_lines`; two small `Canvas` primitives exist for this
-    layout specifically — `draw_divider` for the `├─ Title ─┤` rows
-    between panels, and the free function `put_border_title` for the
-    outer box's own `┌─ * Poland ─── Europe · stability 3 ─┐` top border.
+    Every panel but the mini-map itself is built as a `Vec<(String,
+    Style)>` before drawing, mirroring `region.rs`'s `build_footer_lines`;
+    two small `Canvas` primitives exist for this layout specifically —
+    `draw_divider` for the `├─ Title ─┤` rows between panels, and the free
+    function `put_border_title` for the outer box's own
+    `┌─ * Poland ─── Europe · stability 3 ─┐` top border.
   - `log.rs` — turns a `GameLog` into text: `log_entry_line` is the
     canonical rendering of one entry, fixed-column and tagged so a roll's
     numbers can't be mistaken for each other (`d6:` only ever the actual
