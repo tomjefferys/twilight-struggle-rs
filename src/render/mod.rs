@@ -110,7 +110,12 @@ impl Theme {
             Color::Asia => Some("38;5;208"),
             Color::MiddleEast => Some("96"),
             Color::Africa => Some("33"),
-            Color::CentralAmerica => Some("92"),
+            // Bright green and plain green (the original pair) read as
+            // near-identical at a glance, especially tinting a whole
+            // region's worth of boxes at once — Central America moves to
+            // magenta, still a base-16 code like every other colour here
+            // except the two that need a 256-colour one (see above).
+            Color::CentralAmerica => Some("95"),
             Color::SouthAmerica => Some("32"),
             Color::Selected => Some("97"),
         };
@@ -313,6 +318,24 @@ pub(crate) fn region_tally(
     let ctry_ussr = ids.iter().filter(|&&id| board.is_controlled_by(map, id, Superpower::Ussr)).count();
 
     RegionTally { bg_us, bg_ussr, ctry_us, ctry_ussr }
+}
+
+/// The board colour for one of the six *Twilight Struggle* regions —
+/// matches that region's colour on the physical board, independent of any
+/// country's control state. Shared by the world map's landmass tint
+/// (`worldmap::zone_color`, which also covers the two superpower colours)
+/// and the region view's guest chips (`region::draw_guest_country_box`),
+/// so there's one `Region → Color` table rather than two drifting apart.
+pub(crate) fn region_color(region: crate::country::Region) -> Color {
+    use crate::country::Region;
+    match region {
+        Region::Europe => Color::Europe,
+        Region::Asia => Color::Asia,
+        Region::MiddleEast => Color::MiddleEast,
+        Region::Africa => Color::Africa,
+        Region::CentralAmerica => Color::CentralAmerica,
+        Region::SouthAmerica => Color::SouthAmerica,
+    }
 }
 
 /// `"-"` for zero, otherwise the number — so an occupied country stands out

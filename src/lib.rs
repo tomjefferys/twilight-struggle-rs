@@ -14,7 +14,7 @@ pub use board::{Board, Influence};
 pub use country::{Country, CountryId, Direction, Region, SubRegion, Superpower};
 pub use dice::Dice;
 pub use game::{Game, GameError, OperationKind, RollOutcome, OPS_PER_ACTION_ROUND};
-pub use layout::{Cell, LayoutError, MapLayout};
+pub use layout::{Cell, Guest, GuestEntity, LayoutError, LinkTarget, MapLayout, UndrawnLink};
 pub use log::{Event, GameLog, LogEntry};
 pub use map::{Found, MapError, WorldMap};
 pub use ops::{

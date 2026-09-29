@@ -6,7 +6,7 @@ use crate::layout::MapLayout;
 use crate::map::WorldMap;
 use crate::ops::Operation;
 
-use super::{operation_balance_line, region_tally, Canvas, Color, Style};
+use super::{operation_balance_line, region_color, region_tally, Canvas, Color, Style};
 
 /// Shown below the legend when a region is selected but no operation is
 /// in progress.
@@ -177,15 +177,11 @@ enum Zone {
 
 /// The board colour for a zone — a scoring region's matches the physical
 /// *Twilight Struggle* board, independent of any country's control state;
-/// a superpower's matches its own box.
+/// a superpower's matches its own box. The region half is `region_color`,
+/// shared with the region view's guest chips.
 fn zone_color(zone: Zone) -> Color {
     match zone {
-        Zone::Region(Region::Europe) => Color::Europe,
-        Zone::Region(Region::Asia) => Color::Asia,
-        Zone::Region(Region::MiddleEast) => Color::MiddleEast,
-        Zone::Region(Region::Africa) => Color::Africa,
-        Zone::Region(Region::CentralAmerica) => Color::CentralAmerica,
-        Zone::Region(Region::SouthAmerica) => Color::SouthAmerica,
+        Zone::Region(region) => region_color(region),
         Zone::Superpower(Superpower::Us) => Color::Us,
         Zone::Superpower(Superpower::Ussr) => Color::Ussr,
     }
