@@ -44,6 +44,26 @@ impl Cell {
     }
 }
 
+/// What a [`Guest`] chip stands for: a country whose own `region` is
+/// somewhere else, or a superpower.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GuestEntity {
+    Country(CountryId),
+    Superpower(Superpower),
+}
+
+/// A country or superpower drawn on a region's display grid even though
+/// it doesn't belong there — the region-view analogue of the world map's
+/// chips, placed so every cross-region and superpower adjacency is a real
+/// box you can step onto rather than a footnote below the grid.
+/// Coordinates share the host region's cell space, so a guest cell must
+/// not collide with a native one or another guest there.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Guest {
+    pub entity: GuestEntity,
+    pub cell: Cell,
+}
+
 /// A superpower's footprint on the world map: a labelled rectangle rather
 /// than a point, since USA and USSR each border several countries spread
 /// across regions — a sprawling track along the board's edge in the
@@ -71,7 +91,9 @@ pub enum LayoutError {
     MissingCountry(String),
     /// A layout entry names a country the map doesn't have.
     UnknownCountry(String),
-    /// Two countries in the same region were placed on the same cell.
+    /// Two countries in the same region were placed on the same cell — or
+    /// a guest chip collided with a native country's cell or another
+    /// guest's, in the region hosting it.
     DuplicateCell {
         region: Region,
         row: u8,
@@ -118,6 +140,26 @@ pub enum LayoutError {
         country: String,
         row: u8,
         col: u8,
+    },
+    /// A `guests` entry names neither a country nor a superpower, names
+    /// both, or names a country the map doesn't have.
+    UnknownGuest {
+        region: Region,
+        detail: String,
+    },
+    /// A `guests` entry names a country that's actually native to its own
+    /// host region — it belongs on the grid as a real box, not a guest.
+    GuestInOwnRegion {
+        region: Region,
+        country: String,
+    },
+    /// A guest cell in `region` isn't grid-adjacent to any native country
+    /// there that actually borders it — most likely a stale or mistyped
+    /// cell, since a guest that draws no connector isn't earning its
+    /// place on the grid.
+    UnusedGuest {
+        region: Region,
+        entity: String,
     },
 }
 
@@ -169,6 +211,17 @@ impl fmt::Display for LayoutError {
                 f,
                 "{country}'s world cell ({row}, {col}) falls outside the background art's bounds"
             ),
+            LayoutError::UnknownGuest { region, detail } => {
+                write!(f, "{region}'s guests: {detail}")
+            }
+            LayoutError::GuestInOwnRegion { region, country } => write!(
+                f,
+                "{country} is listed as a guest of {region}, which is already its own region"
+            ),
+            LayoutError::UnusedGuest { region, entity } => write!(
+                f,
+                "{entity}'s guest cell in {region} is not grid-adjacent to any country there that borders it"
+            ),
         }
     }
 }
@@ -198,11 +251,24 @@ struct RawSuperpowerBox {
     size: [u8; 2],
 }
 
+/// One `guests` list entry: exactly one of `country`/`superpower` names
+/// the entity, `cell` places it on the host region's grid.
+#[derive(Debug, Deserialize)]
+struct RawGuest {
+    #[serde(default)]
+    country: Option<String>,
+    #[serde(default)]
+    superpower: Option<Superpower>,
+    cell: [u8; 2],
+}
+
 #[derive(Debug, Deserialize)]
 struct RawLayout {
     region_order: Vec<Region>,
     superpowers: HashMap<Superpower, RawSuperpowerBox>,
     countries: HashMap<String, RawEntry>,
+    #[serde(default)]
+    guests: HashMap<Region, Vec<RawGuest>>,
 }
 
 #[derive(Debug, Clone)]
@@ -211,6 +277,26 @@ struct CountryLayout {
     short: String,
     code: String,
     world_cell: Cell,
+}
+
+/// The far end of an [`UndrawnLink`] — whatever a region-view grid failed
+/// to draw a connector for: another country, or a superpower.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LinkTarget {
+    Country(CountryId),
+    Superpower(Superpower),
+}
+
+/// An adjacency `region`'s display grid has no connector for: either two
+/// in-region countries too far apart on the grid to draw a line between,
+/// or a cross-region/superpower adjacency with no guest chip standing in
+/// for the far side. Every such link is still real; it's footnoted below
+/// the map instead.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct UndrawnLink {
+    pub region: Region,
+    pub from: CountryId,
+    pub to: LinkTarget,
 }
 
 /// Where each country is drawn: its region-view grid cell and its short
@@ -225,7 +311,8 @@ pub struct MapLayout {
     region_order: Vec<Region>,
     superpower_boxes: HashMap<Superpower, SuperpowerBox>,
     background: Vec<String>,
-    undrawn: Vec<(CountryId, CountryId)>,
+    guests: HashMap<Region, Vec<Guest>>,
+    undrawn: Vec<UndrawnLink>,
 }
 
 impl MapLayout {
@@ -298,6 +385,84 @@ impl MapLayout {
                 });
             }
             region_cells.insert((cell.row, cell.col), id);
+        }
+
+        // Resolve and validate `guests`: each entry names exactly one of
+        // a country or a superpower, a named country must not be native
+        // to the region hosting it as a guest, and no guest cell may
+        // collide with a native cell (checked against `seen` above) or
+        // another guest's in the same region.
+        let mut guests: HashMap<Region, Vec<Guest>> = HashMap::new();
+        for (&region, list) in &raw.guests {
+            let mut region_guests: Vec<Guest> = Vec::with_capacity(list.len());
+            for raw_guest in list {
+                let entity = match (&raw_guest.country, raw_guest.superpower) {
+                    (Some(name), None) => {
+                        let id = map.id_by_name(name).ok_or_else(|| LayoutError::UnknownGuest {
+                            region,
+                            detail: format!("{name:?} is not a country on this map"),
+                        })?;
+                        if map.country(id).region == region {
+                            return Err(LayoutError::GuestInOwnRegion { region, country: name.clone() });
+                        }
+                        GuestEntity::Country(id)
+                    }
+                    (None, Some(sp)) => GuestEntity::Superpower(sp),
+                    (None, None) => {
+                        return Err(LayoutError::UnknownGuest {
+                            region,
+                            detail: "a guest entry names neither a country nor a superpower".to_string(),
+                        });
+                    }
+                    (Some(_), Some(_)) => {
+                        return Err(LayoutError::UnknownGuest {
+                            region,
+                            detail: "a guest entry names both a country and a superpower".to_string(),
+                        });
+                    }
+                };
+                let cell = Cell { row: raw_guest.cell[0], col: raw_guest.cell[1] };
+                let label = guest_label(map, entity);
+                if let Some(&first) = seen.get(&region).and_then(|m| m.get(&(cell.row, cell.col))) {
+                    return Err(LayoutError::DuplicateCell {
+                        region,
+                        row: cell.row,
+                        col: cell.col,
+                        first: map.country(first).name.clone(),
+                        second: label,
+                    });
+                }
+                if let Some(existing) = region_guests.iter().find(|g| g.cell == cell) {
+                    return Err(LayoutError::DuplicateCell {
+                        region,
+                        row: cell.row,
+                        col: cell.col,
+                        first: guest_label(map, existing.entity),
+                        second: label,
+                    });
+                }
+                region_guests.push(Guest { entity, cell });
+            }
+            guests.insert(region, region_guests);
+        }
+
+        // Every guest chip must actually be grid-adjacent to a native
+        // country in its host region that borders it — otherwise it
+        // draws no connector, and its cell is just a stale or mistyped
+        // placeholder no one would ever reach by stepping.
+        for (&region, list) in &guests {
+            for guest in list {
+                let used = map.iter().filter(|(_, c)| c.region == region).any(|(id, country)| {
+                    entries[id.index()].cell.is_adjacent(guest.cell)
+                        && match guest.entity {
+                            GuestEntity::Country(target) => country.adjacent.contains(&target),
+                            GuestEntity::Superpower(sp) => country.adjacent_superpowers.contains(&sp),
+                        }
+                });
+                if !used {
+                    return Err(LayoutError::UnusedGuest { region, entity: guest_label(map, guest.entity) });
+                }
+            }
         }
 
         // Duplicate-code check, case-insensitive, global (codes are meant
@@ -391,29 +556,50 @@ impl MapLayout {
             region_order: raw.region_order,
             superpower_boxes,
             background,
+            guests,
             undrawn: Vec::new(),
         };
         layout.undrawn = layout.compute_undrawn_links(map);
         Ok(layout)
     }
 
-    fn compute_undrawn_links(&self, map: &WorldMap) -> Vec<(CountryId, CountryId)> {
+    /// Every adjacency a region's grid has no connector for: an in-region
+    /// pair too far apart on the grid (as before), plus — now that guest
+    /// chips exist — any cross-region or superpower adjacency with no
+    /// guest chip standing in for the far side in that region's `guests`
+    /// list. Run after `guests` is populated, since it reads that list.
+    fn compute_undrawn_links(&self, map: &WorldMap) -> Vec<UndrawnLink> {
         let mut undrawn = Vec::new();
         for (id, country) in map.iter() {
+            let region = country.region;
+            let from_cell = self.cell(id);
             for &neighbor_id in &country.adjacent {
-                if neighbor_id <= id {
-                    continue; // each undirected edge considered once
-                }
                 let neighbor = map.country(neighbor_id);
-                if neighbor.region != country.region {
-                    continue; // cross-region links are never drawn on a region grid
+                if neighbor.region == region {
+                    if neighbor_id <= id {
+                        continue; // each undirected in-region edge considered once
+                    }
+                    if !from_cell.is_adjacent(self.cell(neighbor_id)) {
+                        undrawn.push(UndrawnLink { region, from: id, to: LinkTarget::Country(neighbor_id) });
+                    }
+                } else if !self.has_guest_neighbor(region, from_cell, GuestEntity::Country(neighbor_id)) {
+                    undrawn.push(UndrawnLink { region, from: id, to: LinkTarget::Country(neighbor_id) });
                 }
-                if !self.cell(id).is_adjacent(self.cell(neighbor_id)) {
-                    undrawn.push((id, neighbor_id));
+            }
+            for &sp in &country.adjacent_superpowers {
+                if !self.has_guest_neighbor(region, from_cell, GuestEntity::Superpower(sp)) {
+                    undrawn.push(UndrawnLink { region, from: id, to: LinkTarget::Superpower(sp) });
                 }
             }
         }
         undrawn
+    }
+
+    /// Whether `region`'s guest list has a chip for `entity` that's
+    /// grid-adjacent to `from_cell` — i.e. whether a connector would
+    /// actually be drawn for it.
+    fn has_guest_neighbor(&self, region: Region, from_cell: Cell, entity: GuestEntity) -> bool {
+        self.guests(region).iter().any(|g| g.entity == entity && from_cell.is_adjacent(g.cell))
     }
 
     pub fn cell(&self, id: CountryId) -> Cell {
@@ -480,19 +666,32 @@ impl MapLayout {
         ids
     }
 
-    /// In-region adjacencies whose endpoints are not grid-neighbours, so no
-    /// connector is drawn between them in the region zoom view. Every such
-    /// link is still real; it just isn't geometrically representable on
-    /// this grid, and is instead footnoted below the map.
-    pub fn undrawn_links(&self) -> &[(CountryId, CountryId)] {
+    /// Adjacencies `region`'s grid has no connector for: an in-region pair
+    /// too far apart on the grid, or a cross-region/superpower adjacency
+    /// with no guest chip standing in for the far side. Every such link is
+    /// still real; it's just footnoted below the map instead.
+    pub fn undrawn_links(&self) -> &[UndrawnLink] {
         &self.undrawn
     }
 
+    /// Every country or superpower drawn on `region`'s grid as a guest —
+    /// a box standing in for an adjacency that leaves the region, so the
+    /// whole map can be walked by stepping alone. Empty for a region with
+    /// no cross-region or superpower neighbours at all.
+    pub fn guests(&self, region: Region) -> &[Guest] {
+        self.guests.get(&region).map(Vec::as_slice).unwrap_or(&[])
+    }
+
     /// The country reached by moving `dir` from `from` on `region`'s
-    /// display grid: the nearest other country in `region` that lies
-    /// strictly on `dir`'s side of `from`, or `None` if there isn't one —
-    /// the selection should then hold still, the same convention as
-    /// [`Region::step`].
+    /// display grid: the nearest other country — native to `region`, or
+    /// one of its guest chips — that lies strictly on `dir`'s side of
+    /// `from`, or `None` if there isn't one — the selection should then
+    /// hold still, the same convention as [`Region::step`]. A returned
+    /// country may belong to a different region than `region` itself,
+    /// when it was reached via a guest chip; the caller (`interactive.rs`)
+    /// is what follows the jump by rewriting which region is on screen.
+    /// A guest superpower is never a candidate — there's no screen to
+    /// jump to for one.
     ///
     /// The region grids are sparse (Africa is over half empty, with holes
     /// in the interior, not just the edges), so a bare row±1/col±1 step
@@ -502,11 +701,14 @@ impl MapLayout {
     /// real grid in `data/standard_layout.json`.
     pub fn step_country(&self, map: &WorldMap, region: Region, from: CountryId, dir: Direction) -> Option<CountryId> {
         let from_cell = self.cell(from);
-        self.countries_in_region(map, region)
-            .into_iter()
-            .filter(|&id| id != from)
-            .filter_map(|id| {
-                let cell = self.cell(id);
+        let native = self.countries_in_region(map, region).into_iter().filter(|&id| id != from).map(|id| (self.cell(id), id));
+        let guest_countries = self.guests(region).iter().filter_map(|g| match g.entity {
+            GuestEntity::Country(id) => Some((g.cell, id)),
+            GuestEntity::Superpower(_) => None,
+        });
+        native
+            .chain(guest_countries)
+            .filter_map(|(cell, id)| {
                 let dr = cell.row as i16 - from_cell.row as i16;
                 let dc = cell.col as i16 - from_cell.col as i16;
                 let (cross, along) = match dir {
@@ -520,5 +722,14 @@ impl MapLayout {
             })
             .min_by_key(|&(cross, along, row, col, _)| (cross, along, row, col))
             .map(|(.., id)| id)
+    }
+}
+
+/// A guest's display label for an error message: the country's name, or
+/// the superpower's own `Display`.
+fn guest_label(map: &WorldMap, entity: GuestEntity) -> String {
+    match entity {
+        GuestEntity::Country(id) => map.country(id).name.clone(),
+        GuestEntity::Superpower(sp) => sp.to_string(),
     }
 }

@@ -18,9 +18,43 @@ Operations, scoring, etc.) haven't been built yet.
 - **`MapLayout`** (`src/layout.rs`) — everything needed to *display* the
   map, loaded from `data/standard_layout.json`: each country's cell in
   its region-view grid, its short code, and its position on the single
-  world map (`world_cell`), plus the two superpower boxes. Validated at
-  load time (unique codes, no cell collisions, no out-of-bounds
-  `world_cell`, etc.) with a fail-loud `LayoutError`.
+  world map (`world_cell`), plus the two superpower boxes. Also carries
+  each region's `guests` (`MapLayout::guests`): countries native to a
+  *different* region, or a superpower, placed on this region's grid too —
+  at their own cell, distinct from their native one, since cells are only
+  unique per region and a foreign country's own cell routinely collides
+  with a native one here. A `Guest`'s `GuestEntity` is `Country(CountryId)`
+  or `Superpower(Superpower)`; one entity can have more than one guest
+  cell in the same region when no single cell is grid-adjacent to every
+  native country it borders there (USSR appears three times in Europe's
+  grid: once diagonally between Finland and Poland, covering both, and
+  once by Romania). A guest's cell is hand-picked, not just any free
+  adjacent one: it's placed on whichever side of its bordering native
+  country matches that adjacency's real compass direction (compared via
+  both countries' `world_cell`), so an arrow key toward a guest points
+  the way you'd actually expect — the reason this matters enough to
+  choose deliberately, not arbitrarily, is that the *wrong* side makes
+  the two feel like they're on opposite sides of the map, and stepping
+  back and forth between them (an ordinary, expected way to use a
+  bidirectional connector) reads as broken rather than as "go back the
+  way you came." The one exception is Europe's Algeria and USA guests:
+  France's and Canada's other five and two real neighbours already fill
+  every cell around them but one, so each is forced onto that single
+  leftover cell regardless of which way it actually points from there.
+  `MapLayout::step_country` treats a region's country
+  guests as extra candidates alongside its natives — never a guest
+  superpower, which is never selectable — so its return value may belong
+  to a different region than the one passed in; the caller is what acts
+  on that (see `interactive.rs` below). Validated at load time (unique
+  codes, no cell collisions between natives or guests, no out-of-bounds
+  `world_cell`, every guest naming exactly one of a country or a
+  superpower and grid-adjacent to a native country there that actually
+  borders it, etc.) with a fail-loud `LayoutError`. `undrawn_links()`
+  reports whatever a region's grid still couldn't place a connector for —
+  an in-region pair too far apart, or a cross-region/superpower link with
+  no guest chip for it — as `UndrawnLink { region, from, to: LinkTarget }`;
+  empty for the standard layout, and pinned there by
+  `tests/layout.rs::standard_layout_has_no_undrawn_links`.
 - **`Scenario`** (`src/scenario.rs`) / **`GameStatus`** (`src/status.rs`)
   — a named starting state (currently just `data/demo_state.json`): a
   `Board` snapshot plus turn/active-side/DEFCON/VP/space-race/China-card
@@ -137,7 +171,18 @@ Operations, scoring, etc.) haven't been built yet.
   A `Canvas` only turns into a `String` via `.render(ColorMode)`.
   - `world.rs` — the six-region dashboard (`map`/`world` command).
   - `region.rs` — one region zoomed in, with real adjacency connectors
-    (`region <name>` / `1`-`6`).
+    (`region <name>` / `1`-`6`). Every adjacency that leaves the region —
+    to another region's country, or to a superpower — is drawn too, as a
+    guest chip (`MapLayout::guests`): a foreign country tinted with
+    `region_color` for *its own* region (never thick-bordered, since a
+    guest can't be the selection, and never dimmed for operation
+    illegality, since it isn't a target from this screen), or a
+    superpower tinted like its own box and never selectable. This is what
+    makes the whole map walkable by arrow keys alone without ever
+    returning to the world map — see `interactive.rs` below. Only what a
+    guest chip couldn't cover (none, on the standard layout) is footnoted
+    below the grid, the same as an in-region adjacency the grid geometry
+    couldn't draw a connector for.
   - `worldmap.rs` — the whole world as one to-scale map with real
     landmass shading and *Twilight Struggle* region colour tinting, no
     connectors (`worldmap`/`wm`). See **`data/world_background.md`**
@@ -240,13 +285,25 @@ Operations, scoring, etc.) haven't been built yet.
   region's display grid instead (`MapLayout::step_country`, in
   `layout.rs` — a nearest-in-that-direction search over `Cell` positions,
   not a hand-written table, since the grids are sparse with interior
-  holes). From there, Enter *or* `r` opens that country's own detail
-  screen (`render_country`, `ViewMode::Interactive`) — the region screen
-  no longer rolls or attempts a coup directly; it only gets you to the
-  country screen, where the full modifier/odds calculation is on screen
-  above the key that resolves it. Each region remembers its last-selected
-  country across visits, and the country screen carries the same
-  selection back to `Region` on `Esc`.
+  holes). Since `step_country` treats a region's guest chips as
+  candidates too, a step can land on a country native to a *different*
+  region; `step_or_jump` is what follows it there, on both the region and
+  country screens' arrow keys alike — it rewrites `Screen::Region`'s (or
+  `Screen::Country`'s) `region` field to match the moment that happens,
+  keeping the invariant that the selection is always native to whichever
+  region is on screen, and records the region just left in
+  `last_selected` first (the same bookkeeping `Esc` already does), so
+  coming back to it later re-selects the country left behind rather than
+  resetting to the region's top-left-most one. This is what makes the
+  whole map walkable by arrow keys alone, never forced back out to the
+  world map, and is also why interactive mode's region screen has no
+  separate "leave the region" key of its own beyond `Esc`. From there,
+  Enter *or* `r` opens that country's own detail screen (`render_country`,
+  `ViewMode::Interactive`) — the region screen no longer rolls or attempts
+  a coup directly; it only gets you to the country screen, where the full
+  modifier/odds calculation is on screen above the key that resolves it.
+  Each region remembers its last-selected country across visits, and the
+  country screen carries the same selection back to `Region` on `Esc`.
   `run` takes `&mut Game` (not a bare `Board`/`Option<Operation>`), so
   every key handler goes through it and turns stay enforced here too: `c`
   confirms/closes the open operation via `Game::confirm` and `X`

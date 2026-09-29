@@ -1,10 +1,12 @@
+use std::collections::{HashMap, HashSet};
+
 use crate::board::Board;
 use crate::country::{CountryId, Region, Superpower};
-use crate::layout::MapLayout;
+use crate::layout::{Cell, GuestEntity, LinkTarget, MapLayout};
 use crate::map::WorldMap;
 use crate::ops::Operation;
 
-use super::{control_glyph, coup_odds_line, coup_target_line, modifier_line, nz, odds_line, operation_balance_line, Canvas, Color, Style};
+use super::{control_glyph, coup_odds_line, coup_target_line, modifier_line, nz, odds_line, operation_balance_line, region_color, Canvas, Color, Style};
 
 /// Box dimensions and grid pitch for the region zoom view. A 1-column,
 /// 1-row gap between boxes leaves room for connector glyphs.
@@ -39,8 +41,11 @@ const COUP_HINT: &str = "←→↑↓ select · Enter target · c done · Esc ba
 /// A geographic zoom into one region: every country in it drawn as a box
 /// on its layout grid cell, connected to its in-region neighbours by line
 /// glyphs. Adjacencies that leave the region (to another region, or to a
-/// superpower) are footnoted below the map, along with any in-region
-/// adjacency the grid couldn't draw a connector for.
+/// superpower) are drawn too, as guest chips — a foreign country tinted
+/// with its own region's colour, a superpower tinted like its own box —
+/// so the whole map is reachable by stepping alone; whatever a guest chip
+/// couldn't be placed for is footnoted below the map instead, the same as
+/// any in-region adjacency the grid couldn't draw a connector for.
 ///
 /// `selected`, when set, is the country currently picked in interactive
 /// navigation: its box border and name are drawn bold, and a two-line
@@ -77,21 +82,19 @@ pub fn render_region(
     // already is.
     let board = op.and_then(Operation::board).unwrap_or(board);
     let ids = layout.countries_in_region(map, region);
-    let (max_row, max_col) = ids.iter().fold((0u8, 0u8), |(mr, mc), &id| {
-        let cell = layout.cell(id);
-        (mr.max(cell.row), mc.max(cell.col))
-    });
+    let guests = layout.guests(region);
+    let (max_row, max_col) = ids
+        .iter()
+        .map(|&id| layout.cell(id))
+        .chain(guests.iter().map(|g| g.cell))
+        .fold((0u8, 0u8), |(mr, mc), cell| (mr.max(cell.row), mc.max(cell.col)));
 
     let grid_width = LEFT_MARGIN + (max_col as usize + 1) * PITCH_COL;
     let grid_height = TOP_MARGIN + (max_row as usize + 1) * PITCH_ROW;
 
-    let off_region_links = collect_off_region_links(map, &ids, region);
     let undrawn = undrawn_links_for(map, layout, region);
 
     let mut extra_lines = 0;
-    if !off_region_links.is_empty() {
-        extra_lines += 1 + off_region_links.len();
-    }
     if !undrawn.is_empty() {
         extra_lines += 1 + undrawn.len();
     }
@@ -119,9 +122,8 @@ pub fn render_region(
     // (South America, at 3 columns wide, is narrower than its own title
     // line) — `Canvas` silently clips writes past its width, so an
     // under-sized canvas would truncate text rather than erroring.
-    let content_width = off_region_links
+    let content_width = undrawn
         .iter()
-        .chain(undrawn.iter())
         .map(|line| line.chars().count())
         .chain(footer_lines.iter().map(|(line, _)| line.chars().count()))
         .chain([title.chars().count(), grid_width])
@@ -138,6 +140,15 @@ pub fn render_region(
         draw_country_box(&mut canvas, y, x, map, layout, board, id, selected == Some(id), op);
     }
 
+    for guest in guests {
+        let y = TOP_MARGIN + guest.cell.row as usize * PITCH_ROW;
+        let x = LEFT_MARGIN + guest.cell.col as usize * PITCH_COL;
+        match guest.entity {
+            GuestEntity::Country(id) => draw_guest_country_box(&mut canvas, y, x, map, layout, board, id, op),
+            GuestEntity::Superpower(sp) => draw_superpower_box(&mut canvas, y, x, sp),
+        }
+    }
+
     draw_connectors(&mut canvas, map, layout, &ids, region);
 
     for (i, (line, style)) in footer_lines.iter().enumerate() {
@@ -145,13 +156,6 @@ pub fn render_region(
     }
 
     let mut row = grid_height;
-    if !off_region_links.is_empty() {
-        row += 1;
-        for line in &off_region_links {
-            canvas.put(row, LEFT_MARGIN, line, Style::color(Color::Muted));
-            row += 1;
-        }
-    }
     if !undrawn.is_empty() {
         row += 1;
         for line in &undrawn {
@@ -167,6 +171,12 @@ pub fn render_region(
 /// colour, and bolds the name — a shape change as well as a colour one,
 /// so the selection still reads clearly even under `ColorMode::Never` or
 /// on a terminal where bold text barely differs from regular weight.
+/// Unselected, the border and name are tinted with `region_color` for
+/// this grid's own region — the same tint a guest chip elsewhere uses for
+/// *its* home region — so a region view reads as one coherent colour, and
+/// a guest chip's different colour stands out as visibly foreign at a
+/// glance rather than only by its short-name and stats matching a
+/// different country.
 #[allow(clippy::too_many_arguments)]
 fn draw_country_box(
     canvas: &mut Canvas,
@@ -180,18 +190,15 @@ fn draw_country_box(
     op: Option<&Operation>,
 ) {
     let country = map.country(id);
-    let frame_style = if selected { Style::color(Color::Selected).bold() } else { Style::default() };
+    let tint = Style::color(region_color(country.region));
+    let frame_style = if selected { Style::color(Color::Selected).bold() } else { tint };
     if selected {
         canvas.draw_thick_box(row, col, BOX_W, BOX_H, frame_style);
     } else {
         canvas.draw_box(row, col, BOX_W, BOX_H, frame_style);
     }
 
-    let flag_style = if country.battleground {
-        Style::color(Color::Battleground)
-    } else {
-        Style::default()
-    };
+    let flag_style = if country.battleground { Style::color(Color::Battleground) } else { frame_style };
     canvas.put_char(row + 1, col + 1, if country.battleground { '*' } else { ' ' }, flag_style);
     // A country that can't legally receive the next placement (or roll)
     // is dimmed — the rule is visible up front, not just enforced on a
@@ -217,30 +224,93 @@ fn draw_country_box(
     canvas.put(row + 2, col + 4, &format!("{:<2}", nz(ussr)), ussr_style);
     canvas.put(row + 2, col + 8, &format!("st{}", country.stability), Style::color(Color::Muted));
 
-    // Cols 11-12 are free on the stats row for the operation's headline
-    // number (1-5 is the influence pair, 8-10 is `st<n>`); cols 6-7 are
-    // also free, used only by a realignment that's *also* cost the
-    // acting side its own influence there. Clamped so a badge can never
-    // run into the box's right border at col 13.
     if let Some(operation) = op {
-        match operation {
-            Operation::Influence(p) => {
-                let pending = p.pending(id) as i8;
-                if pending > 0 {
-                    canvas.put(row + 2, col + 11, &format_delta(pending), Style::color(Color::Selected).bold());
-                }
+        draw_operation_badge(canvas, row, col, operation, board, id);
+    }
+}
+
+/// A country whose home region isn't the one currently on screen — a
+/// guest chip. Drawn with the same influence, control, stability, and
+/// operation badges as a native box, but tinted with `region_color` for
+/// its *own* region instead of the default/selected styling: never
+/// thick-bordered (a guest can't be the current selection — arrowing onto
+/// one jumps the whole screen there instead), and never dimmed for
+/// illegality (the tint is the signal here, not a target-eligibility one
+/// — a guest isn't a target from this screen at all).
+#[allow(clippy::too_many_arguments)]
+fn draw_guest_country_box(canvas: &mut Canvas, row: usize, col: usize, map: &WorldMap, layout: &MapLayout, board: &Board, id: CountryId, op: Option<&Operation>) {
+    let country = map.country(id);
+    let tint = Style::color(region_color(country.region));
+    canvas.draw_box(row, col, BOX_W, BOX_H, tint);
+
+    let flag_style = if country.battleground { Style::color(Color::Battleground) } else { tint };
+    canvas.put_char(row + 1, col + 1, if country.battleground { '*' } else { ' ' }, flag_style);
+    canvas.put(row + 1, col + 2, layout.short_name(id), tint);
+
+    let us = board.influence(id, Superpower::Us);
+    let ussr = board.influence(id, Superpower::Ussr);
+    let controller = board.controller(map, id);
+    let sep = control_glyph(controller);
+    let sep_style = match controller {
+        Some(Superpower::Us) => Style::color(Color::Us),
+        Some(Superpower::Ussr) => Style::color(Color::Ussr),
+        None => Style::default(),
+    };
+    let us_style = if us > 0 { Style::color(Color::Us) } else { Style::color(Color::Muted) };
+    let ussr_style = if ussr > 0 { Style::color(Color::Ussr) } else { Style::color(Color::Muted) };
+
+    canvas.put(row + 2, col + 1, &format!("{:>2}", nz(us)), us_style);
+    canvas.put_char(row + 2, col + 3, sep, sep_style);
+    canvas.put(row + 2, col + 4, &format!("{:<2}", nz(ussr)), ussr_style);
+    canvas.put(row + 2, col + 8, &format!("st{}", country.stability), Style::color(Color::Muted));
+
+    if let Some(operation) = op {
+        draw_operation_badge(canvas, row, col, operation, board, id);
+    }
+}
+
+/// A superpower's own chip on the region grid — the same frame size as a
+/// country box but with no stats rows, just its name tinted the same
+/// colour used for it everywhere else. Never selectable: there's no
+/// superpower screen to jump to, so [`MapLayout::step_country`] never
+/// returns one, and the arrow-key cursor simply steps past it.
+fn draw_superpower_box(canvas: &mut Canvas, row: usize, col: usize, superpower: Superpower) {
+    let style = Style::color(match superpower {
+        Superpower::Us => Color::Us,
+        Superpower::Ussr => Color::Ussr,
+    });
+    canvas.draw_box(row, col, BOX_W, BOX_H, style);
+    let name = superpower.to_string();
+    let start_col = col + 1 + (BOX_W - 2).saturating_sub(name.chars().count()) / 2;
+    canvas.put(row + 1, start_col, &name, style);
+}
+
+/// Cols 11-12 are free on the stats row for the operation's headline
+/// number (1-5 is the influence pair, 8-10 is `st<n>`); cols 6-7 are also
+/// free, used only by a realignment that's *also* cost the acting side
+/// its own influence there. Clamped so a badge can never run into the
+/// box's right border at col 13. Shared by both a native and a guest
+/// country box — a guest touched by the operation shows the same badge a
+/// native one would, since a placement made while you were in its home
+/// region is exactly as pending here.
+fn draw_operation_badge(canvas: &mut Canvas, row: usize, col: usize, operation: &Operation, board: &Board, id: CountryId) {
+    match operation {
+        Operation::Influence(p) => {
+            let pending = p.pending(id) as i8;
+            if pending > 0 {
+                canvas.put(row + 2, col + 11, &format_delta(pending), Style::color(Color::Selected).bold());
             }
-            Operation::Realign(_) | Operation::Coup(_) => {
-                let side = operation.side();
-                let opponent = side.opponent();
-                let opp_delta = operation.delta(board, id, opponent);
-                let own_delta = operation.delta(board, id, side);
-                if opp_delta != 0 {
-                    canvas.put(row + 2, col + 11, &format_delta(opp_delta), Style::color(Color::Selected).bold());
-                }
-                if own_delta != 0 {
-                    canvas.put(row + 2, col + 6, &format_delta(own_delta), Style::color(Color::Muted));
-                }
+        }
+        Operation::Realign(_) | Operation::Coup(_) => {
+            let side = operation.side();
+            let opponent = side.opponent();
+            let opp_delta = operation.delta(board, id, opponent);
+            let own_delta = operation.delta(board, id, side);
+            if opp_delta != 0 {
+                canvas.put(row + 2, col + 11, &format_delta(opp_delta), Style::color(Color::Selected).bold());
+            }
+            if own_delta != 0 {
+                canvas.put(row + 2, col + 6, &format_delta(own_delta), Style::color(Color::Muted));
             }
         }
     }
@@ -254,59 +324,36 @@ fn format_delta(delta: i8) -> String {
 }
 
 /// Draws a connector glyph in the gap between every pair of grid-adjacent,
-/// really-adjacent countries. When two diagonal connectors would land on
-/// the same corner cell, they're merged into `╳` rather than one silently
-/// overwriting the other.
+/// really-adjacent countries — in-region pairs as before, plus a native
+/// country and any guest chip standing in for a cross-region or
+/// superpower neighbour of its own. When two diagonal connectors would
+/// land on the same corner cell, they're merged into `╳` rather than one
+/// silently overwriting the other.
 fn draw_connectors(canvas: &mut Canvas, map: &WorldMap, layout: &MapLayout, ids: &[CountryId], region: Region) {
-    use std::collections::HashMap;
     let mut glyphs: HashMap<(usize, usize), char> = HashMap::new();
+    let guests = layout.guests(region);
+    let mut done = HashSet::new();
 
-    let mut put_glyph = |pos: (usize, usize), glyph: char| {
-        glyphs
-            .entry(pos)
-            .and_modify(|existing| {
-                *existing = match (*existing, glyph) {
-                    ('╲', '╱') | ('╱', '╲') => '╳',
-                    (a, _) => a,
-                };
-            })
-            .or_insert(glyph);
-    };
-
-    let mut done = std::collections::HashSet::new();
     for &id in ids {
         let country = map.country(id);
+        let a = layout.cell(id);
         for &neighbor_id in &country.adjacent {
-            if map.country(neighbor_id).region != region {
-                continue;
-            }
-            let key = (id.min(neighbor_id), id.max(neighbor_id));
-            if !done.insert(key) {
-                continue;
-            }
-            let a = layout.cell(id);
-            let b = layout.cell(neighbor_id);
-            let (dr, dc) = (
-                b.row as isize - a.row as isize,
-                b.col as isize - a.col as isize,
-            );
-            if dr.abs().max(dc.abs()) != 1 {
-                continue; // not grid-adjacent; footnoted separately
-            }
-            let ay = TOP_MARGIN + a.row as usize * PITCH_ROW;
-            let ax = LEFT_MARGIN + a.col as usize * PITCH_COL;
-            let by = TOP_MARGIN + b.row as usize * PITCH_ROW;
-            let bx = LEFT_MARGIN + b.col as usize * PITCH_COL;
-            if dr == 0 {
-                // horizontal neighbours: connector in the column gap
-                put_glyph((ay + 2, ax.min(bx) + BOX_W), '─');
-            } else if dc == 0 {
-                // vertical neighbours: connector in the row gap
-                put_glyph((ay.min(by) + BOX_H, ax + BOX_W / 2), '│');
+            let neighbor = map.country(neighbor_id);
+            if neighbor.region == region {
+                let key = (id.min(neighbor_id), id.max(neighbor_id));
+                if !done.insert(key) {
+                    continue;
+                }
+                draw_edge(&mut glyphs, a, layout.cell(neighbor_id));
             } else {
-                // diagonal neighbours: connector at the shared corner
-                let glyph = if (dr > 0) == (dc > 0) { '╲' } else { '╱' };
-                put_glyph((ay.min(by) + BOX_H, ax.min(bx) + BOX_W), glyph);
+                for guest in guests.iter().filter(|g| g.entity == GuestEntity::Country(neighbor_id)) {
+                    draw_edge(&mut glyphs, a, guest.cell);
+                }
+            }
+        }
+        for &sp in &country.adjacent_superpowers {
+            for guest in guests.iter().filter(|g| g.entity == GuestEntity::Superpower(sp)) {
+                draw_edge(&mut glyphs, a, guest.cell);
             }
         }
     }
@@ -314,6 +361,40 @@ fn draw_connectors(canvas: &mut Canvas, map: &WorldMap, layout: &MapLayout, ids:
     for (&(y, x), &glyph) in &glyphs {
         canvas.put_char(y, x, glyph, Style::color(Color::Muted));
     }
+}
+
+/// Draws one connector glyph between two grid-adjacent cells, merging a
+/// `╲`/`╱` collision into `╳` rather than letting one silently overwrite
+/// the other. A pair that isn't actually grid-adjacent (Chebyshev
+/// distance > 1) draws nothing — footnoted separately as undrawn.
+fn draw_edge(glyphs: &mut HashMap<(usize, usize), char>, a: Cell, b: Cell) {
+    let (dr, dc) = (b.row as isize - a.row as isize, b.col as isize - a.col as isize);
+    if dr.abs().max(dc.abs()) != 1 {
+        return;
+    }
+    let ay = TOP_MARGIN + a.row as usize * PITCH_ROW;
+    let ax = LEFT_MARGIN + a.col as usize * PITCH_COL;
+    let by = TOP_MARGIN + b.row as usize * PITCH_ROW;
+    let bx = LEFT_MARGIN + b.col as usize * PITCH_COL;
+    let (pos, glyph) = if dr == 0 {
+        // horizontal neighbours: connector in the column gap
+        ((ay + 2, ax.min(bx) + BOX_W), '─')
+    } else if dc == 0 {
+        // vertical neighbours: connector in the row gap
+        ((ay.min(by) + BOX_H, ax + BOX_W / 2), '│')
+    } else {
+        // diagonal neighbours: connector at the shared corner
+        ((ay.min(by) + BOX_H, ax.min(bx) + BOX_W), if (dr > 0) == (dc > 0) { '╲' } else { '╱' })
+    };
+    glyphs
+        .entry(pos)
+        .and_modify(|existing| {
+            *existing = match (*existing, glyph) {
+                ('╲', '╱') | ('╱', '╲') => '╳',
+                (a, _) => a,
+            };
+        })
+        .or_insert(glyph);
 }
 
 /// Every footer line this view might draw, in draw order — built once so
@@ -387,37 +468,25 @@ fn selection_title(map: &WorldMap, board: &Board, id: CountryId) -> String {
     format!("▸ {} ◂  {}", country.name, parts.join(" · "))
 }
 
-fn collect_off_region_links(map: &WorldMap, ids: &[CountryId], region: Region) -> Vec<String> {
-    let mut lines = Vec::new();
-    for &id in ids {
-        let country = map.country(id);
-        for &neighbor_id in &country.adjacent {
-            let neighbor = map.country(neighbor_id);
-            if neighbor.region != region {
-                lines.push(format!(
-                    "  ↔ {} – {} ({})",
-                    country.name, neighbor.name, neighbor.region
-                ));
-            }
-        }
-        for &sp in &country.adjacent_superpowers {
-            lines.push(format!("  ↔ {} – {}", country.name, sp));
-        }
-    }
-    lines
-}
-
+/// The "not drawn on this grid" footnote for whatever `region`'s grid
+/// couldn't place a connector for — an in-region pair too far apart, or a
+/// cross-region/superpower link with no guest chip. Country-country and
+/// superpower guest coverage is nearly total on the standard map (see
+/// `tests/layout.rs::standard_layout_has_no_undrawn_links`), so this is
+/// normally empty; it's the fallback for a future layout edit that
+/// doesn't get every guest cell right.
 fn undrawn_links_for(map: &WorldMap, layout: &MapLayout, region: Region) -> Vec<String> {
     layout
         .undrawn_links()
         .iter()
-        .filter(|(a, _)| map.country(*a).region == region)
-        .map(|(a, b)| {
-            format!(
-                "  (not drawn on this grid: {} – {})",
-                map.country(*a).name,
-                map.country(*b).name
-            )
+        .filter(|link| link.region == region)
+        .map(|link| {
+            let from = &map.country(link.from).name;
+            let to = match link.to {
+                LinkTarget::Country(id) => map.country(id).name.clone(),
+                LinkTarget::Superpower(sp) => sp.to_string(),
+            };
+            format!("  (not drawn on this grid: {from} – {to})")
         })
         .collect()
 }

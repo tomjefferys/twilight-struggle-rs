@@ -20,13 +20,19 @@ enum Screen {
     /// The to-scale world map, with `selected` picked by the arrow keys.
     World { selected: Region },
     /// One region's zoomed-in view, with its own country selection —
-    /// `Esc` returns to `World` with the region still selected.
+    /// `Esc` returns to `World` with the region still selected. `region`
+    /// and `selected` always agree (`selected` is native to `region`):
+    /// arrowing onto a guest chip — a country whose own region differs —
+    /// immediately switches both fields to that country's own region
+    /// instead ([`step_or_jump`]), so the whole map is walkable from here
+    /// without ever leaving the region view.
     Region { region: Region, selected: CountryId },
     /// One country's detail screen, opened from `Region` with `Enter` or
     /// `r` — `Esc` returns to `Region` with the same country still
     /// selected. This is where a realignment roll or coup attempt
     /// actually happens: the full calculation is on screen above the key
     /// that resolves it, rather than firing straight from the region grid.
+    /// Its own arrow keys follow a region-crossing jump the same way.
     Country { region: Region, selected: CountryId },
 }
 
@@ -157,10 +163,10 @@ pub fn run(map: &WorldMap, layout: &MapLayout, game: &mut Game, dice: &mut Dice,
                             _ => continue,
                         },
                         Screen::Region { region, selected } => match key.code {
-                            KeyCode::Left => *selected = layout.step_country(map, *region, *selected, Direction::Left).unwrap_or(*selected),
-                            KeyCode::Right => *selected = layout.step_country(map, *region, *selected, Direction::Right).unwrap_or(*selected),
-                            KeyCode::Up => *selected = layout.step_country(map, *region, *selected, Direction::Up).unwrap_or(*selected),
-                            KeyCode::Down => *selected = layout.step_country(map, *region, *selected, Direction::Down).unwrap_or(*selected),
+                            KeyCode::Left => step_or_jump(map, layout, &mut last_selected, region, selected, Direction::Left),
+                            KeyCode::Right => step_or_jump(map, layout, &mut last_selected, region, selected, Direction::Right),
+                            KeyCode::Up => step_or_jump(map, layout, &mut last_selected, region, selected, Direction::Up),
+                            KeyCode::Down => step_or_jump(map, layout, &mut last_selected, region, selected, Direction::Down),
                             KeyCode::Char('+') | KeyCode::Char('=') => {
                                 if let Err(GameError::Placement(e)) = game.place(map, *selected) {
                                     message = Some(format!("{}: {e}", map.country(*selected).name));
@@ -176,10 +182,10 @@ pub fn run(map: &WorldMap, layout: &MapLayout, game: &mut Game, dice: &mut Dice,
                             _ => continue,
                         },
                         Screen::Country { region, selected } => match key.code {
-                            KeyCode::Left => *selected = layout.step_country(map, *region, *selected, Direction::Left).unwrap_or(*selected),
-                            KeyCode::Right => *selected = layout.step_country(map, *region, *selected, Direction::Right).unwrap_or(*selected),
-                            KeyCode::Up => *selected = layout.step_country(map, *region, *selected, Direction::Up).unwrap_or(*selected),
-                            KeyCode::Down => *selected = layout.step_country(map, *region, *selected, Direction::Down).unwrap_or(*selected),
+                            KeyCode::Left => step_or_jump(map, layout, &mut last_selected, region, selected, Direction::Left),
+                            KeyCode::Right => step_or_jump(map, layout, &mut last_selected, region, selected, Direction::Right),
+                            KeyCode::Up => step_or_jump(map, layout, &mut last_selected, region, selected, Direction::Up),
+                            KeyCode::Down => step_or_jump(map, layout, &mut last_selected, region, selected, Direction::Down),
                             KeyCode::Char('+') | KeyCode::Char('=') => {
                                 if let Err(GameError::Placement(e)) = game.place(map, *selected) {
                                     message = Some(format!("{}: {e}", map.country(*selected).name));
@@ -209,6 +215,27 @@ pub fn run(map: &WorldMap, layout: &MapLayout, game: &mut Game, dice: &mut Dice,
             _ => {}
         }
     }
+}
+
+/// Moves `selected` one step within `region`'s display grid via
+/// [`MapLayout::step_country`]. If the step lands on a guest chip — a
+/// country whose own region differs from `region` — the screen follows it
+/// there: `last_selected` remembers where `region` was left from (the
+/// same bookkeeping `Esc` already does, so coming back later re-selects
+/// the country left behind), and `region` itself is rewritten to match,
+/// keeping the invariant both `Screen::Region` and `Screen::Country` rely
+/// on — that `selected` is always native to `region` — intact. Used by
+/// both screens' arrow keys, so a jump behaves identically from either.
+fn step_or_jump(map: &WorldMap, layout: &MapLayout, last_selected: &mut HashMap<Region, CountryId>, region: &mut Region, selected: &mut CountryId, dir: Direction) {
+    let Some(next) = layout.step_country(map, *region, *selected, dir) else {
+        return;
+    };
+    let next_region = map.country(next).region;
+    if next_region != *region {
+        last_selected.insert(*region, *selected);
+        *region = next_region;
+    }
+    *selected = next;
 }
 
 fn draw(screen: &Screen, map: &WorldMap, layout: &MapLayout, game: &Game, message: Option<&str>, color: ColorMode) -> io::Result<()> {

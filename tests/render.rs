@@ -1,6 +1,7 @@
 use twilight_struggle::render::{render_country, render_region, render_world};
 use twilight_struggle::{
-    Board, ColorMode, Coup, InfluencePlacement, MapLayout, Operation, Realignment, Region, Scenario, Superpower, ViewMode, WorldMap,
+    Board, ColorMode, Coup, GuestEntity, InfluencePlacement, LinkTarget, MapLayout, Operation, Realignment, Region, Scenario, Superpower,
+    ViewMode, WorldMap,
 };
 
 fn standard() -> (WorldMap, MapLayout) {
@@ -54,10 +55,20 @@ fn no_rendered_line_exceeds_requested_width() {
     }
 }
 
-/// Every in-region adjacency must be either drawn as a connector or
-/// footnoted as undrawn — the display can never silently omit an edge.
+/// Whether `a` and a candidate cell `b` are grid-neighbours — the same
+/// Chebyshev-distance-1 rule `Cell::is_adjacent` uses internally.
+fn grid_adjacent(a: twilight_struggle::Cell, b: twilight_struggle::Cell) -> bool {
+    let dr = (a.row as i16 - b.row as i16).abs();
+    let dc = (a.col as i16 - b.col as i16).abs();
+    dr.max(dc) == 1
+}
+
+/// Every adjacency — in-region, cross-region, or to a superpower — must
+/// be either drawn (a connector between two in-region boxes, or between a
+/// native box and a guest chip standing in for the far side) or footnoted
+/// as undrawn: the display can never silently omit an edge.
 #[test]
-fn every_in_region_adjacency_is_drawn_or_footnoted() {
+fn every_adjacency_is_drawn_or_footnoted() {
     let (map, layout) = standard();
     let board = Board::new(&map);
     for &region in &Region::ALL {
@@ -67,25 +78,40 @@ fn every_in_region_adjacency_is_drawn_or_footnoted() {
         assert!(has_connector, "{region} region view has no connectors at all");
 
         let ids = layout.countries_in_region(&map, region);
+        let guests = layout.guests(region);
         for &id in &ids {
             let country = map.country(id);
+            let a = layout.cell(id);
             for &neighbor_id in &country.adjacent {
-                if map.country(neighbor_id).region != region {
-                    continue;
-                }
-                let a = layout.cell(id);
-                let b = layout.cell(neighbor_id);
-                let dr = (a.row as i16 - b.row as i16).abs();
-                let dc = (a.col as i16 - b.col as i16).abs();
-                let drawable = dr.max(dc) == 1;
-                let footnoted = layout.undrawn_links().iter().any(|(x, y)| {
-                    (*x == id && *y == neighbor_id) || (*x == neighbor_id && *y == id)
-                });
+                let neighbor = map.country(neighbor_id);
+                let drawable = if neighbor.region == region {
+                    grid_adjacent(a, layout.cell(neighbor_id))
+                } else {
+                    guests
+                        .iter()
+                        .any(|g| g.entity == GuestEntity::Country(neighbor_id) && grid_adjacent(a, g.cell))
+                };
+                let footnoted = layout
+                    .undrawn_links()
+                    .iter()
+                    .any(|link| link.region == region && link.from == id && link.to == LinkTarget::Country(neighbor_id));
                 assert!(
                     drawable || footnoted,
                     "{} – {} in {region} is neither grid-adjacent nor footnoted as undrawn",
                     country.name,
-                    map.country(neighbor_id).name
+                    neighbor.name
+                );
+            }
+            for &sp in &country.adjacent_superpowers {
+                let drawable = guests.iter().any(|g| g.entity == GuestEntity::Superpower(sp) && grid_adjacent(a, g.cell));
+                let footnoted = layout
+                    .undrawn_links()
+                    .iter()
+                    .any(|link| link.region == region && link.from == id && link.to == LinkTarget::Superpower(sp));
+                assert!(
+                    drawable || footnoted,
+                    "{} – {sp} in {region} is neither grid-adjacent nor footnoted as undrawn",
+                    country.name
                 );
             }
         }

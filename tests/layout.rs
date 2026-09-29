@@ -1,4 +1,4 @@
-use twilight_struggle::{Direction, LayoutError, MapLayout, Region, WorldMap};
+use twilight_struggle::{Direction, GuestEntity, LayoutError, MapLayout, Region, WorldMap};
 
 fn standard() -> (WorldMap, MapLayout) {
     let map = WorldMap::standard().expect("standard map should load");
@@ -266,6 +266,12 @@ fn every_country_is_reachable_by_stepping_within_its_region() {
     // would frequently land on nothing. `step_country` instead has to
     // reach every country in a region by some sequence of arrow presses
     // starting from that region's first country in grid order.
+    //
+    // `step_country` can now also land on a guest chip — a country
+    // native to a *different* region — so a step's target is only
+    // recursed into when it's still native to `region`; a guest is a
+    // reachable leaf here, the same way `interactive.rs` would follow it
+    // elsewhere rather than continuing to explore this grid from it.
     let (map, layout) = standard();
     for &region in &Region::ALL {
         let ids = layout.countries_in_region(&map, region);
@@ -278,7 +284,9 @@ fn every_country_is_reachable_by_stepping_within_its_region() {
                     && !seen.contains(&next)
                 {
                     seen.push(next);
-                    frontier.push(next);
+                    if map.country(next).region == region {
+                        frontier.push(next);
+                    }
                 }
             }
         }
@@ -288,6 +296,125 @@ fn every_country_is_reachable_by_stepping_within_its_region() {
                 "{} in {region} is unreachable by stepping from {}",
                 map.country(id).name,
                 map.country(start).name
+            );
+        }
+    }
+}
+
+/// Starting from `start`'s first country, follows `step_country` alone —
+/// jumping onto a guest chip the moment it's reached, exactly as
+/// `interactive.rs` does — and returns every region reached this way.
+fn regions_reachable_from(map: &WorldMap, layout: &MapLayout, start: Region) -> Vec<Region> {
+    let mut seen_regions = vec![start];
+    let mut frontier = vec![(start, layout.countries_in_region(map, start)[0])];
+    let mut seen_countries = vec![frontier[0].1];
+    while let Some((region, id)) = frontier.pop() {
+        for &dir in &DIRECTIONS {
+            if let Some(next) = layout.step_country(map, region, id, dir) {
+                let next_region = map.country(next).region;
+                if !seen_regions.contains(&next_region) {
+                    seen_regions.push(next_region);
+                }
+                if !seen_countries.contains(&next) {
+                    seen_countries.push(next);
+                    frontier.push((next_region, next));
+                }
+            }
+        }
+    }
+    seen_regions
+}
+
+#[test]
+fn every_region_is_reachable_by_stepping_through_guest_chips_within_its_own_hemisphere() {
+    // Guest chips only stand in for a *real* country-to-country border,
+    // and on the standard map those never cross between the Old World
+    // (Europe/Asia/MiddleEast/Africa, all connected to each other) and
+    // the New World (CentralAmerica/SouthAmerica, connected only to each
+    // other) — the two are joined solely through superpower home
+    // territory, which isn't a steppable link. So this pins two
+    // reachable clusters, not one: within each, the whole cluster is
+    // walkable by stepping alone with no need to return to the world map.
+    let (map, layout) = standard();
+    let old_world = regions_reachable_from(&map, &layout, Region::Europe);
+    for &region in &[Region::Europe, Region::Asia, Region::MiddleEast, Region::Africa] {
+        assert!(old_world.contains(&region), "{region} is unreachable by stepping alone from Europe");
+    }
+
+    let new_world = regions_reachable_from(&map, &layout, Region::CentralAmerica);
+    for &region in &[Region::CentralAmerica, Region::SouthAmerica] {
+        assert!(new_world.contains(&region), "{region} is unreachable by stepping alone from Central America");
+    }
+}
+
+#[test]
+fn guests_never_collide_with_native_cells_or_each_other() {
+    use std::collections::HashSet;
+    let (map, layout) = standard();
+    for &region in &Region::ALL {
+        let mut cells = HashSet::new();
+        for &id in &layout.countries_in_region(&map, region) {
+            let cell = layout.cell(id);
+            assert!(cells.insert((cell.row, cell.col)), "{} collides with another native cell in {region}", map.country(id).name);
+        }
+        for guest in layout.guests(region) {
+            assert!(cells.insert((guest.cell.row, guest.cell.col)), "a guest cell collides in {region}: {guest:?}");
+        }
+    }
+}
+
+#[test]
+fn a_guest_is_never_native_to_its_own_host_region() {
+    let (map, layout) = standard();
+    for &region in &Region::ALL {
+        for guest in layout.guests(region) {
+            if let GuestEntity::Country(id) = guest.entity {
+                assert_ne!(map.country(id).region, region, "{} is a guest of its own region, {region}", map.country(id).name);
+            }
+        }
+    }
+}
+
+#[test]
+fn stepping_onto_a_guest_lands_in_a_different_region() {
+    let (map, layout) = standard();
+    for &region in &Region::ALL {
+        for &id in &layout.countries_in_region(&map, region) {
+            for &dir in &DIRECTIONS {
+                if let Some(next) = layout.step_country(&map, region, id, dir)
+                    && map.country(next).region != region
+                {
+                    // `next` must be exactly the country the guest chip
+                    // stands for — a country actually native somewhere
+                    // else, never a superpower (which is never a
+                    // `step_country` candidate at all).
+                    assert!(
+                        layout.guests(region).iter().any(|g| g.entity == GuestEntity::Country(next)),
+                        "{} in {region} stepped to {}, which isn't one of {region}'s guest chips",
+                        map.country(id).name,
+                        map.country(next).name
+                    );
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn every_region_has_a_guest_covering_its_superpower_adjacency() {
+    // `step_country` itself can never return a superpower — its return
+    // type is `CountryId` — so the exclusion is enforced by the type
+    // system, not tested here. What's worth pinning is that every region
+    // bordering a superpower actually has a guest chip for it, so the
+    // superpower shows up on the grid rather than only in a footnote.
+    let (map, layout) = standard();
+    for (_, country) in map.iter() {
+        for &sp in &country.adjacent_superpowers {
+            assert!(
+                layout.guests(country.region).iter().any(|g| g.entity == GuestEntity::Superpower(sp)),
+                "{}'s region ({}) has no guest chip for {sp}",
+                country.name,
+                country.region
             );
         }
     }
