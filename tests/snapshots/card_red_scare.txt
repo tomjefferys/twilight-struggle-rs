@@ -1,0 +1,7 @@
+┌─ Ops 4 · Red Scare/Purge ───────────── Both · Early War ─┐
+│  All Operations cards played by the opponent, for the    │
+│  remainder of this turn, receive -1 to their Operations  │
+│  value (to a minimum value of 1 Operations point).       │
+│                                                          │
+│                                                card #31  │
+└──────────────────────────────────────────────────────────┘

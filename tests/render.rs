@@ -1,7 +1,7 @@
-use twilight_struggle::render::{operation_abandoned_line, operation_closed_line, render_country, render_region, render_world};
+use twilight_struggle::render::{operation_abandoned_line, operation_closed_line, render_card, render_country, render_hand, render_region, render_world};
 use twilight_struggle::{
-    Board, ColorMode, CountryId, Coup, GuestEntity, InfluencePlacement, LinkTarget, MapLayout, Operation, Realignment, Region, Scenario,
-    Superpower, ViewMode, WorldMap,
+    Board, CardCatalog, ColorMode, CountryId, Coup, GuestEntity, InfluencePlacement, LinkTarget, MapLayout, Operation, Realignment, Region,
+    Scenario, Superpower, ViewMode, WorldMap,
 };
 
 fn standard() -> (WorldMap, MapLayout) {
@@ -10,10 +10,15 @@ fn standard() -> (WorldMap, MapLayout) {
     (map, layout)
 }
 
+fn cards() -> CardCatalog {
+    CardCatalog::standard().unwrap()
+}
+
 #[test]
 fn world_dashboard_matches_snapshot_at_104() {
     let (map, layout) = standard();
-    let scenario = Scenario::demo(&map).unwrap();
+    let cards = cards();
+    let scenario = Scenario::demo(&map, &cards).unwrap();
     let canvas = render_world(&map, &layout, &scenario.board, &scenario.status, 104);
     let expected = include_str!("snapshots/world_104.txt");
     assert_eq!(canvas.render(ColorMode::Never), expected.trim_end_matches('\n'));
@@ -22,7 +27,8 @@ fn world_dashboard_matches_snapshot_at_104() {
 #[test]
 fn world_dashboard_matches_snapshot_at_80() {
     let (map, layout) = standard();
-    let scenario = Scenario::demo(&map).unwrap();
+    let cards = cards();
+    let scenario = Scenario::demo(&map, &cards).unwrap();
     let canvas = render_world(&map, &layout, &scenario.board, &scenario.status, 80);
     let expected = include_str!("snapshots/world_80.txt");
     assert_eq!(canvas.render(ColorMode::Never), expected.trim_end_matches('\n'));
@@ -31,7 +37,8 @@ fn world_dashboard_matches_snapshot_at_80() {
 #[test]
 fn no_rendered_line_exceeds_requested_width() {
     let (map, layout) = standard();
-    let scenario = Scenario::demo(&map).unwrap();
+    let cards = cards();
+    let scenario = Scenario::demo(&map, &cards).unwrap();
     for &width in &[80usize, 104, 130] {
         let canvas = render_world(&map, &layout, &scenario.board, &scenario.status, width);
         let text = canvas.render(ColorMode::Never);
@@ -433,7 +440,8 @@ fn line_after<'a>(text: &'a str, needle: &str) -> &'a str {
 #[test]
 fn color_never_emits_no_escape_codes() {
     let (map, layout) = standard();
-    let scenario = Scenario::demo(&map).unwrap();
+    let cards = cards();
+    let scenario = Scenario::demo(&map, &cards).unwrap();
     let canvas = render_world(&map, &layout, &scenario.board, &scenario.status, 104);
     assert!(!canvas.render(ColorMode::Never).contains('\x1b'));
 
@@ -884,7 +892,8 @@ fn country_detail_marks_the_neighbours_supplying_adjacent_controlled() {
 #[test]
 fn country_detail_matches_snapshot() {
     let (map, layout) = standard();
-    let scenario = Scenario::demo(&map).unwrap();
+    let cards = cards();
+    let scenario = Scenario::demo(&map, &cards).unwrap();
     let poland = map.id_by_name("Poland").unwrap();
     let canvas = render_country(&map, &layout, &scenario.board, poland, None, ViewMode::Static);
     let expected = include_str!("snapshots/country_poland.txt");
@@ -978,4 +987,24 @@ fn pending_influence_is_marked_in_the_country_view() {
     let poland_stats_line = line_after(&text, "Poland");
     assert!(poland_stats_line.contains("USSR 2"), "Poland's USSR figure should be live: {poland_stats_line:?}");
     assert!(text.contains("2 placed here"), "the Operation panel should say how much is pending here:\n{text}");
+}
+
+#[test]
+fn hand_strip_matches_snapshot() {
+    let (map, _) = standard();
+    let cards = cards();
+    let scenario = Scenario::demo(&map, &cards).unwrap();
+    let hand = scenario.hands.hand(Superpower::Ussr);
+    let canvas = render_hand(&cards, hand, Some(scenario.status.china_card_face_up), Superpower::Ussr, None);
+    let expected = include_str!("snapshots/hand_ussr.txt");
+    assert_eq!(canvas.render(ColorMode::Never), expected.trim_end_matches('\n'));
+}
+
+#[test]
+fn card_detail_matches_snapshot() {
+    let cards = cards();
+    let red_scare = cards.id_by_name("Red Scare/Purge").unwrap();
+    let canvas = render_card(&cards, red_scare, None);
+    let expected = include_str!("snapshots/card_red_scare.txt");
+    assert_eq!(canvas.render(ColorMode::Never), expected.trim_end_matches('\n'));
 }

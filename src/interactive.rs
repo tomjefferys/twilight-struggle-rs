@@ -13,11 +13,12 @@ use crossterm::terminal::{self, Clear, ClearType, EnterAlternateScreen, LeaveAlt
 use crossterm::{execute, queue};
 
 use twilight_struggle::render::{
-    coup_result_line, operation_abandoned_line, operation_closed_line, operation_header, render_country, render_region,
-    render_status_bar, render_world_map, roll_result_line,
+    coup_result_line, operation_abandoned_line, operation_closed_line, operation_header, render_card, render_country, render_hand,
+    render_region, render_status_bar, render_world_map, roll_result_line, Canvas, HAND_ROWS,
 };
 use twilight_struggle::{
-    ColorMode, CountryId, Dice, Direction, Game, GameError, MapLayout, OperationKind, Region, RollOutcome, ViewMode, WorldMap,
+    CardCatalog, ColorMode, CountryId, Dice, Direction, Game, GameError, MapLayout, OperationKind, Region, RollOutcome, Superpower, ViewMode,
+    WorldMap, CHINA_CARD,
 };
 
 /// Which screen is currently showing.
@@ -105,7 +106,18 @@ impl Drop for TerminalGuard {
 /// and permanently, since there's nothing to undo. `Esc`/`q` leave a
 /// still-open session untouched rather than clearing it, so it can be
 /// resumed from the REPL or by reopening the map.
-pub fn run(map: &WorldMap, layout: &MapLayout, game: &mut Game, dice: &mut Dice, color: ColorMode) -> io::Result<()> {
+///
+/// The active side's hand is drawn as a strip below every screen
+/// (`render::render_hand`), global like `i`/`a`/`o`/`p`: `[`/`]` cycle its
+/// selection and `z` toggles a zoomed detail overlay
+/// (`render::render_card`, blitted onto the current screen's own canvas)
+/// for the selected card — all three no-ops on an empty hand. `Esc` closes
+/// an open zoom first, before whatever it would otherwise do; `c`/`X`/`p`
+/// actually handing the turn over close it too, since the newly active
+/// side's own hand takes its place. Neither the strip nor the zoom is tied
+/// to card *behaviour* — nothing here plays, draws, or discards a card,
+/// only browses what [`Game::hand`] already holds.
+pub fn run(map: &WorldMap, layout: &MapLayout, cards: &CardCatalog, game: &mut Game, dice: &mut Dice, color: ColorMode) -> io::Result<()> {
     let _guard = TerminalGuard::enter()?;
     let mut screen = Screen::World { selected: Region::Europe };
     // Remembers the last country selected in each region, so leaving a
@@ -123,8 +135,18 @@ pub fn run(map: &WorldMap, layout: &MapLayout, game: &mut Game, dice: &mut Dice,
     // messages.
     let mut message: Option<String> = None;
     let mut sticky = false;
+    // Each side's selected index into its own hand (China Card appended
+    // last, when it holds it) — kept per side, indexed via `side_index`,
+    // so passing the turn back and forth doesn't lose either side's place.
+    let mut hand_selected: [usize; 2] = [0, 0];
+    // Whether the selected card's full detail is overlaid on the current
+    // screen. Survives ordinary navigation (the hand and its overlay
+    // aren't tied to any one screen) but is always closed by an `Esc`
+    // while it's open, and by `c`/`X`/`p` actually handing the turn over —
+    // the newly active side's own hand takes its place.
+    let mut zoomed = false;
 
-    draw(&screen, map, layout, game, message.as_deref(), color)?;
+    draw(&screen, map, layout, cards, game, message.as_deref(), &hand_selected, zoomed, color)?;
     loop {
         match event::read()? {
             Event::Key(key) if key.kind == KeyEventKind::Press => {
@@ -135,27 +157,44 @@ pub fn run(map: &WorldMap, layout: &MapLayout, game: &mut Game, dice: &mut Dice,
                     message = None;
                 }
                 match key.code {
+                    KeyCode::Esc if zoomed => zoomed = false,
                     KeyCode::Esc if matches!(screen, Screen::World { .. }) => return Ok(()),
                     KeyCode::Char('q') => return Ok(()),
+                    KeyCode::Char('[') => cycle_hand(game, &mut hand_selected, -1),
+                    KeyCode::Char(']') => cycle_hand(game, &mut hand_selected, 1),
+                    KeyCode::Char('z') => {
+                        if hand_item_count(game, game.active()) > 0 {
+                            zoomed = !zoomed;
+                        }
+                    }
                     KeyCode::Char('i') => message = begin(game, OperationKind::Influence),
                     KeyCode::Char('a') => message = begin(game, OperationKind::Realign),
                     KeyCode::Char('o') => message = begin(game, OperationKind::Coup),
                     KeyCode::Char('p') => {
                         let passing = game.active();
                         message = Some(match game.pass() {
-                            Ok(()) => format!("{passing} passes — {} to act", game.active()),
+                            Ok(()) => {
+                                zoomed = false;
+                                format!("{passing} passes — {} to act", game.active())
+                            }
                             Err(e) => e.to_string(),
                         });
                     }
                     KeyCode::Char('c') => {
                         message = Some(match game.confirm() {
-                            Ok(op) => operation_closed_line(&op, true, game.active()),
+                            Ok(op) => {
+                                zoomed = false;
+                                operation_closed_line(&op, true, game.active())
+                            }
                             Err(e) => e.to_string(),
                         });
                     }
                     KeyCode::Char('X') => {
                         message = Some(match game.cancel() {
-                            Ok(op) => operation_closed_line(&op, false, game.active()),
+                            Ok(op) => {
+                                zoomed = false;
+                                operation_closed_line(&op, false, game.active())
+                            }
                             Err(e) => e.to_string(),
                         });
                     }
@@ -238,9 +277,9 @@ pub fn run(map: &WorldMap, layout: &MapLayout, game: &mut Game, dice: &mut Dice,
                         },
                     },
                 }
-                draw(&screen, map, layout, game, message.as_deref(), color)?;
+                draw(&screen, map, layout, cards, game, message.as_deref(), &hand_selected, zoomed, color)?;
             }
-            Event::Resize(_, _) => draw(&screen, map, layout, game, message.as_deref(), color)?,
+            Event::Resize(_, _) => draw(&screen, map, layout, cards, game, message.as_deref(), &hand_selected, zoomed, color)?,
             _ => {}
         }
     }
@@ -255,6 +294,39 @@ fn begin(game: &mut Game, kind: OperationKind) -> Option<String> {
         Ok(()) => Some(format!("started — {}", operation_header(game.operation().expect("begin just opened one")))),
         Err(e) => Some(e.to_string()),
     }
+}
+
+/// Indexes `hand_selected` by side — `Us` and `Ussr` each get their own
+/// slot, so swapping the active side never loses the other side's place
+/// in its own hand.
+fn side_index(side: Superpower) -> usize {
+    match side {
+        Superpower::Us => 0,
+        Superpower::Ussr => 1,
+    }
+}
+
+/// How many cards `side`'s hand strip actually shows: its held cards,
+/// plus the China Card when `side` currently holds it (see
+/// [`twilight_struggle::Hands`]'s own doc for why that's counted
+/// separately from [`Game::hand`]).
+fn hand_item_count(game: &Game, side: Superpower) -> usize {
+    let china = game.status().china_card == side;
+    game.hand(side).len() + china as usize
+}
+
+/// `[`/`]`: moves the active side's own hand selection by `delta` (`-1` or
+/// `1`), wrapping around either end. A no-op when that side's hand (plus a
+/// possible China Card) is empty — there's nothing to select.
+fn cycle_hand(game: &Game, hand_selected: &mut [usize; 2], delta: i32) {
+    let side = game.active();
+    let count = hand_item_count(game, side);
+    if count == 0 {
+        return;
+    }
+    let idx = side_index(side);
+    let current = hand_selected[idx].min(count - 1) as i32;
+    hand_selected[idx] = (current + delta).rem_euclid(count as i32) as usize;
 }
 
 /// Moves `selected` one step within `region`'s display grid via
@@ -278,42 +350,90 @@ fn step_or_jump(map: &WorldMap, layout: &MapLayout, last_selected: &mut HashMap<
     *selected = next;
 }
 
-fn draw(screen: &Screen, map: &WorldMap, layout: &MapLayout, game: &Game, message: Option<&str>, color: ColorMode) -> io::Result<()> {
+/// Draws the status bar, the current screen (with a zoomed card's detail
+/// blitted over it, if `zoomed`), the message row, and — pinned to the
+/// bottom, always [`HAND_ROWS`] tall — the active side's hand strip.
+/// Everything but the screen's own view is kept in full; the view is what
+/// gets clipped from the bottom when the terminal is too short for all of
+/// it, the same rule the status bar already followed before the hand
+/// strip existed.
+#[allow(clippy::too_many_arguments)]
+fn draw(
+    screen: &Screen,
+    map: &WorldMap,
+    layout: &MapLayout,
+    cards: &CardCatalog,
+    game: &Game,
+    message: Option<&str>,
+    hand_selected: &[usize; 2],
+    zoomed: bool,
+    color: ColorMode,
+) -> io::Result<()> {
     let board = game.board();
     let op = game.operation();
-    let canvas = match screen {
+    let mut canvas = match screen {
         Screen::World { selected } => render_world_map(map, layout, board, Some(*selected), op),
         Screen::Region { region, selected } => render_region(map, layout, board, *region, Some(*selected), op),
         Screen::Country { selected, .. } => render_country(map, layout, board, *selected, op, ViewMode::Interactive),
     };
+
+    let side = game.active();
+    let status = game.status();
+    let china = (status.china_card == side).then_some(status.china_card_face_up);
+    let hand = game.hand(side);
+    let item_count = hand.len() + china.is_some() as usize;
+    let selected_idx = (item_count > 0).then(|| hand_selected[side_index(side)].min(item_count - 1));
+    let hand_canvas = render_hand(cards, hand, china, side, selected_idx);
+
+    if zoomed && let Some(idx) = selected_idx {
+        let id = if idx < hand.len() { hand[idx] } else { CHINA_CARD };
+        let china_face_up = (id == CHINA_CARD).then_some(status.china_card_face_up);
+        let card_canvas = render_card(cards, id, china_face_up);
+        // The overlay should never be clipped by a view too small for
+        // it — widen the canvas first if it needs to be, rather than
+        // letting `blit` silently cut the card off.
+        if card_canvas.width() > canvas.width() || card_canvas.height() > canvas.height() {
+            let mut widened = Canvas::new(canvas.width().max(card_canvas.width()), canvas.height().max(card_canvas.height()));
+            widened.blit(&canvas, 0, 0);
+            canvas = widened;
+        }
+        let row = canvas.height().saturating_sub(card_canvas.height()) / 2;
+        let col = canvas.width().saturating_sub(card_canvas.width()) / 2;
+        canvas.blit(&card_canvas, row, col);
+    }
+
     let bar = render_status_bar(layout, board, game.status(), op, canvas.width());
 
-    let rows = terminal::size().map(|(_, h)| h as usize).unwrap_or(bar.height() + canvas.height());
-    // The status bar and the message row are the two rows worth keeping
-    // when the whole thing is taller than the terminal: the view itself —
-    // never the bar, never the message — is what gets clipped from the
-    // bottom to make room.
-    let view_budget = rows.saturating_sub(bar.height() + message.is_some() as usize);
+    let rows = terminal::size().map(|(_, h)| h as usize).unwrap_or(bar.height() + canvas.height() + HAND_ROWS);
+    let view_budget = rows.saturating_sub(bar.height() + message.is_some() as usize + HAND_ROWS);
 
     let mut out = io::stdout();
     queue!(out, Clear(ClearType::All))?;
-    let lines = bar.render(color);
-    let view = canvas.render(color);
     let mut row = 0u16;
-    for line in lines.split('\n').chain(view.split('\n').take(view_budget)).take(rows) {
-        queue!(out, MoveTo(0, row))?;
-        out.write_all(line.as_bytes())?;
-        // Raw mode needs an explicit carriage return: a bare '\n' only
-        // moves the cursor down a row, it doesn't return it to column 0.
-        out.write_all(b"\r\n")?;
-        row += 1;
+    let emit = |out: &mut io::Stdout, row: &mut u16, line: &str| -> io::Result<()> {
+        if (*row as usize) < rows {
+            queue!(out, MoveTo(0, *row))?;
+            out.write_all(line.as_bytes())?;
+            // Raw mode needs an explicit carriage return: a bare '\n'
+            // only moves the cursor down a row, it doesn't return it to
+            // column 0.
+            out.write_all(b"\r\n")?;
+        }
+        *row += 1;
+        Ok(())
+    };
+
+    for line in bar.render(color).split('\n') {
+        emit(&mut out, &mut row, line)?;
     }
-    if let Some(message) = message
-        && (row as usize) < rows
-    {
-        queue!(out, MoveTo(0, row))?;
-        out.write_all(message.as_bytes())?;
-        out.write_all(b"\r\n")?;
+    for line in canvas.render(color).split('\n').take(view_budget) {
+        emit(&mut out, &mut row, line)?;
+    }
+    if let Some(message) = message {
+        emit(&mut out, &mut row, message)?;
+    }
+    for line in hand_canvas.render(color).split('\n') {
+        emit(&mut out, &mut row, line)?;
     }
     out.flush()
 }

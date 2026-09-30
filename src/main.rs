@@ -2,12 +2,12 @@ use std::fs;
 use std::io::{self, IsTerminal, Write};
 
 use twilight_struggle::render::{
-    coup_result_line, log_text, operation_abandoned_line, operation_balance_line, render_country, render_log, render_region, render_world,
-    render_world_map, roll_result_line,
+    coup_result_line, log_text, operation_abandoned_line, operation_balance_line, render_card, render_country, render_hand, render_log,
+    render_region, render_world, render_world_map, roll_result_line,
 };
 use twilight_struggle::{
-    ColorMode, Dice, Found, Game, GameError, MapLayout, Operation, OperationKind, Region, RollOutcome, Scenario, Superpower, ViewMode, WorldMap,
-    OPS_PER_ACTION_ROUND,
+    CardCatalog, CardFound, ColorMode, Dice, Found, Game, GameError, MapLayout, Operation, OperationKind, Region, RollOutcome, Scenario,
+    Superpower, ViewMode, WorldMap, CHINA_CARD, OPS_PER_ACTION_ROUND,
 };
 
 mod interactive;
@@ -15,6 +15,7 @@ mod interactive;
 struct Session {
     map: WorldMap,
     layout: MapLayout,
+    cards: CardCatalog,
     /// Status, board, and whichever operation is open — see [`Game`]'s own
     /// doc for why these three move together. Turns are enforced entirely
     /// through this: `influence`/`realign`/`coup` no longer take a side or
@@ -38,7 +39,8 @@ struct Session {
 fn main() {
     let map = WorldMap::standard().expect("standard map should be valid");
     let layout = MapLayout::standard(&map).expect("standard layout should be valid");
-    let scenario = Scenario::demo(&map).expect("demo scenario should be valid");
+    let cards = CardCatalog::standard().expect("standard card catalog should be valid");
+    let scenario = Scenario::demo(&map, &cards).expect("demo scenario should be valid");
     let game = Game::from_scenario(&scenario);
 
     let mut args = std::env::args().skip(1).peekable();
@@ -87,6 +89,7 @@ fn main() {
     let mut session = Session {
         map,
         layout,
+        cards,
         game,
         width,
         color,
@@ -150,7 +153,7 @@ fn run_command(session: &mut Session, line: &str) {
                 // now — i/a/o/p/c/X all stay on screen — so there's nothing
                 // left to report on return but the one state the next
                 // prompt won't show on its own: a session left open.
-                match interactive::run(&session.map, &session.layout, &mut session.game, &mut session.dice, session.color) {
+                match interactive::run(&session.map, &session.layout, &session.cards, &mut session.game, &mut session.dice, session.color) {
                     Ok(()) => {
                         if let Some(op) = session.game.operation() {
                             println!(
@@ -235,7 +238,7 @@ fn run_command(session: &mut Session, line: &str) {
                 return;
             }
             if words.get(1) == Some(&"demo") {
-                let scenario = Scenario::demo(&session.map).expect("demo scenario should be valid");
+                let scenario = Scenario::demo(&session.map, &session.cards).expect("demo scenario should be valid");
                 session.game = Game::from_scenario(&scenario);
                 session.game.record_note("loaded the demo scenario");
                 println!("loaded demo scenario");
@@ -254,6 +257,8 @@ fn run_command(session: &mut Session, line: &str) {
         "abandon" => run_abandon_command(session),
         "status" => run_status_command(session),
         "pass" => run_pass_command(session),
+        "hand" => run_hand_command(session, &words),
+        "card" => run_card_command(session, &words),
         "log" | "history" => run_log_command(session, &words),
         "export" => run_export_command(session, &words),
         "seed" => match words.get(1).and_then(|s| s.parse().ok()) {
@@ -452,6 +457,53 @@ fn run_roll_command(session: &mut Session, words: &[&str]) {
         }
         Err(GameError::NoOperation) => println!("no realignment or coup session open. Start one with: realign or coup"),
         Err(e) => println!("{e}"),
+    }
+}
+
+/// `hand [us|ussr]` prints the named side's hand (default: the active
+/// side), with the China Card appended if that side currently holds it —
+/// a static, unselected print, the same view the interactive map's hand
+/// strip draws with a selection.
+fn run_hand_command(session: &Session, words: &[&str]) {
+    let side = match words.get(1) {
+        Some(s) => match parse_superpower(s) {
+            Some(side) => side,
+            None => {
+                println!("expected 'us' or 'ussr', got {s:?}");
+                return;
+            }
+        },
+        None => session.game.active(),
+    };
+    let status = session.game.status();
+    let china = (status.china_card == side).then_some(status.china_card_face_up);
+    let canvas = render_hand(&session.cards, session.game.hand(side), china, side, None);
+    println!("{}", canvas.render(session.color));
+}
+
+/// `card <id|name>` prints one card's full detail — the same zoom view
+/// the interactive map overlays on `z`.
+fn run_card_command(session: &Session, words: &[&str]) {
+    let Some(query) = words.get(1..).map(|w| w.join(" ")) else {
+        println!("usage: card <id|name>");
+        return;
+    };
+    if query.is_empty() {
+        println!("usage: card <id|name>");
+        return;
+    }
+    match session.cards.find(&query) {
+        CardFound::One(id) => {
+            let status = session.game.status();
+            let china_face_up = (id == CHINA_CARD).then_some(status.china_card_face_up);
+            let canvas = render_card(&session.cards, id, china_face_up);
+            println!("{}", canvas.render(session.color));
+        }
+        CardFound::None => println!("no card matches {query:?}"),
+        CardFound::Ambiguous(ids) => {
+            let names: Vec<&str> = ids.iter().map(|&id| session.cards.card(id).name.as_str()).collect();
+            println!("ambiguous: {}", names.join(", "));
+        }
     }
 }
 
@@ -668,7 +720,10 @@ Commands:
                           active side, DEFCON, VP, and the open operation's
                           balance; i/a/o start an influence placement,
                           realignment, or coup for the active side right
-                          there and p passes — no need to leave the map
+                          there and p passes — no need to leave the map.
+                          The active side's hand is drawn below every
+                          screen; [ and ] cycle the selected card, z
+                          zooms it into a full detail overlay
   region <name>, 1-6      zoom into one region (europe/asia/middleeast/africa/centralamerica/southamerica)
   country <name>, /<name> a single country's detail, with all its neighbours (name or code)
   set <c> <us|ussr> <n>   set a country's influence
@@ -741,6 +796,13 @@ Commands:
                           country screen, opened from region with Enter or
                           r; set/add/remove/load are refused until you
                           confirm or cancel)
+
+  hand [us|ussr]          the named side's hand (default: active side),
+                          as a strip of mini-card boxes — or see it drawn
+                          under every screen inside the interactive map
+  card <id|name>          one card's full detail (id, name prefix, or
+                          exact name) — or press z to zoom the selected
+                          card inside the interactive map
 
   log [n], history        the game's history so far (or just the last n
                           entries), colour-banded by side; a realignment

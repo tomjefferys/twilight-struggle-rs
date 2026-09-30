@@ -23,6 +23,7 @@
 use std::fmt;
 
 use crate::board::Board;
+use crate::cards::{CardId, Hands};
 use crate::country::{CountryId, Superpower};
 use crate::dice::Dice;
 use crate::log::{Event, GameLog, LogEntry};
@@ -134,13 +135,20 @@ pub struct Game {
     board: Board,
     op: Option<Operation>,
     log: GameLog,
+    hands: Hands,
 }
 
 impl Game {
-    /// Starts from a scenario's status and board, with no operation open
-    /// and an empty history.
+    /// Starts from a scenario's status, board, and hands, with no
+    /// operation open and an empty history.
     pub fn from_scenario(scenario: &Scenario) -> Self {
-        Game { status: scenario.status, board: scenario.board.clone(), op: None, log: GameLog::new() }
+        Game {
+            status: scenario.status,
+            board: scenario.board.clone(),
+            op: None,
+            log: GameLog::new(),
+            hands: scenario.hands.clone(),
+        }
     }
 
     pub fn status(&self) -> &GameStatus {
@@ -185,7 +193,15 @@ impl Game {
     /// of [`Clone::clone`], so lookahead doesn't drag a growing `Vec`
     /// through every branch it never plays out.
     pub fn lookahead(&self) -> Game {
-        Game { status: self.status, board: self.board.clone(), op: self.op.clone(), log: GameLog::new() }
+        Game { status: self.status, board: self.board.clone(), op: self.op.clone(), log: GameLog::new(), hands: self.hands.clone() }
+    }
+
+    /// `side`'s held cards, in hand order. Doesn't include the China Card
+    /// ([`crate::cards::CHINA_CARD`]) — see [`Hands`]'s own doc. No card
+    /// can be played or drawn yet, so this only ever reflects the
+    /// scenario's starting deal.
+    pub fn hand(&self, side: Superpower) -> &[CardId] {
+        self.hands.hand(side)
     }
 
     /// The committed board — never the speculative one. This is what a
@@ -435,11 +451,16 @@ impl Game {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::cards::CardCatalog;
     use crate::country::Superpower::{Us, Ussr};
     use crate::map::WorldMap;
 
     fn map() -> WorldMap {
         WorldMap::standard().unwrap()
+    }
+
+    fn cards() -> CardCatalog {
+        CardCatalog::standard().unwrap()
     }
 
     fn id(map: &WorldMap, name: &str) -> CountryId {
@@ -448,15 +469,16 @@ mod tests {
 
     /// A scenario with one country pre-seeded, so realignment/coup targets
     /// (which need opponent presence) have something to aim at.
-    fn scenario_with(map: &WorldMap, country: &str, us: u8, ussr: u8) -> Scenario {
+    fn scenario_with(map: &WorldMap, cards: &CardCatalog, country: &str, us: u8, ussr: u8) -> Scenario {
         let json = format!(r#"{{"influence":{{"{country}":[{us},{ussr}]}}}}"#);
-        Scenario::from_json(map, &json).unwrap()
+        Scenario::from_json(map, cards, &json).unwrap()
     }
 
     #[test]
     fn ussr_acts_first_and_confirm_hands_over_to_us() {
         let map = map();
-        let mut game = Game::from_scenario(&Scenario::from_json(&map, "{}").unwrap());
+        let cards = cards();
+        let mut game = Game::from_scenario(&Scenario::from_json(&map, &cards, "{}").unwrap());
         assert_eq!(game.active(), Ussr);
 
         game.begin(OperationKind::Influence).unwrap();
@@ -469,7 +491,8 @@ mod tests {
     #[test]
     fn action_round_only_increments_after_us_acts() {
         let map = map();
-        let mut game = Game::from_scenario(&Scenario::from_json(&map, "{}").unwrap());
+        let cards = cards();
+        let mut game = Game::from_scenario(&Scenario::from_json(&map, &cards, "{}").unwrap());
         let start_ar = game.status().action_round;
 
         game.begin(OperationKind::Influence).unwrap();
@@ -484,8 +507,9 @@ mod tests {
     #[test]
     fn action_round_rolls_the_turn_over_when_it_passes_the_limit() {
         let map = map();
+        let cards = cards();
         let json = r#"{"status":{"turn":1,"action_round":2,"action_rounds_per_turn":2}}"#;
-        let mut game = Game::from_scenario(&Scenario::from_json(&map, json).unwrap());
+        let mut game = Game::from_scenario(&Scenario::from_json(&map, &cards, json).unwrap());
         assert_eq!(game.status().active, Ussr);
 
         game.begin(OperationKind::Influence).unwrap();
@@ -502,7 +526,8 @@ mod tests {
     #[test]
     fn begin_is_refused_while_an_operation_is_open() {
         let map = map();
-        let mut game = Game::from_scenario(&Scenario::from_json(&map, "{}").unwrap());
+        let cards = cards();
+        let mut game = Game::from_scenario(&Scenario::from_json(&map, &cards, "{}").unwrap());
         game.begin(OperationKind::Influence).unwrap();
         assert!(matches!(game.begin(OperationKind::Coup), Err(GameError::OperationOpen { .. })));
     }
@@ -510,7 +535,8 @@ mod tests {
     #[test]
     fn every_operation_opens_with_the_active_side_and_a_full_turns_ops() {
         let map = map();
-        let mut game = Game::from_scenario(&Scenario::from_json(&map, "{}").unwrap());
+        let cards = cards();
+        let mut game = Game::from_scenario(&Scenario::from_json(&map, &cards, "{}").unwrap());
         game.begin(OperationKind::Realign).unwrap();
         let op = game.operation().unwrap();
         assert_eq!(op.side(), Ussr);
@@ -521,7 +547,8 @@ mod tests {
     #[test]
     fn cancel_advances_the_turn_just_like_confirm() {
         let map = map();
-        let mut game = Game::from_scenario(&Scenario::from_json(&map, "{}").unwrap());
+        let cards = cards();
+        let mut game = Game::from_scenario(&Scenario::from_json(&map, &cards, "{}").unwrap());
         game.begin(OperationKind::Influence).unwrap();
         game.cancel().unwrap();
         assert_eq!(game.active(), Us);
@@ -530,7 +557,8 @@ mod tests {
     #[test]
     fn pass_advances_with_no_operation_open() {
         let map = map();
-        let mut game = Game::from_scenario(&Scenario::from_json(&map, "{}").unwrap());
+        let cards = cards();
+        let mut game = Game::from_scenario(&Scenario::from_json(&map, &cards, "{}").unwrap());
         game.pass().unwrap();
         assert_eq!(game.active(), Us);
     }
@@ -538,7 +566,8 @@ mod tests {
     #[test]
     fn pass_is_refused_while_an_operation_is_open() {
         let map = map();
-        let mut game = Game::from_scenario(&Scenario::from_json(&map, "{}").unwrap());
+        let cards = cards();
+        let mut game = Game::from_scenario(&Scenario::from_json(&map, &cards, "{}").unwrap());
         game.begin(OperationKind::Coup).unwrap();
         assert!(matches!(game.pass(), Err(GameError::OperationOpen { .. })));
     }
@@ -546,14 +575,16 @@ mod tests {
     #[test]
     fn abandon_is_refused_with_no_operation_open() {
         let map = map();
-        let mut game = Game::from_scenario(&Scenario::from_json(&map, "{}").unwrap());
+        let cards = cards();
+        let mut game = Game::from_scenario(&Scenario::from_json(&map, &cards, "{}").unwrap());
         assert!(matches!(game.abandon(), Err(GameError::NoOperation)));
     }
 
     #[test]
     fn an_untouched_operation_can_be_abandoned_without_costing_the_turn() {
         let map = map();
-        let mut game = Game::from_scenario(&Scenario::from_json(&map, "{}").unwrap());
+        let cards = cards();
+        let mut game = Game::from_scenario(&Scenario::from_json(&map, &cards, "{}").unwrap());
         game.begin(OperationKind::Influence).unwrap();
         game.abandon().unwrap();
         assert_eq!(game.active(), Ussr, "abandoning before anything's spent shouldn't hand the turn over");
@@ -566,8 +597,9 @@ mod tests {
         // irreversible until `confirm` runs — unlike realignment/coup,
         // `abandon` never refuses it.
         let map = map();
+        let cards = cards();
         let poland = id(&map, "Poland"); // borders the USSR itself
-        let mut game = Game::from_scenario(&Scenario::from_json(&map, "{}").unwrap());
+        let mut game = Game::from_scenario(&Scenario::from_json(&map, &cards, "{}").unwrap());
         game.begin(OperationKind::Influence).unwrap();
         game.place(&map, poland).unwrap();
         game.place(&map, poland).unwrap();
@@ -584,8 +616,9 @@ mod tests {
     #[test]
     fn undoing_every_placed_point_makes_the_operation_abandonable_too() {
         let map = map();
+        let cards = cards();
         let poland = id(&map, "Poland");
-        let mut game = Game::from_scenario(&Scenario::from_json(&map, "{}").unwrap());
+        let mut game = Game::from_scenario(&Scenario::from_json(&map, &cards, "{}").unwrap());
         game.begin(OperationKind::Influence).unwrap();
         game.place(&map, poland).unwrap();
         game.undo(&map).unwrap();
@@ -596,8 +629,9 @@ mod tests {
     #[test]
     fn abandon_is_refused_once_a_realignment_roll_has_been_made() {
         let map = map();
+        let cards = cards();
         let poland = id(&map, "Poland");
-        let mut game = Game::from_scenario(&scenario_with(&map, "Poland", 1, 0));
+        let mut game = Game::from_scenario(&scenario_with(&map, &cards, "Poland", 1, 0));
         game.begin(OperationKind::Realign).unwrap();
         let mut dice = Dice::from_seed(0);
         game.roll(&map, poland, &mut dice).unwrap();
@@ -607,8 +641,9 @@ mod tests {
     #[test]
     fn abandon_is_refused_once_a_coup_has_been_attempted() {
         let map = map();
+        let cards = cards();
         let poland = id(&map, "Poland");
-        let mut game = Game::from_scenario(&scenario_with(&map, "Poland", 1, 0));
+        let mut game = Game::from_scenario(&scenario_with(&map, &cards, "Poland", 1, 0));
         game.begin(OperationKind::Coup).unwrap();
         let mut dice = Dice::from_seed(0);
         game.roll(&map, poland, &mut dice).unwrap();
@@ -618,7 +653,8 @@ mod tests {
     #[test]
     fn abandoning_leaves_no_trace_in_the_log() {
         let map = map();
-        let mut game = Game::from_scenario(&Scenario::from_json(&map, "{}").unwrap());
+        let cards = cards();
+        let mut game = Game::from_scenario(&Scenario::from_json(&map, &cards, "{}").unwrap());
         game.begin(OperationKind::Coup).unwrap();
         game.abandon().unwrap();
         assert!(game.log().is_empty(), "an abandoned operation should leave the log exactly as it was");
@@ -627,8 +663,9 @@ mod tests {
     #[test]
     fn abandoning_a_placement_with_pending_points_leaves_no_trace_in_the_log_either() {
         let map = map();
+        let cards = cards();
         let poland = id(&map, "Poland");
-        let mut game = Game::from_scenario(&Scenario::from_json(&map, "{}").unwrap());
+        let mut game = Game::from_scenario(&Scenario::from_json(&map, &cards, "{}").unwrap());
         game.begin(OperationKind::Influence).unwrap();
         game.place(&map, poland).unwrap();
         game.abandon().unwrap();
@@ -638,15 +675,16 @@ mod tests {
     #[test]
     fn a_confirmed_placement_lands_on_the_board_but_a_cancelled_one_does_not() {
         let map = map();
+        let cards = cards();
         let poland = id(&map, "Poland");
 
-        let mut confirmed = Game::from_scenario(&Scenario::from_json(&map, "{}").unwrap());
+        let mut confirmed = Game::from_scenario(&Scenario::from_json(&map, &cards, "{}").unwrap());
         confirmed.begin(OperationKind::Influence).unwrap();
         confirmed.place(&map, poland).unwrap();
         confirmed.confirm().unwrap();
         assert_eq!(confirmed.board().influence(poland, Ussr), 1);
 
-        let mut cancelled = Game::from_scenario(&Scenario::from_json(&map, "{}").unwrap());
+        let mut cancelled = Game::from_scenario(&Scenario::from_json(&map, &cards, "{}").unwrap());
         cancelled.begin(OperationKind::Influence).unwrap();
         cancelled.place(&map, poland).unwrap();
         cancelled.cancel().unwrap();
@@ -656,7 +694,8 @@ mod tests {
     #[test]
     fn place_is_refused_when_a_different_kind_of_operation_is_open() {
         let map = map();
-        let mut game = Game::from_scenario(&scenario_with(&map, "Poland", 1, 0));
+        let cards = cards();
+        let mut game = Game::from_scenario(&scenario_with(&map, &cards, "Poland", 1, 0));
         game.begin(OperationKind::Realign).unwrap();
         assert!(matches!(game.place(&map, id(&map, "Poland")), Err(GameError::WrongKind { .. })));
     }
@@ -664,15 +703,16 @@ mod tests {
     #[test]
     fn undo_is_refused_for_a_resolved_realignment_or_coup() {
         let map = map();
+        let cards = cards();
         let poland = id(&map, "Poland");
 
-        let mut realigning = Game::from_scenario(&scenario_with(&map, "Poland", 1, 0));
+        let mut realigning = Game::from_scenario(&scenario_with(&map, &cards, "Poland", 1, 0));
         realigning.begin(OperationKind::Realign).unwrap();
         let mut dice = Dice::from_seed(0);
         realigning.roll(&map, poland, &mut dice).unwrap();
         assert!(matches!(realigning.undo(&map), Err(GameError::CannotUndo { .. })));
 
-        let mut couping = Game::from_scenario(&scenario_with(&map, "Poland", 1, 0));
+        let mut couping = Game::from_scenario(&scenario_with(&map, &cards, "Poland", 1, 0));
         couping.begin(OperationKind::Coup).unwrap();
         couping.roll(&map, poland, &mut dice).unwrap();
         assert!(matches!(couping.undo(&map), Err(GameError::CannotUndo { .. })));
@@ -681,8 +721,9 @@ mod tests {
     #[test]
     fn roll_does_not_advance_the_turn_only_confirm_and_cancel_do() {
         let map = map();
+        let cards = cards();
         let poland = id(&map, "Poland");
-        let mut game = Game::from_scenario(&scenario_with(&map, "Poland", 1, 0));
+        let mut game = Game::from_scenario(&scenario_with(&map, &cards, "Poland", 1, 0));
         game.begin(OperationKind::Coup).unwrap();
         let mut dice = Dice::from_seed(0);
         game.roll(&map, poland, &mut dice).unwrap();
@@ -694,7 +735,8 @@ mod tests {
     #[test]
     fn a_scripted_sequence_produces_the_expected_log_entries_in_order() {
         let map = map();
-        let mut game = Game::from_scenario(&Scenario::from_json(&map, "{}").unwrap());
+        let cards = cards();
+        let mut game = Game::from_scenario(&Scenario::from_json(&map, &cards, "{}").unwrap());
         let poland = id(&map, "Poland");
 
         game.begin(OperationKind::Influence).unwrap(); // USSR
@@ -721,8 +763,9 @@ mod tests {
     #[test]
     fn a_confirm_entry_carries_the_turn_and_side_it_actually_happened_in() {
         let map = map();
+        let cards = cards();
         let json = r#"{"status":{"turn":1,"action_round":2,"action_rounds_per_turn":2}}"#;
-        let mut game = Game::from_scenario(&Scenario::from_json(&map, json).unwrap());
+        let mut game = Game::from_scenario(&Scenario::from_json(&map, &cards, json).unwrap());
 
         game.begin(OperationKind::Influence).unwrap();
         game.confirm().unwrap(); // USSR -> US, rolls the turn over on the *next* US confirm
@@ -738,8 +781,9 @@ mod tests {
     #[test]
     fn a_cancelled_placement_gets_its_own_placed_line_and_a_cancel_line() {
         let map = map();
+        let cards = cards();
         let poland = id(&map, "Poland");
-        let mut game = Game::from_scenario(&Scenario::from_json(&map, "{}").unwrap());
+        let mut game = Game::from_scenario(&Scenario::from_json(&map, &cards, "{}").unwrap());
         game.begin(OperationKind::Influence).unwrap();
         game.place(&map, poland).unwrap();
         game.cancel().unwrap();
@@ -760,7 +804,8 @@ mod tests {
     #[test]
     fn an_immediately_cancelled_placement_with_nothing_placed_has_no_placed_line() {
         let map = map();
-        let mut game = Game::from_scenario(&Scenario::from_json(&map, "{}").unwrap());
+        let cards = cards();
+        let mut game = Game::from_scenario(&Scenario::from_json(&map, &cards, "{}").unwrap());
         game.begin(OperationKind::Influence).unwrap();
         game.cancel().unwrap();
 
@@ -775,8 +820,9 @@ mod tests {
     #[test]
     fn a_realignment_roll_is_logged_before_the_operation_closes() {
         let map = map();
+        let cards = cards();
         let poland = id(&map, "Poland");
-        let mut game = Game::from_scenario(&scenario_with(&map, "Poland", 1, 0));
+        let mut game = Game::from_scenario(&scenario_with(&map, &cards, "Poland", 1, 0));
         let mut dice = Dice::from_seed(0);
         game.begin(OperationKind::Realign).unwrap();
         game.roll(&map, poland, &mut dice).unwrap();
@@ -791,7 +837,8 @@ mod tests {
     #[test]
     fn lookahead_clones_state_but_starts_with_an_empty_log() {
         let map = map();
-        let mut game = Game::from_scenario(&Scenario::from_json(&map, "{}").unwrap());
+        let cards = cards();
+        let mut game = Game::from_scenario(&Scenario::from_json(&map, &cards, "{}").unwrap());
         game.pass().unwrap();
         assert_eq!(game.log().len(), 1);
 
