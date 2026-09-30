@@ -9,15 +9,18 @@ use crate::ops::Operation;
 use super::chip::{ChipGrid, ChipRole, CHIP_H, REGION_CHIP_W};
 use super::{
     control_glyph, coup_odds_line, coup_target_line, modifier_line, nz, odds_line, operation_header, operation_touched_line,
-    put_border_title, Canvas, Color, Style, ViewMode,
+    put_border_title, Canvas, Color, Style, ViewMode, BEGIN_HINT,
 };
 
 /// Shown below the box, only under [`ViewMode::Interactive`] — a static
-/// print into scrollback has no keys to hint at.
-const HINT: &str = "←→↑↓ select · Esc back";
-const PLACEMENT_HINT: &str = "←→↑↓ select · + place · u undo · c confirm · Esc back";
-const REALIGN_HINT: &str = "←→↑↓ select · r roll · c done · Esc back";
-const COUP_HINT: &str = "←→↑↓ select · r coup · c done · Esc back";
+/// print into scrollback has no keys to hint at. A function rather than a
+/// plain `const` since it interpolates [`BEGIN_HINT`].
+fn hint() -> String {
+    format!("←→↑↓ select · {BEGIN_HINT} · Esc back")
+}
+const PLACEMENT_HINT: &str = "←→↑↓ select · + place · u undo · ⌫ abandon · c confirm · Esc back";
+const REALIGN_HINT: &str = "←→↑↓ select · r roll · ⌫ abandon · c done · Esc back";
+const COUP_HINT: &str = "←→↑↓ select · r coup · ⌫ abandon · c done · Esc back";
 
 /// What occupies one cell of the neighbourhood mini-map: either a country
 /// (the one viewed, or one of its neighbours) or a superpower guest chip.
@@ -233,11 +236,11 @@ pub fn render_country(map: &WorldMap, layout: &MapLayout, board: &Board, id: Cou
         (operation_header(operation), rows)
     });
 
-    let hint = (mode == ViewMode::Interactive).then_some(match op {
-        Some(Operation::Influence(_)) => PLACEMENT_HINT,
-        Some(Operation::Realign(_)) => REALIGN_HINT,
-        Some(Operation::Coup(_)) => COUP_HINT,
-        None => HINT,
+    let hint = (mode == ViewMode::Interactive).then(|| match op {
+        Some(Operation::Influence(_)) => PLACEMENT_HINT.to_string(),
+        Some(Operation::Realign(_)) => REALIGN_HINT.to_string(),
+        Some(Operation::Coup(_)) => COUP_HINT.to_string(),
+        None => hint(),
     });
 
     // --- Sizing. Every panel's content is already known above; take the
@@ -260,7 +263,7 @@ pub fn render_country(map: &WorldMap, layout: &MapLayout, board: &Board, id: Cou
         op_panel.as_ref().map_or(0, |(title, rows)| {
             rows.iter().map(|(l, _)| l.chars().count() + 4).chain([title.chars().count() + 6]).max().unwrap_or(0)
         }),
-        hint.map_or(0, |h| h.chars().count()),
+        hint.as_deref().map_or(0, |h| h.chars().count()),
         60,
     ]
     .into_iter()
@@ -334,7 +337,7 @@ pub fn render_country(map: &WorldMap, layout: &MapLayout, board: &Board, id: Cou
         }
     }
 
-    if let Some(hint) = hint {
+    if let Some(hint) = &hint {
         canvas.put(height - 1, 0, hint, Style::color(Color::Muted));
     }
 

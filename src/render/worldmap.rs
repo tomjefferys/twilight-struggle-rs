@@ -6,22 +6,22 @@ use crate::layout::MapLayout;
 use crate::map::WorldMap;
 use crate::ops::Operation;
 
-use super::{operation_balance_line, region_color, region_tally, Canvas, Color, Style};
+use super::{operation_balance_line, region_color, region_tally, Canvas, Color, Style, BEGIN_HINT};
 
 /// Shown below the legend when a region is selected but no operation is
 /// in progress.
 const WORLD_HINT: &str = "←→↑↓ select · Enter open · Esc back";
 
 /// Shown instead once an [`InfluencePlacement`](crate::ops::InfluencePlacement) is in progress.
-const WORLD_PLACEMENT_HINT: &str = "←→↑↓ select · Enter open · u undo · c confirm · Esc back";
+const WORLD_PLACEMENT_HINT: &str = "←→↑↓ select · Enter open · u undo · ⌫ abandon · c confirm · Esc back";
 
 /// Shown instead once a [`Realignment`](crate::ops::Realignment) is in
 /// progress. No `u undo` — a resolved roll can't be taken back.
-const WORLD_REALIGN_HINT: &str = "←→↑↓ select · Enter open · r roll · c done · Esc back";
+const WORLD_REALIGN_HINT: &str = "←→↑↓ select · Enter open · r roll · ⌫ abandon · c done · Esc back";
 
 /// Shown instead once a [`Coup`](crate::ops::Coup) is in progress. No
 /// `u undo` — a resolved attempt can't be taken back.
-const WORLD_COUP_HINT: &str = "←→↑↓ select · Enter open · r coup · c done · Esc back";
+const WORLD_COUP_HINT: &str = "←→↑↓ select · Enter open · r coup · ⌫ abandon · c done · Esc back";
 
 /// The whole world on one grid, drawn to actually look like a map: real
 /// landmass shading underneath (rasterized once from public-domain
@@ -156,12 +156,12 @@ fn footer_lines(
     }
     if selected.is_some() {
         let hint = match op {
-            Some(Operation::Influence(_)) => WORLD_PLACEMENT_HINT,
-            Some(Operation::Realign(_)) => WORLD_REALIGN_HINT,
-            Some(Operation::Coup(_)) => WORLD_COUP_HINT,
-            None => WORLD_HINT,
+            Some(Operation::Influence(_)) => WORLD_PLACEMENT_HINT.to_string(),
+            Some(Operation::Realign(_)) => WORLD_REALIGN_HINT.to_string(),
+            Some(Operation::Coup(_)) => WORLD_COUP_HINT.to_string(),
+            None => format!("{WORLD_HINT} · {BEGIN_HINT}"),
         };
-        lines.push((hint.to_string(), Style::color(Color::Muted)));
+        lines.push((hint, Style::color(Color::Muted)));
     }
     lines
 }

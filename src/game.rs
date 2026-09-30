@@ -71,6 +71,13 @@ pub enum GameError {
     /// can't be taken back — `verb` names what was rolled, for the
     /// message ("realignment roll" or "coup").
     CannotUndo { verb: &'static str },
+    /// [`Game::abandon`] refused a [`Realignment`](crate::ops::Realignment)
+    /// or [`Coup`](crate::ops::Coup) that's already rolled a die or made
+    /// its attempt — never an [`InfluencePlacement`](crate::ops::InfluencePlacement),
+    /// which has no roll to reveal and can always be abandoned. Only
+    /// [`Game::cancel`] can close it now, which keeps the roll and costs
+    /// the turn the normal way.
+    CannotAbandon { verb: &'static str, ops_spent: u8, ops_total: u8 },
     Placement(PlacementError),
     Realign(RealignError),
     Coup(CoupError),
@@ -86,6 +93,9 @@ impl fmt::Display for GameError {
             GameError::WrongKind { open } => write!(f, "a {open} session is open"),
             GameError::NothingToUndo => write!(f, "nothing to undo"),
             GameError::CannotUndo { verb } => write!(f, "a resolved {verb} can't be taken back"),
+            GameError::CannotAbandon { verb, ops_spent, ops_total } => {
+                write!(f, "a {verb} session already has {ops_spent} of {ops_total} ops spent on a roll that can't be undone — cancel it instead")
+            }
             GameError::Placement(e) => write!(f, "{e}"),
             GameError::Realign(e) => write!(f, "{e}"),
             GameError::Coup(e) => write!(f, "{e}"),
@@ -322,6 +332,39 @@ impl Game {
         Ok(op)
     }
 
+    /// Closes the open operation without costing the turn — the free undo
+    /// for opening the wrong kind by mistake, as long as nothing
+    /// *irreversible* has happened. What counts as irreversible differs by
+    /// kind: an [`InfluencePlacement`] can always be abandoned, however
+    /// many points are already pending — nothing about placement is
+    /// hidden or committed until [`Game::confirm`] runs, so every pending
+    /// point is simply discarded and every op it cost refunded, the same
+    /// board effect [`Game::cancel`] has on a placement, just without the
+    /// turn cost. A [`Realignment`] or [`Coup`], by contrast, can only be
+    /// abandoned *before* its first roll or attempt: a die roll writes
+    /// straight to the real board the instant it happens (see each
+    /// module's own doc) and reveals a result that can't be un-rolled, so
+    /// once `ops_spent() > 0` for either of those two kinds, `cancel` is
+    /// the only way to close it — refused with [`GameError::CannotAbandon`].
+    /// Leaves no trace in the log either way: as far as the history is
+    /// concerned, an abandoned operation never happened.
+    pub fn abandon(&mut self) -> Result<Operation, GameError> {
+        match &self.op {
+            None => Err(GameError::NoOperation),
+            // Placement never rolls dice, so there's nothing it could
+            // reveal — always safe to discard, no matter how many points
+            // are pending.
+            Some(Operation::Influence(_)) => Ok(self.op.take().expect("checked Some above")),
+            Some(op) => {
+                let ops_spent = op.ops_spent();
+                if ops_spent > 0 {
+                    return Err(GameError::CannotAbandon { verb: op.verb(), ops_spent, ops_total: op.ops_total() });
+                }
+                Ok(self.op.take().expect("checked Some above"))
+            }
+        }
+    }
+
     /// Forfeits the active side's turn without opening an operation.
     /// Refused if one is already open — cancel it first.
     pub fn pass(&mut self) -> Result<(), GameError> {
@@ -498,6 +541,98 @@ mod tests {
         let mut game = Game::from_scenario(&Scenario::from_json(&map, "{}").unwrap());
         game.begin(OperationKind::Coup).unwrap();
         assert!(matches!(game.pass(), Err(GameError::OperationOpen { .. })));
+    }
+
+    #[test]
+    fn abandon_is_refused_with_no_operation_open() {
+        let map = map();
+        let mut game = Game::from_scenario(&Scenario::from_json(&map, "{}").unwrap());
+        assert!(matches!(game.abandon(), Err(GameError::NoOperation)));
+    }
+
+    #[test]
+    fn an_untouched_operation_can_be_abandoned_without_costing_the_turn() {
+        let map = map();
+        let mut game = Game::from_scenario(&Scenario::from_json(&map, "{}").unwrap());
+        game.begin(OperationKind::Influence).unwrap();
+        game.abandon().unwrap();
+        assert_eq!(game.active(), Ussr, "abandoning before anything's spent shouldn't hand the turn over");
+        assert!(game.operation().is_none());
+    }
+
+    #[test]
+    fn a_placement_can_always_be_abandoned_even_with_points_pending() {
+        // Placement never rolls a die, so nothing about it is hidden or
+        // irreversible until `confirm` runs — unlike realignment/coup,
+        // `abandon` never refuses it.
+        let map = map();
+        let poland = id(&map, "Poland"); // borders the USSR itself
+        let mut game = Game::from_scenario(&Scenario::from_json(&map, "{}").unwrap());
+        game.begin(OperationKind::Influence).unwrap();
+        game.place(&map, poland).unwrap();
+        game.place(&map, poland).unwrap();
+        game.place(&map, poland).unwrap();
+
+        game.abandon().unwrap();
+
+        assert_eq!(game.active(), Ussr, "abandoning a placement shouldn't hand the turn over");
+        assert!(game.operation().is_none());
+        assert_eq!(game.board().influence(poland, Ussr), 0, "every pending point should be discarded, not committed");
+        assert_eq!(game.ops_available(), OPS_PER_ACTION_ROUND, "every op it cost should be refunded");
+    }
+
+    #[test]
+    fn undoing_every_placed_point_makes_the_operation_abandonable_too() {
+        let map = map();
+        let poland = id(&map, "Poland");
+        let mut game = Game::from_scenario(&Scenario::from_json(&map, "{}").unwrap());
+        game.begin(OperationKind::Influence).unwrap();
+        game.place(&map, poland).unwrap();
+        game.undo(&map).unwrap();
+        game.abandon().unwrap();
+        assert_eq!(game.active(), Ussr);
+    }
+
+    #[test]
+    fn abandon_is_refused_once_a_realignment_roll_has_been_made() {
+        let map = map();
+        let poland = id(&map, "Poland");
+        let mut game = Game::from_scenario(&scenario_with(&map, "Poland", 1, 0));
+        game.begin(OperationKind::Realign).unwrap();
+        let mut dice = Dice::from_seed(0);
+        game.roll(&map, poland, &mut dice).unwrap();
+        assert!(matches!(game.abandon(), Err(GameError::CannotAbandon { ops_spent: 1, .. })));
+    }
+
+    #[test]
+    fn abandon_is_refused_once_a_coup_has_been_attempted() {
+        let map = map();
+        let poland = id(&map, "Poland");
+        let mut game = Game::from_scenario(&scenario_with(&map, "Poland", 1, 0));
+        game.begin(OperationKind::Coup).unwrap();
+        let mut dice = Dice::from_seed(0);
+        game.roll(&map, poland, &mut dice).unwrap();
+        assert!(matches!(game.abandon(), Err(GameError::CannotAbandon { ops_total: 4, .. })));
+    }
+
+    #[test]
+    fn abandoning_leaves_no_trace_in_the_log() {
+        let map = map();
+        let mut game = Game::from_scenario(&Scenario::from_json(&map, "{}").unwrap());
+        game.begin(OperationKind::Coup).unwrap();
+        game.abandon().unwrap();
+        assert!(game.log().is_empty(), "an abandoned operation should leave the log exactly as it was");
+    }
+
+    #[test]
+    fn abandoning_a_placement_with_pending_points_leaves_no_trace_in_the_log_either() {
+        let map = map();
+        let poland = id(&map, "Poland");
+        let mut game = Game::from_scenario(&Scenario::from_json(&map, "{}").unwrap());
+        game.begin(OperationKind::Influence).unwrap();
+        game.place(&map, poland).unwrap();
+        game.abandon().unwrap();
+        assert!(game.log().is_empty(), "as far as the history's concerned, an abandoned placement never happened either");
     }
 
     #[test]

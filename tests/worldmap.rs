@@ -146,6 +146,9 @@ fn a_selection_adds_the_region_title_and_key_hints() {
     assert!(text.contains("EUROPE"), "region name missing:\n{text}");
     assert!(text.contains("Enter open"), "key hints missing:\n{text}");
     assert_eq!(selected.height(), plain.height() + 2, "selection should add exactly two rows");
+    for key in ["i influence", "a realign", "o coup", "p pass"] {
+        assert!(text.contains(key), "world-map hint missing {key:?}:\n{text}");
+    }
 }
 
 #[test]
@@ -220,6 +223,7 @@ fn the_placement_footer_is_not_clipped() {
     }
     assert!(text.contains("USSR placing"), "the full balance line should not be clipped:\n{text}");
     assert!(text.contains("u undo"), "the placement hint should not be clipped:\n{text}");
+    assert!(text.contains("abandon"), "the abandon hint should not be clipped:\n{text}");
 }
 
 #[test]
@@ -281,6 +285,7 @@ fn the_realignment_footer_is_not_clipped() {
     }
     assert!(text.contains("USSR realigning"), "the full balance line should not be clipped:\n{text}");
     assert!(text.contains("r roll"), "the realign hint should not be clipped:\n{text}");
+    assert!(text.contains("abandon"), "the abandon hint should not be clipped:\n{text}");
     assert!(!text.contains("u undo"), "the world map hint shouldn't offer undo during a realignment:\n{text}");
 }
 
@@ -323,5 +328,6 @@ fn the_coup_footer_is_not_clipped() {
     }
     assert!(text.contains("USSR couping"), "the full balance line should not be clipped:\n{text}");
     assert!(text.contains("r coup"), "the coup hint should not be clipped:\n{text}");
+    assert!(text.contains("abandon"), "the abandon hint should not be clipped:\n{text}");
     assert!(!text.contains("u undo"), "the world map hint shouldn't offer undo during a coup:\n{text}");
 }

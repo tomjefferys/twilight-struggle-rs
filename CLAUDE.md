@@ -126,13 +126,30 @@ Operations, scoring, etc.) haven't been built yet.
   full turn's ops (`OPS_PER_ACTION_ROUND`, 4), so there's no argument
   through which a caller could name the wrong side, and it's refused while
   an operation is already open. One turn spends exactly one operation —
-  `confirm`/`cancel` are the only two ways to close one, and both hand the
-  turn to the other side via the private `advance` (USSR → USA; USA → USSR
-  plus `action_round += 1`, rolling `turn` over once `action_round`
-  exceeds `action_rounds_per_turn`). `pass` is the same handover with no
-  operation opened. Ending a turn with ops unspent is allowed and simply
-  forfeits them, the same as `InfluencePlacement` never requiring every op
-  to be spent. `Game` takes no `WorldMap` or `Dice` of its own — both are
+  `confirm`/`cancel` are the only two ways to close one *for real*, and
+  both hand the turn to the other side via the private `advance` (USSR →
+  USA; USA → USSR plus `action_round += 1`, rolling `turn` over once
+  `action_round` exceeds `action_rounds_per_turn`). `pass` is the same
+  handover with no operation opened. Ending a turn with ops unspent is
+  allowed and simply forfeits them, the same as `InfluencePlacement` never
+  requiring every op to be spent. `abandon` is the third, narrower way to
+  close one — with **no turn cost**, exactly as if `begin` had never been
+  called — the free undo for opening the wrong kind of operation by
+  mistake, distinct from `cancel`'s "I'm done, whatever happened stands"
+  (which always hands the turn over, even with nothing spent). What it
+  refuses differs by kind, since what counts as irreversible does: an
+  `InfluencePlacement` can always be abandoned, however many points are
+  pending — placement never rolls a die, so nothing about it is hidden or
+  committed until `confirm` runs, and every pending point is simply
+  discarded (the same board effect `cancel` has on a placement, minus the
+  turn cost). A `Realignment`/`Coup` can only be abandoned *before* its
+  first roll or attempt — refused the instant `Operation::ops_spent() > 0`
+  for either of those two kinds, since a roll writes straight to the real
+  board and reveals a result that can't be un-rolled; `cancel` is the only
+  way to close one from there. Leaves no log entry either way — as far as
+  the history is concerned, an abandoned operation never happened, unlike
+  `confirm`/`cancel`, which always push a `Closed`
+  entry even when nothing was spent. `Game` takes no `WorldMap` or `Dice` of its own — both are
   passed per call, matching how the ops modules already split `Board` out
   — and is cheap to `Clone`, which is the whole point: nothing in this
   module touches a terminal, so it's the complete surface a future AI
@@ -269,6 +286,17 @@ Operations, scoring, etc.) haven't been built yet.
     for a debug edit or note) — `render_log(..).render(ColorMode::Never)`
     is byte-identical to `log_text`, so the on-screen `log` command and
     the exported file are guaranteed to be one format, not two.
+  - `statusbar.rs` — the two-row turn/operation bar `interactive.rs` draws
+    above every map screen: turn/AR/active side (its own colour)/DEFCON/
+    VP, then the open operation's balance (`operation_balance_line`,
+    reused rather than reworded) or a prompt naming the keys that start
+    one. The only view besides `world.rs` that reads a `GameStatus`,
+    deliberately its own compact line rather than the dashboard's
+    (already clipped at width 104) — the two share only `vp_line`'s
+    wording, extracted so they can't drift. Always exactly
+    `STATUS_BAR_ROWS` (3) regardless of whether an operation is open, so
+    the view drawn below it never shifts; takes `width` as a minimum and
+    grows to fit its own content instead of clipping.
 
   `render_region`, `render_world_map`, and `render_country` all take an
   optional `&Operation` (`region.rs`/`worldmap.rs`/`country.rs`). `None`
@@ -292,7 +320,13 @@ Operations, scoring, etc.) haven't been built yet.
   per-side modifiers to itemise. All three views build their footer or
   panels as `Vec<(String, Style)>` before drawing, so the row count and
   the draw loop can't drift apart the way hand-maintained parallel
-  tallies could.
+  tallies could. With no operation open, all three views' own hint rows
+  also advertise the keys that start one, from a single `BEGIN_HINT`
+  const in `render/mod.rs` so the fragment exists once rather than three
+  times; with one open, each view's own placement/realign/coup hint
+  additionally names Backspace/abandon (`Game::abandon`'s key), alongside
+  whichever kind-specific keys (`+ place`/`u undo`/`r roll`/`r coup`) it
+  already listed.
 - **`main.rs`** — a REPL (`cargo run`) plus one-shot mode
   (`cargo run -- <command>`). Type `help` inside the REPL for the command
   list. `Session` holds a `Game` (`src/game.rs`), so turns are enforced
@@ -309,8 +343,18 @@ Operations, scoring, etc.) haven't been built yet.
   operation, and both hand the turn to the other side (reported in the
   next prompt, which names the active side and the AR counter); `pass`
   does the same handover with no operation open, refused if one is.
-  `status` reports the turn/AR/active side and the open operation's
-  balance. Either way, `set`/`add`/`remove`/`load` are refused while a
+  `abandon` closes an operation with no turn cost at all — always for an
+  influence placement (discarding any pending points), but refused,
+  naming the roll already spent, once a realignment or coup has rolled —
+  the free undo for a mistaken `influence`/`realign`/`coup`. `status`
+  reports the turn/AR/active side and the open
+  operation's balance. `influence`/`realign`/`coup`/`pass`/`abandon` are
+  no longer REPL-only — the same five are bound to `i`/`a`/`o`/`p`/
+  Backspace inside `interactive.rs`, which is also where `confirm`/
+  `cancel` stay bound to `c`/`X`; the `wm`
+  arm no longer reports a confirm/cancel/pass that happened inside the
+  map (interactive mode's own message row already did), only a session
+  left open on the way out. Either way, `set`/`add`/`remove`/`load` are refused while a
   session (`Game::operation()`) is open, since they'd shift the board an
   operation was judged legal against; when they do run, they call
   `Game::record_edit`/`record_note` themselves, since `Game::board_mut`
@@ -352,28 +396,48 @@ Operations, scoring, etc.) haven't been built yet.
   Each region remembers its last-selected country across visits, and the
   country screen carries the same selection back to `Region` on `Esc`.
   `run` takes `&mut Game` (not a bare `Board`/`Option<Operation>`), so
-  every key handler goes through it and turns stay enforced here too: `c`
-  confirms/closes the open operation via `Game::confirm` and `X`
+  every key handler goes through it and turns stay enforced here too, and
+  a two-row status bar (`render::render_status_bar`) is drawn above
+  whichever screen is showing — turn/AR/active side (in its own colour)/
+  DEFCON/VP, then the open operation's balance or a prompt naming the
+  keys that start one — since a keypress alone carries no "USSR" the way
+  the REPL prompt does. `i`/`a`/`o` open an influence placement,
+  realignment, or coup for the active side with a full turn's ops, and
+  `p` passes the turn (`Game::pass`) — all four global, working from any
+  of the three screens, and refused while an operation is already open
+  (`GameError`'s own text shown in the message row): `Game::begin` and
+  `Game::pass` always act for `Game::active`, so there's no side to infer
+  from the key itself, which is what makes a keypress binding possible at
+  all. `c` confirms/closes the open operation via `Game::confirm` and `X`
   cancels/closes it via `Game::cancel` — either way handing the turn to
-  the other side, which is also why interactive mode itself still can't
-  *open* an operation (that stays a REPL-only `influence`/`realign`/`coup`, so
-  there's no side to infer from a keypress alone). An `InfluencePlacement`
-  binds `+`/`=` to place one point and `u` to undo the last one on
-  *both* the region and country screens — placement is undoable, so it
-  never needs the country screen's confirmation step, and stays a fast,
-  stay-on-one-screen action from the region grid too. A `Realignment` or
-  `Coup`, by contrast, only binds `r` — to roll (or attempt the coup) on
-  the selected country — on the country screen, and `u` always refuses
-  there: a resolved roll or attempt can't be taken back. `Esc`/`q` leave a
-  still-open session untouched rather than clearing it, so it can be
-  resumed from the REPL or by reopening the map. `run`'s return value
-  (`Outcome`) tells the REPL which of those happened. A roll's outcome
-  is shown in the same message row as a refusal, but — unlike a refusal
-  — survives the next keypress, since it's the one thing a player most
-  wants to keep reading.
+  the other side *without leaving the map*, so the newly active side can
+  immediately press `i`/`a`/`o` on the same screen; Backspace abandons it
+  via `Game::abandon` instead — no turn cost, always available for a
+  placement (however many points are pending) but refused (with
+  `GameError::CannotAbandon`'s own text) once a realignment or coup has
+  rolled, where `X`/`cancel` is the only way out. `run` therefore only
+  returns (`io::Result<()>`) on `Esc` from the world view, `q`, or Ctrl-C,
+  and the REPL reads `Game::operation()` itself to report a session left
+  open, rather than switching on a return value naming what happened
+  inside. An `InfluencePlacement` binds `+`/`=` to place one point and `u`
+  to undo the last one on *both* the region and country screens —
+  placement is undoable, so it never needs the country screen's
+  confirmation step, and stays a fast, stay-on-one-screen action from the
+  region grid too. A `Realignment` or `Coup`, by contrast, only binds `r`
+  — to roll (or attempt the coup) on the selected country — on the
+  country screen, and `u` always refuses there: a resolved roll or
+  attempt can't be taken back. `Esc`/`q` leave a still-open session
+  untouched rather than clearing it, so it can be resumed from the REPL
+  or by reopening the map. A roll's outcome is shown in the same message
+  row as a refusal, but — unlike a refusal, and unlike a confirm/cancel/
+  abandon/pass/begin report, all of which the status bar's own next
+  redraw already reflects — survives exactly one more keypress before being
+  cleared, via a `sticky` flag set alongside it, since it's the one
+  message whose content isn't otherwise recoverable from the screen.
   The only place in the crate that touches the terminal directly —
   everything it draws still comes from `render::render_world_map`/
-  `render_region`/`render_country`, which stay pure `Canvas` producers.
+  `render_region`/`render_country`/`render_status_bar`, which stay pure
+  `Canvas` producers.
   Uses `crossterm`, the one non-serde dependency.
 
 ## Data files (`data/`)
