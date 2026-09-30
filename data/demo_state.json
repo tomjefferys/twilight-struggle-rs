@@ -12,6 +12,30 @@
     "china_card": "Ussr",
     "china_card_face_up": true
   },
+  "hands": {
+    "us": [
+      "Duck and Cover",
+      "Truman Doctrine",
+      "NATO",
+      "Independent Reds",
+      "Captured Nazi Scientist",
+      "Olympic Games",
+      "Indo-Pakistani War",
+      "Comecon",
+      "Nasser"
+    ],
+    "ussr": [
+      "Socialist Governments",
+      "Fidel",
+      "Vietnam Revolts",
+      "Blockade",
+      "Red Scare/Purge",
+      "UN Intervention",
+      "Nuclear Test Ban",
+      "Containment",
+      "CIA Created"
+    ]
+  },
   "influence": {
     "Poland": [0, 4],
     "East Germany": [0, 4],

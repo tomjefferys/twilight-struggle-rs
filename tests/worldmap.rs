@@ -1,5 +1,7 @@
 use twilight_struggle::render::render_world_map;
-use twilight_struggle::{Board, ColorMode, Coup, InfluencePlacement, MapLayout, Operation, Realignment, Region, Scenario, Superpower, WorldMap};
+use twilight_struggle::{
+    Board, CardCatalog, ColorMode, Coup, InfluencePlacement, MapLayout, Operation, Realignment, Region, Scenario, Superpower, WorldMap,
+};
 
 fn standard() -> (WorldMap, MapLayout) {
     let map = WorldMap::standard().unwrap();
@@ -7,10 +9,15 @@ fn standard() -> (WorldMap, MapLayout) {
     (map, layout)
 }
 
+fn cards() -> CardCatalog {
+    CardCatalog::standard().unwrap()
+}
+
 #[test]
 fn world_map_matches_snapshot() {
     let (map, layout) = standard();
-    let scenario = Scenario::demo(&map).unwrap();
+    let cards = cards();
+    let scenario = Scenario::demo(&map, &cards).unwrap();
     let canvas = render_world_map(&map, &layout, &scenario.board, None, None);
     let expected = include_str!("snapshots/worldmap.txt");
     assert_eq!(canvas.render(ColorMode::Never), expected.trim_end_matches('\n'));
@@ -98,7 +105,8 @@ fn superpower_box_cell_is_never_a_country_world_cell() {
 #[test]
 fn color_never_emits_no_escape_codes() {
     let (map, layout) = standard();
-    let scenario = Scenario::demo(&map).unwrap();
+    let cards = cards();
+    let scenario = Scenario::demo(&map, &cards).unwrap();
     let canvas = render_world_map(&map, &layout, &scenario.board, None, None);
     assert!(!canvas.render(ColorMode::Never).contains('\x1b'));
 }
@@ -119,7 +127,8 @@ fn background_land_is_tinted_by_region() {
 #[test]
 fn color_always_wraps_styled_text_in_sgr_codes() {
     let (map, layout) = standard();
-    let scenario = Scenario::demo(&map).unwrap();
+    let cards = cards();
+    let scenario = Scenario::demo(&map, &cards).unwrap();
     let canvas = render_world_map(&map, &layout, &scenario.board, None, None);
     let text = canvas.render(ColorMode::Always);
     assert!(text.contains('\x1b'));
@@ -129,7 +138,8 @@ fn color_always_wraps_styled_text_in_sgr_codes() {
 #[test]
 fn no_selection_reproduces_the_plain_view_exactly() {
     let (map, layout) = standard();
-    let scenario = Scenario::demo(&map).unwrap();
+    let cards = cards();
+    let scenario = Scenario::demo(&map, &cards).unwrap();
     let plain = render_world_map(&map, &layout, &scenario.board, None, None);
     let expected = include_str!("snapshots/worldmap.txt");
     assert_eq!(plain.render(ColorMode::Never), expected.trim_end_matches('\n'));
@@ -191,7 +201,8 @@ fn a_pending_chip_keeps_its_control_colour() {
 #[test]
 fn no_placement_reproduces_the_plain_view_exactly_even_with_the_new_param() {
     let (map, layout) = standard();
-    let scenario = Scenario::demo(&map).unwrap();
+    let cards = cards();
+    let scenario = Scenario::demo(&map, &cards).unwrap();
     let canvas = render_world_map(&map, &layout, &scenario.board, None, None);
     let expected = include_str!("snapshots/worldmap.txt");
     assert_eq!(canvas.render(ColorMode::Never), expected.trim_end_matches('\n'));

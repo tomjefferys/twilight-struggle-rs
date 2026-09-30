@@ -1,9 +1,10 @@
 use twilight_struggle::render::{log_text, render_log};
-use twilight_struggle::{ColorMode, Dice, Game, OperationKind, Scenario, Superpower, WorldMap};
+use twilight_struggle::{CardCatalog, ColorMode, Dice, Game, OperationKind, Scenario, Superpower, WorldMap};
 
 fn started_game() -> (WorldMap, Game) {
     let map = WorldMap::standard().unwrap();
-    let scenario = Scenario::demo(&map).unwrap();
+    let cards = CardCatalog::standard().unwrap();
+    let scenario = Scenario::demo(&map, &cards).unwrap();
     (map, Game::from_scenario(&scenario))
 }
 

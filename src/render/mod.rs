@@ -7,15 +7,19 @@
 //! presented (a REPL printing to stdout today, perhaps a full-screen TUI
 //! later) entirely outside this module.
 
+pub mod card;
 mod chip;
 pub mod country;
+pub mod hand;
 pub mod log;
 pub mod region;
 pub mod statusbar;
 pub mod world;
 pub mod worldmap;
 
+pub use card::render_card;
 pub use country::render_country;
+pub use hand::{render_hand, HAND_ROWS, HAND_WIDTH};
 pub use log::{log_entry_line, log_text, render_log};
 pub use region::render_region;
 pub use statusbar::{render_status_bar, STATUS_BAR_ROWS};
@@ -244,6 +248,20 @@ impl Canvas {
         }
     }
 
+    /// Opaquely copies every cell of `src` onto `self`, anchored at
+    /// `(row, col)` — including `src`'s own blank cells, so this paints
+    /// over whatever was already there rather than punching a
+    /// transparent hole the shape of `src`. Used to draw a card's zoom
+    /// overlay on top of a map screen. Silently clipped at either edge,
+    /// like every other `Canvas` write.
+    pub fn blit(&mut self, src: &Canvas, row: usize, col: usize) {
+        for (r, line) in src.rows.iter().enumerate() {
+            for (c, cell) in line.iter().enumerate() {
+                self.put_char(row + r, col + c, cell.ch, cell.style);
+            }
+        }
+    }
+
     /// Renders the canvas as text, one line per row, with trailing spaces
     /// on each line trimmed. `mode` controls whether ANSI colour codes are
     /// emitted at all — `Never` guarantees no `\x1b` appears anywhere in
@@ -339,6 +357,49 @@ pub(crate) fn region_color(region: crate::country::Region) -> Color {
         Region::CentralAmerica => Color::CentralAmerica,
         Region::SouthAmerica => Color::SouthAmerica,
     }
+}
+
+/// The colour a card's own side tints it — the hand strip's ops badge and
+/// the zoom view's border. [`crate::cards::CardSide::Neutral`] gets
+/// [`Color::Default`] rather than a colour of its own: a scoring card or a
+/// both-sides event isn't "the third side," it's simply uncoloured, the
+/// same way a tied country's control glyph is `:` rather than a third
+/// colour.
+pub(crate) fn card_side_color(side: crate::cards::CardSide) -> Color {
+    use crate::cards::CardSide;
+    match side {
+        CardSide::Us => Color::Us,
+        CardSide::Ussr => Color::Ussr,
+        CardSide::Neutral => Color::Default,
+    }
+}
+
+/// Greedy word-wrap: breaks `text` (already a single paragraph, with
+/// ordinary spaces — no embedded `\n`s in any card's own rules text) into
+/// lines of at most `width` characters, breaking only at spaces. A single
+/// word longer than `width` is left on its own line rather than split
+/// mid-word, so the caller's own width is a target, not a hard cap, in
+/// that one edge case.
+pub(crate) fn wrap(text: &str, width: usize) -> Vec<String> {
+    let mut lines = Vec::new();
+    let mut current = String::new();
+    for word in text.split_whitespace() {
+        let candidate_len = if current.is_empty() { word.chars().count() } else { current.chars().count() + 1 + word.chars().count() };
+        if !current.is_empty() && candidate_len > width {
+            lines.push(std::mem::take(&mut current));
+        }
+        if !current.is_empty() {
+            current.push(' ');
+        }
+        current.push_str(word);
+    }
+    if !current.is_empty() {
+        lines.push(current);
+    }
+    if lines.is_empty() {
+        lines.push(String::new());
+    }
+    lines
 }
 
 /// `"-"` for zero, otherwise the number — so an occupied country stands out

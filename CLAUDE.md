@@ -2,9 +2,10 @@
 
 A Rust CLI implementation of the board game *Twilight Struggle*. Currently
 focused on the data model and terminal display, a handful of the
-ops-spending actions (influence placement, realignment, coups), and
-enforced alternating turns; full game rules (cards, DEFCON, Military
-Operations, scoring, etc.) haven't been built yet.
+ops-spending actions (influence placement, realignment, coups), enforced
+alternating turns, and browsing (not yet playing) each side's hand of
+cards; full game rules (card events, DEFCON, Military Operations, scoring,
+etc.) haven't been built yet.
 
 ## Architecture
 
@@ -55,12 +56,37 @@ Operations, scoring, etc.) haven't been built yet.
   no guest chip for it — as `UndrawnLink { region, from, to: LinkTarget }`;
   empty for the standard layout, and pinned there by
   `tests/layout.rs::standard_layout_has_no_undrawn_links`.
+- **`cards`** (`src/cards.rs`) — the static `CardCatalog` (all 110 cards,
+  loaded from `data/cards.json`) and each side's `Hands`. Mirrors
+  `map.rs`'s own split: `CardCatalog` is immutable, validated-at-load data
+  (unique/contiguous ids 1-110, `scoring` iff `ops == 0`, fail-loud
+  `CardError`) with a `find` lookup (`CardFound`) like `WorldMap::find`'s,
+  except a numeric query matches a card's id (its printed number) before
+  falling back to name matching. `Hands` is the mutable per-game state — a
+  `[Vec<CardId>; 2]` indexed by `Superpower` — kept here rather than its
+  own module since it's a thin wrapper with nothing else to say about it;
+  cheap to clone like `Board`, for the same reason (`Game` needs to stay
+  clonable for AI lookahead). Deliberately never includes `CHINA_CARD`
+  (id 6): it changes hands outside the normal draw/discard cycle, so it's
+  tracked via `GameStatus::china_card`/`china_card_face_up` instead and
+  always shown as its own slot. `Card::ops_label` is the one small piece
+  of display logic that lives on the data type rather than in `render/`:
+  how a card's ops value reads wherever space is tight — its digit, `S`
+  for a scoring card, or `★{ops}` for the China Card — shared by the hand
+  strip's mini-card boxes and (everywhere else) nothing, since the zoom
+  view's own title has room to spell "Ops" out instead. No card
+  *behaviour* exists yet — nothing here plays, draws, or discards a card;
+  this is display and UI only (`render/hand.rs`, `render/card.rs`,
+  `interactive.rs` below).
 - **`Scenario`** (`src/scenario.rs`) / **`GameStatus`** (`src/status.rs`)
   — a named starting state (currently just `data/demo_state.json`): a
-  `Board` snapshot plus turn/active-side/DEFCON/VP/space-race/China-card
-  status. `GameStatus` itself is plain data with no rules attached — the
-  `Game` type below is the only thing that ever mutates `active`, `turn`,
-  or `action_round`.
+  `Board` snapshot, starting `Hands` (`Scenario::from_json` resolves each
+  hand's card names against a `CardCatalog`, rejecting an unknown name, a
+  card dealt to both hands, or the China Card — `ScenarioError::{
+  UnknownCard, DuplicateCard, ChinaCardInHand}`), plus turn/active-side/
+  DEFCON/VP/space-race/China-card status. `GameStatus` itself is plain
+  data with no rules attached — the `Game` type below is the only thing
+  that ever mutates `active`, `turn`, or `action_round`.
 - **`ops`** (`src/ops/`) — the game's ops-spending operations. Three kinds
   so far, sharing the `Operation` enum (`src/ops/mod.rs`) as the seam the
   rest of the crate reads through:
@@ -158,7 +184,10 @@ Operations, scoring, etc.) haven't been built yet.
   board, and open operation like `Clone` does, but starts the copy's log
   empty, since the log is the one field whose size isn't bounded and a
   search cloning many nodes shouldn't drag a growing history through every
-  branch it never plays out.
+  branch it never plays out. `Game` also carries the scenario's starting
+  `Hands`, read-only via `Game::hand(side)` — there's no way to mutate
+  them yet (no draw, play, or discard), so this only ever reflects what
+  the scenario dealt.
 - **`log`** (`src/log.rs`) — `GameLog`, the game's append-only history, a
   `Vec<LogEntry>` built up entirely inside `Game` — the one place every
   mutation already funnels through — so the REPL and `interactive.rs` are
@@ -186,6 +215,10 @@ Operations, scoring, etc.) haven't been built yet.
   `(WorldMap, MapLayout, Board, ...) -> Canvas`; nothing in this module
   touches the terminal directly, which keeps every view snapshot-testable.
   A `Canvas` only turns into a `String` via `.render(ColorMode)`.
+  `Canvas::blit` opaquely copies one canvas onto another at a given
+  anchor (including its blank cells, so it paints over what was there
+  rather than leaving a card-shaped hole) — `interactive.rs` uses it to
+  draw a zoomed card's detail over whichever map screen is showing.
   - `world.rs` — the six-region dashboard (`map`/`world` command).
   - `chip.rs` — the shared country-box chip (flag, name, influence,
     control glyph, `st<n>`, and the operation badge) and the connector
@@ -297,6 +330,37 @@ Operations, scoring, etc.) haven't been built yet.
     `STATUS_BAR_ROWS` (3) regardless of whether an operation is open, so
     the view drawn below it never shifts; takes `width` as a minimum and
     grows to fit its own content instead of clipping.
+  - `hand.rs` — `render_hand`, a side's hand as a strip of mini-card boxes
+    (5 per row, 2 rows — a 9-card hand plus the China Card fills all 10
+    slots), meant to be drawn below every map screen by `interactive.rs`
+    so a player can browse their cards and the board at once. Always
+    `HAND_ROWS` (9) tall and `HAND_WIDTH` wide regardless of hand size,
+    the same "never shifts what's drawn around it" rule `statusbar.rs`
+    follows. Each slot shows its ops value (or `S` for a scoring card),
+    its truncated name, its side/phase, and a `*` if it's removed from
+    play once played as an event; the selected slot (if any) is drawn
+    with `Canvas::draw_thick_box` like a region view's own selection. The
+    China Card, when `render_hand`'s `china: Option<bool>` is `Some`
+    (whether it's face up), is always the hand's final slot — it's never
+    read from the hand list itself, since `Hands` deliberately never
+    carries it (see `cards.rs`'s own doc). More than 10 cards paginates
+    around whichever one is selected rather than shrinking the slots.
+  - `card.rs` — `render_card`, one card's full detail: a titled box like
+    `country.rs`'s own outer box (the title on the top border via
+    `put_border_title`, not a divider — its left half is the card's own
+    ops value, `Card::ops_label`'s "Ops N" wording, or `Scoring` for a
+    scoring card, since "Ops 0" would be technically true but misleading;
+    its id is never repeated up here, only in the footer's own
+    `card #N`), with the card's rules text word-wrapped to a fixed width
+    (the `wrap` free function in `mod.rs`, used nowhere else in `render/`)
+    and a flags line (optional/removed-after-event/ongoing/scoring,
+    whichever apply) — wrapped the same way the body text is, since a
+    card can carry several at once and the joined line can run well past
+    the box's own width — above the card's printed number. This is the
+    "zoom" view `interactive.rs` overlays on the current map screen. For
+    the China Card specifically, the flags line is replaced with its
+    face-up/down status (`china_face_up`), since the normal flags say
+    nothing useful about it.
 
   `render_region`, `render_world_map`, and `render_country` all take an
   optional `&Operation` (`region.rs`/`worldmap.rs`/`country.rs`). `None`
@@ -366,7 +430,11 @@ Operations, scoring, etc.) haven't been built yet.
   `include_str!`-embedded rather than read or written at runtime.
   `--seed <n>` (or the REPL's `seed <n>`) controls `Session.dice`, which
   stays outside `Game` so it can be seeded independently and so
-  `Game::roll` stays deterministic given its inputs.
+  `Game::roll` stays deterministic given its inputs. `Session` also holds
+  a `CardCatalog`; `hand [us|ussr]` (default: the active side) and
+  `card <id|name>` print the static, unselected `render_hand`/
+  `render_card` views — the same ones `interactive.rs` draws with a
+  selection.
 - **`interactive.rs`** — the terminal-driving code for `worldmap`/`wm`
   when run interactively (a real TTY, not one-shot mode): raw mode, the
   alternate screen, and the arrow/Enter/Esc event loop over three screens
@@ -434,10 +502,27 @@ Operations, scoring, etc.) haven't been built yet.
   redraw already reflects — survives exactly one more keypress before being
   cleared, via a `sticky` flag set alongside it, since it's the one
   message whose content isn't otherwise recoverable from the screen.
+
+  The active side's hand (`render::render_hand`) is drawn as a fixed-
+  height strip pinned below every screen — global and card-browsing only,
+  like the status bar above it, not tied to any one screen. `[`/`]` cycle
+  its selection (wrapping at either end) and `z` toggles a zoomed detail
+  overlay (`render::render_card`, `Canvas::blit`ted onto the current
+  screen, widening the canvas first if the card itself is bigger) for the
+  selected card; both are no-ops on an empty hand. Each side keeps its
+  own selected index (`hand_selected`, indexed via `side_index`) so
+  swapping the active side never loses the other side's place. `Esc`
+  closes an open zoom first, before whatever it would otherwise do on
+  that screen; `c`/`X`/`p` close it too, but only when they actually hand
+  the turn over (a refusal leaves it open) — the newly active side's own
+  hand takes its place either way. None of this is card *behaviour* —
+  nothing here plays, draws, or discards a card, only browses what
+  `Game::hand` already holds.
+
   The only place in the crate that touches the terminal directly —
   everything it draws still comes from `render::render_world_map`/
-  `render_region`/`render_country`/`render_status_bar`, which stay pure
-  `Canvas` producers.
+  `render_region`/`render_country`/`render_status_bar`/`render_hand`/
+  `render_card`, which stay pure `Canvas` producers.
   Uses `crossterm`, the one non-serde dependency.
 
 ## Data files (`data/`)
@@ -456,15 +541,22 @@ build, not a runtime dependency.
 - `world_background.md` — **read this before changing the world map's
   background art, country positions, or region colour tinting.**
 - `demo_state.json` — the bundled demo scenario's starting `Board` +
-  `GameStatus`.
+  `Hands` + `GameStatus`.
+- `cards.json` — the 110-card standard deck (`CardCatalog`). Converted
+  (one-off, not checked-in tooling) from `Twilight Struggle Cards.csv`,
+  itself untracked and left in `data/` as the source: Mac-Roman decoded to
+  UTF-8, its already-clean "Alternative Text" column used as each card's
+  `text` (the CSV's own "Original Card Text" is hard-wrapped PDF text and
+  isn't used), a trailing `*` in a card's name lifted into its own
+  `removed_after_event` flag, and `scoring` derived as `ops == 0`.
 - `backup/` — earlier full snapshots of the world map, kept in case a
   future change needs to compare against or revert to an earlier version.
 
 ## Conventions
 
 - Fail loud at load time: JSON loaders validate everything they can (see
-  `MapError`/`LayoutError`/`ScenarioError`) rather than silently
-  tolerating bad data.
+  `MapError`/`LayoutError`/`ScenarioError`/`CardError`) rather than
+  silently tolerating bad data.
 - No `thiserror`/`anyhow` — plain enums implementing `Display` + `Error`.
 - Views are pure functions returning a `Canvas`; never print/touch the
   terminal from inside `render/`.
