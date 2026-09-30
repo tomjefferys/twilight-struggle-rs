@@ -1,4 +1,4 @@
-use twilight_struggle::render::{render_country, render_region, render_world};
+use twilight_struggle::render::{operation_abandoned_line, operation_closed_line, render_country, render_region, render_world};
 use twilight_struggle::{
     Board, ColorMode, CountryId, Coup, GuestEntity, InfluencePlacement, LinkTarget, MapLayout, Operation, Realignment, Region, Scenario,
     Superpower, ViewMode, WorldMap,
@@ -159,6 +159,40 @@ fn a_country_selection_adds_its_name_and_the_key_hints() {
 }
 
 #[test]
+fn the_selection_hints_offer_the_operation_keys() {
+    let (map, layout) = standard();
+    let board = Board::new(&map);
+    let italy = map.id_by_name("Italy").unwrap();
+
+    let region_text = render_region(&map, &layout, &board, Region::Europe, Some(italy), None).render(ColorMode::Never);
+    for key in ["i influence", "a realign", "o coup", "p pass"] {
+        assert!(region_text.contains(key), "region hint missing {key:?}:\n{region_text}");
+    }
+
+    let country_text = render_country(&map, &layout, &board, italy, None, ViewMode::Interactive).render(ColorMode::Never);
+    for key in ["i influence", "a realign", "o coup", "p pass"] {
+        assert!(country_text.contains(key), "country hint missing {key:?}:\n{country_text}");
+    }
+}
+
+#[test]
+fn an_open_operation_hides_the_operation_keys() {
+    let (map, layout) = standard();
+    let board = Board::new(&map);
+    let italy = map.id_by_name("Italy").unwrap();
+    let placement = InfluencePlacement::new(Superpower::Ussr, 4, &board);
+    let op = Operation::Influence(placement);
+
+    let region_text = render_region(&map, &layout, &board, Region::Europe, Some(italy), Some(&op)).render(ColorMode::Never);
+    assert!(!region_text.contains("i influence"), "an open operation shouldn't advertise starting another:\n{region_text}");
+    assert!(!region_text.contains("p pass"), "an open operation shouldn't advertise passing:\n{region_text}");
+
+    let country_text = render_country(&map, &layout, &board, italy, Some(&op), ViewMode::Interactive).render(ColorMode::Never);
+    assert!(!country_text.contains("i influence"), "an open operation shouldn't advertise starting another:\n{country_text}");
+    assert!(!country_text.contains("p pass"), "an open operation shouldn't advertise passing:\n{country_text}");
+}
+
+#[test]
 fn a_selected_country_box_is_bold_where_an_unselected_one_is_not() {
     let (map, layout) = standard();
     let board = Board::new(&map);
@@ -278,6 +312,56 @@ fn the_balance_line_shows_side_and_remaining_ops() {
 }
 
 #[test]
+fn operation_closed_line_names_the_side_the_verb_and_who_acts_next() {
+    let (map, _) = standard();
+    let board = Board::new(&map);
+    let mut placement = InfluencePlacement::new(Superpower::Ussr, 4, &board);
+    let poland = map.id_by_name("Poland").unwrap();
+    placement.place(&map, poland).unwrap();
+    let op = Operation::Influence(placement);
+
+    let confirmed = operation_closed_line(&op, true, Superpower::Us);
+    assert!(confirmed.contains("USSR"), "should name the side that acted:\n{confirmed}");
+    assert!(confirmed.contains("placing"), "should name what it was doing:\n{confirmed}");
+    assert!(confirmed.contains("confirmed"), "should say it was confirmed:\n{confirmed}");
+    assert!(confirmed.contains("1 of 4"), "should show ops spent of total:\n{confirmed}");
+    assert!(confirmed.contains("USA to act"), "should name who acts next:\n{confirmed}");
+
+    let cancelled = operation_closed_line(&op, false, Superpower::Us);
+    assert!(cancelled.contains("cancelled"), "should say it was cancelled:\n{cancelled}");
+}
+
+#[test]
+fn operation_abandoned_line_names_the_side_the_verb_and_that_the_turn_did_not_change() {
+    let (map, _) = standard();
+    let board = Board::new(&map);
+    let op = Operation::Realign(Realignment::new(Superpower::Ussr, 4, &board));
+
+    let text = operation_abandoned_line(&op);
+    assert!(text.contains("USSR"), "should name the side that abandoned it:\n{text}");
+    assert!(text.contains("realigning"), "should name what was abandoned:\n{text}");
+    assert!(text.contains("abandoned"), "should say it was abandoned:\n{text}");
+    assert!(text.contains("nothing spent"), "should reassure that nothing was spent:\n{text}");
+    assert!(text.contains("USSR still to act"), "should say the turn didn't pass:\n{text}");
+}
+
+#[test]
+fn operation_abandoned_line_names_what_was_undone_when_a_placement_had_points_pending() {
+    let (map, _) = standard();
+    let board = Board::new(&map);
+    let poland = map.id_by_name("Poland").unwrap();
+    let mut placement = InfluencePlacement::new(Superpower::Ussr, 4, &board);
+    placement.place(&map, poland).unwrap();
+    placement.place(&map, poland).unwrap();
+    let op = Operation::Influence(placement);
+
+    let text = operation_abandoned_line(&op);
+    assert!(text.contains("2 of 4 ops undone"), "should name how many ops were undone:\n{text}");
+    assert!(!text.contains("nothing spent"), "shouldn't claim nothing happened when points were pending:\n{text}");
+    assert!(text.contains("USSR still to act"), "should say the turn didn't pass:\n{text}");
+}
+
+#[test]
 fn the_placement_hint_replaces_the_selection_hint() {
     let (map, layout) = standard();
     let board = Board::new(&map);
@@ -289,6 +373,9 @@ fn the_placement_hint_replaces_the_selection_hint() {
     let text = with_placement.render(ColorMode::Never);
     assert!(text.contains("u undo"), "placement hint missing 'u undo':\n{text}");
     assert!(text.contains("c confirm"), "placement hint missing 'c confirm':\n{text}");
+    assert!(text.contains("abandon"), "placement hint missing 'abandon':\n{text}");
+
+    assert!(!text.contains("i influence"), "a placement in progress shouldn't offer to start another:\n{text}");
 
     let without = render_region(&map, &layout, &board, Region::Europe, Some(poland), None);
     let text = without.render(ColorMode::Never);
@@ -569,14 +656,18 @@ fn the_realign_hint_replaces_the_selection_hint() {
     let text = with_realign.render(ColorMode::Never);
     assert!(text.contains("Enter target"), "realign region hint should point at the country screen:\n{text}");
     assert!(text.contains("c done"), "realign hint missing 'c done':\n{text}");
+    assert!(text.contains("abandon"), "realign hint missing 'abandon':\n{text}");
     assert!(!text.contains("r roll"), "rolling no longer happens on the region screen:\n{text}");
     assert!(!text.contains("u undo"), "a realignment hint shouldn't offer undo, which isn't possible:\n{text}");
     assert!(!text.contains("+ place"), "a realignment hint shouldn't offer placement's '+ place':\n{text}");
+    assert!(!text.contains("i influence"), "a realignment in progress shouldn't offer to start another operation:\n{text}");
 
     let country_view = render_country(&map, &layout, &board, poland, Some(&op), ViewMode::Interactive);
     let country_text = country_view.render(ColorMode::Never);
     assert!(country_text.contains("r roll"), "country screen hint missing 'r roll':\n{country_text}");
     assert!(country_text.contains("c done"), "country screen hint missing 'c done':\n{country_text}");
+    assert!(country_text.contains("abandon"), "country screen hint missing 'abandon':\n{country_text}");
+    assert!(!country_text.contains("i influence"), "a realignment in progress shouldn't offer to start another operation:\n{country_text}");
 }
 
 #[test]
@@ -710,14 +801,18 @@ fn the_coup_hint_replaces_the_selection_hint() {
     let text = with_coup.render(ColorMode::Never);
     assert!(text.contains("Enter target"), "coup region hint should point at the country screen:\n{text}");
     assert!(text.contains("c done"), "coup hint missing 'c done':\n{text}");
+    assert!(text.contains("abandon"), "coup hint missing 'abandon':\n{text}");
     assert!(!text.contains("r coup"), "couping no longer happens on the region screen:\n{text}");
     assert!(!text.contains("u undo"), "a coup hint shouldn't offer undo, which isn't possible:\n{text}");
     assert!(!text.contains("+ place"), "a coup hint shouldn't offer placement's '+ place':\n{text}");
+    assert!(!text.contains("i influence"), "a coup in progress shouldn't offer to start another operation:\n{text}");
 
     let country_view = render_country(&map, &layout, &board, italy, Some(&op), ViewMode::Interactive);
     let country_text = country_view.render(ColorMode::Never);
     assert!(country_text.contains("r coup"), "country screen hint missing 'r coup':\n{country_text}");
     assert!(country_text.contains("c done"), "country screen hint missing 'c done':\n{country_text}");
+    assert!(country_text.contains("abandon"), "country screen hint missing 'abandon':\n{country_text}");
+    assert!(!country_text.contains("i influence"), "a coup in progress shouldn't offer to start another operation:\n{country_text}");
 }
 
 #[test]

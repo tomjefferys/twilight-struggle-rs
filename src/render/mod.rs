@@ -11,12 +11,14 @@ mod chip;
 pub mod country;
 pub mod log;
 pub mod region;
+pub mod statusbar;
 pub mod world;
 pub mod worldmap;
 
 pub use country::render_country;
 pub use log::{log_entry_line, log_text, render_log};
 pub use region::render_region;
+pub use statusbar::{render_status_bar, STATUS_BAR_ROWS};
 pub use world::render_world;
 pub use worldmap::render_world_map;
 
@@ -537,3 +539,43 @@ pub fn coup_result_line(map: &crate::map::WorldMap, side: crate::country::Superp
     };
     format!("{dice} → {outcome}")
 }
+
+/// The map screens' one-line report of a just-closed operation — what
+/// [`crate::game::Game::confirm`]/[`crate::game::Game::cancel`] returned,
+/// and who acts next. The REPL's own `confirm`/`cancel` commands print
+/// several kind-specific sentences instead; this is the one-row version
+/// [`crate::interactive`] shows without leaving the map.
+pub fn operation_closed_line(op: &crate::ops::Operation, committed: bool, next: crate::country::Superpower) -> String {
+    let verdict = if committed { "confirmed" } else { "cancelled" };
+    format!("{} {} {verdict} · {} of {} ops spent — {next} to act", op.side(), op.verb(), op.ops_spent(), op.ops_total())
+}
+
+/// The map screens' one-line report of what
+/// [`crate::game::Game::abandon`] returned — always the same side still
+/// to act, which is exactly the reassurance worth printing: unlike
+/// [`operation_closed_line`], abandoning never hands the turn over. A
+/// realignment or coup only ever abandons with nothing spent (`abandon`
+/// refuses either the moment a roll's been made); a placement can abandon
+/// with several points pending, so those get their own wording naming
+/// what was undone rather than claiming nothing happened.
+pub fn operation_abandoned_line(op: &crate::ops::Operation) -> String {
+    let spent = op.ops_spent();
+    let detail = if spent == 0 { "nothing spent".to_string() } else { format!("{spent} of {} ops undone", op.ops_total()) };
+    format!("{} {} abandoned — {detail}, {} still to act", op.side(), op.verb(), op.side())
+}
+
+/// Victory points, worded the way the dashboard header and the status bar
+/// both show them — `"US +2"` / `"USSR +2"`, `"US +0"` at an even score —
+/// pulled out so the two can't drift apart.
+pub(crate) fn vp_line(vp: i8) -> String {
+    if vp >= 0 {
+        format!("US +{vp}")
+    } else {
+        format!("USSR +{}", -(vp as i16))
+    }
+}
+
+/// The keys that open an operation or pass the turn — named by every
+/// view's no-operation hint and by the status bar's own second row, kept
+/// in one place so the four can't drift apart.
+pub(crate) const BEGIN_HINT: &str = "i influence · a realign · o coup · p pass";

@@ -4,7 +4,7 @@ use crate::layout::MapLayout;
 use crate::map::WorldMap;
 use crate::status::GameStatus;
 
-use super::{control_glyph, nz, region_tally, Canvas, Color, Style};
+use super::{control_glyph, nz, region_tally, vp_line, Canvas, Color, Style};
 
 /// Width of one country token: 1 battleground flag + 9-char name + 2-digit
 /// US influence + 1 control glyph + 2-digit USSR influence.
@@ -111,11 +111,7 @@ fn tokens_per_panel(panel_width: usize) -> usize {
 }
 
 fn header_line(status: &GameStatus) -> String {
-    let vp = if status.vp >= 0 {
-        format!("US +{}", status.vp)
-    } else {
-        format!("USSR +{}", -(status.vp as i16))
-    };
+    let vp = vp_line(status.vp);
     format!(
         "  TURN {}   AR {}/{} ({})   DEFCON {}   VP {}   Space US {} USSR {}   MilOps US {} USSR {}   China Card: {} ({})",
         status.turn,

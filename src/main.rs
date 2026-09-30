@@ -1,7 +1,10 @@
 use std::fs;
 use std::io::{self, IsTerminal, Write};
 
-use twilight_struggle::render::{coup_result_line, log_text, operation_balance_line, render_country, render_log, render_region, render_world, render_world_map, roll_result_line};
+use twilight_struggle::render::{
+    coup_result_line, log_text, operation_abandoned_line, operation_balance_line, render_country, render_log, render_region, render_world,
+    render_world_map, roll_result_line,
+};
 use twilight_struggle::{
     ColorMode, Dice, Found, Game, GameError, MapLayout, Operation, OperationKind, Region, RollOutcome, Scenario, Superpower, ViewMode, WorldMap,
     OPS_PER_ACTION_ROUND,
@@ -143,8 +146,12 @@ fn run_command(session: &mut Session, line: &str) {
         }
         "worldmap" | "wm" => {
             if session.interactive_ok && io::stdin().is_terminal() && io::stdout().is_terminal() {
+                // Turns can change hands any number of times inside the map
+                // now — i/a/o/p/c/X all stay on screen — so there's nothing
+                // left to report on return but the one state the next
+                // prompt won't show on its own: a session left open.
                 match interactive::run(&session.map, &session.layout, &mut session.game, &mut session.dice, session.color) {
-                    Ok(interactive::Outcome::Left) => {
+                    Ok(()) => {
                         if let Some(op) = session.game.operation() {
                             println!(
                                 "left the map — {} {} still open ({} of {} ops left): confirm or cancel",
@@ -155,8 +162,6 @@ fn run_command(session: &mut Session, line: &str) {
                             );
                         }
                     }
-                    Ok(interactive::Outcome::Confirmed) => println!("operation confirmed — {} to act", session.game.active()),
-                    Ok(interactive::Outcome::Cancelled) => println!("operation cancelled — {} to act", session.game.active()),
                     Err(e) => println!("interactive mode failed: {e}"),
                 }
             } else {
@@ -246,6 +251,7 @@ fn run_command(session: &mut Session, line: &str) {
         "undo" => run_undo_command(session),
         "confirm" => run_confirm_command(session),
         "cancel" => run_cancel_command(session),
+        "abandon" => run_abandon_command(session),
         "status" => run_status_command(session),
         "pass" => run_pass_command(session),
         "log" | "history" => run_log_command(session, &words),
@@ -543,6 +549,19 @@ fn run_cancel_command(session: &mut Session) {
     println!("{} to act", session.game.active());
 }
 
+/// `abandon` closes the open operation without costing the turn, as long
+/// as nothing irreversible has happened. A placement can always be
+/// abandoned this way, however many points are pending — they're simply
+/// discarded — since it never rolls a die. A realignment or coup can only
+/// be abandoned before its first roll or attempt; `cancel` is the only
+/// way out once one's been made.
+fn run_abandon_command(session: &mut Session) {
+    match session.game.abandon() {
+        Ok(op) => println!("{}", operation_abandoned_line(&op)),
+        Err(e) => println!("{e}"),
+    }
+}
+
 /// Reports whose turn it is, the turn/action-round counters, and — if
 /// one's open — the balance of the current operation. Takes over the
 /// reporting role bare `influence`/`realign`/`coup` used to have, now that those
@@ -644,7 +663,12 @@ Commands:
                           region; Enter there opens that country's own detail
                           screen — also where a realignment roll or coup
                           attempt actually happens, with the calculation on
-                          screen above the key that resolves it)
+                          screen above the key that resolves it). A status
+                          bar at the top of every screen names the turn, AR,
+                          active side, DEFCON, VP, and the open operation's
+                          balance; i/a/o start an influence placement,
+                          realignment, or coup for the active side right
+                          there and p passes — no need to leave the map
   region <name>, 1-6      zoom into one region (europe/asia/middleeast/africa/centralamerica/southamerica)
   country <name>, /<name> a single country's detail, with all its neighbours (name or code)
   set <c> <us|ussr> <n>   set a country's influence
@@ -655,9 +679,11 @@ Commands:
   status                  whose turn it is, the turn/AR counters, and the
                           open operation's balance, if any
   pass                    forfeit the active side's turn with no operation
+                          open — or press p inside the interactive map
 
   influence               start placing influence for the active side with
-                          this turn's 4 ops
+                          this turn's 4 ops — or press i inside the
+                          interactive map
   place <country> [n]     place n influence (default 1); 1 op, or 2 in an
                           opponent-controlled country — refused if there's
                           no influence there, in a neighbour, or a border
@@ -667,7 +693,8 @@ Commands:
   realign                 start realigning for the active side with this
                           turn's 4 ops; view a country (country <name>,
                           region, or worldmap) to see the modifier and
-                          odds breakdown first
+                          odds breakdown first — or press a inside the
+                          interactive map
   roll <country>          resolve one realignment roll for 1 op — resolves
                           immediately onto the board and CANNOT be undone
   undo                    (during a realignment) refuses: rolls can't be
@@ -675,7 +702,8 @@ Commands:
 
   coup                    start a coup for the active side with this
                           turn's 4 ops; view a country to see its target
-                          number (stability ×2) and success odds first
+                          number (stability ×2) and success odds first —
+                          or press o inside the interactive map
   roll <country>          resolve the coup's one attempt, spending all 4
                           ops at once — resolves immediately onto the
                           board and CANNOT be undone; a second `roll`
@@ -691,15 +719,28 @@ Commands:
                           close a realignment or coup, leaving any rolls
                           already made in place — the turn passes to the
                           other side either way
+  abandon                 close the operation for free — no turn cost,
+                          unlike cancel — as long as nothing irreversible
+                          has happened: a placement can always abandon,
+                          however many points are pending (they're just
+                          discarded); a realignment or coup can only
+                          abandon before its first roll or attempt —
+                          cancel is the only way out once one's been made
                           (while a session is open: map/world show a balance
                           banner, region/country show it inline; all three
                           of worldmap/region/country mark touched countries
-                          and are navigable inside interactive mode — + place
-                          on region or country, u undo, c confirm, X cancel;
-                          r rolls or attempts a coup only on the country
-                          screen, opened from region with Enter or r;
-                          set/add/remove/load are refused until you confirm
-                          or cancel)
+                          and are navigable inside interactive mode — i/a/o
+                          start an operation for the active side and p
+                          passes, + place on region or country, u undo,
+                          c confirm, X cancel, Backspace abandon (free —
+                          always for a placement, only pre-roll for a
+                          realignment or coup) — c and X hand the turn
+                          over without leaving the map, so the next side
+                          can start its own operation from the same
+                          screen; r rolls or attempts a coup only on the
+                          country screen, opened from region with Enter or
+                          r; set/add/remove/load are refused until you
+                          confirm or cancel)
 
   log [n], history        the game's history so far (or just the last n
                           entries), colour-banded by side; a realignment
