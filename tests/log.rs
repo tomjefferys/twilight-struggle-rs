@@ -71,12 +71,12 @@ fn scripted_game() -> (WorldMap, CardCatalog, Game) {
 }
 
 /// A closed placement should read the same way a closed realignment or
-/// coup does: a "select" line naming the card played, before an
+/// coup does: a "card" line naming the card played, before an
 /// "influence" line naming what was placed (the placement analogue of a
 /// resolved roll), before its own `confirm`/`cancel` line — never merged
 /// onto one line the way a bare `influence` summary used to be.
 #[test]
-fn a_cancelled_placement_gets_a_select_line_an_influence_line_and_its_own_cancel_line() {
+fn a_cancelled_placement_gets_a_card_line_an_influence_line_and_its_own_cancel_line() {
     use twilight_struggle::render::log_entry_line;
 
     let (map, cards, mut game) = started_game();
@@ -87,11 +87,11 @@ fn a_cancelled_placement_gets_a_select_line_an_influence_line_and_its_own_cancel
     game.cancel().unwrap();
 
     let entries = game.log().entries();
-    assert_eq!(entries.len(), 3, "expected a select line, an influence line, and a separate cancel line");
+    assert_eq!(entries.len(), 3, "expected a card line, an influence line, and a separate cancel line");
 
-    let select_line = log_entry_line(&map, &cards, &entries[0]);
-    assert!(select_line.contains("select"), "expected a select line, got {select_line:?}");
-    assert!(select_line.contains("Socialist Governments"), "expected the card named in the detail, got {select_line:?}");
+    let card_line = log_entry_line(&map, &cards, &entries[0]);
+    assert!(card_line.contains("card"), "expected a card line, got {card_line:?}");
+    assert!(card_line.contains("Socialist Governments"), "expected the card named in the detail, got {card_line:?}");
 
     let influence_line = log_entry_line(&map, &cards, &entries[1]);
     assert!(influence_line.contains("Poland +1"), "expected the placed points, got {influence_line:?}");

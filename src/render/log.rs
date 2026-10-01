@@ -106,9 +106,10 @@ fn side_label(side: Option<Superpower>) -> String {
 /// differently without duplicating the match.
 fn action_and_detail(map: &WorldMap, cards: &CardCatalog, entry: &LogEntry) -> (&'static str, String) {
     match &entry.event {
-        // The first thing a turn does: pushed the instant `Game::play_card`
-        // succeeds, before the operation it funds has even opened.
-        Event::Selected { card } => ("select", selected_detail(cards, *card)),
+        // The first thing a turn does — logged, once irrevocable, before
+        // the operation it funds has necessarily closed (see
+        // `Game::log_card_selected`'s own doc for exactly when).
+        Event::Selected { card } => ("card", selected_detail(cards, *card)),
         // The placement analogue of a resolved roll: its own "influence"
         // line, pushed just before the `Closed` entry that reports whether
         // it was confirmed or cancelled.

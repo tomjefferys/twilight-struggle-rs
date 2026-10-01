@@ -1,12 +1,12 @@
 # twilight-struggle game log
 # turn ar   side action   detail
-T5  AR3  USSR select     Socialist Governments (3 ops)
+T5  AR3  USSR card       Socialist Governments (3 ops)
 T5  AR3  USSR influence  Poland +2
 T5  AR3  USSR confirm    influence, 2 of 3 ops
-T5  AR3  USA  select     Duck and Cover (3 ops)
+T5  AR3  USA  card       Duck and Cover (3 ops)
 T5  AR3  USA  realign    Italy  USA d6:6 mod:+2 sum:8  vs  USSR d6:3 mod:+0 sum:3  -> USSR -1
 T5  AR3  USA  confirm    realign, 1 roll, 1 of 3 ops
-T5  AR4  USSR select     Fidel (2 ops)
+T5  AR4  USSR card       Fidel (2 ops)
 T5  AR4  USSR coup       West Germany  d6:1 ops:+2 sum:3  vs  target:8 (stability:4 x2)  -> failed
 T5  AR4  USSR confirm    coup, 2 ops
 T5  AR4  USA  pass
