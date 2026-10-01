@@ -89,6 +89,31 @@ fn rejects_self_adjacency() {
 }
 
 #[test]
+fn rejects_duplicate_country_neighbor() {
+    let json = r#"[
+        { "name": "A", "stability": 2, "battleground": false, "region": "Europe", "adjacent": ["B", "B"] },
+        { "name": "B", "stability": 2, "battleground": false, "region": "Europe", "adjacent": ["A"] }
+    ]"#;
+    assert!(matches!(
+        WorldMap::from_json(json),
+        Err(MapError::DuplicateNeighbor { country, neighbor })
+            if country == "A" && neighbor == "B"
+    ));
+}
+
+#[test]
+fn rejects_duplicate_superpower_neighbor() {
+    let json = r#"[
+        { "name": "A", "stability": 2, "battleground": false, "region": "Europe", "adjacent": ["USSR", "USSR"] }
+    ]"#;
+    assert!(matches!(
+        WorldMap::from_json(json),
+        Err(MapError::DuplicateNeighbor { country, neighbor })
+            if country == "A" && neighbor == "USSR"
+    ));
+}
+
+#[test]
 fn rejects_zero_stability() {
     let json = r#"[
         { "name": "A", "stability": 0, "battleground": false, "region": "Europe", "adjacent": [] }
@@ -114,6 +139,21 @@ fn control_requires_stability_margin() {
     assert_eq!(board.controller(&map, italy), None);
     assert!(!board.is_controlled_by(&map, italy, Superpower::Us));
     assert!(!board.is_controlled_by(&map, italy, Superpower::Ussr));
+}
+
+#[test]
+fn control_does_not_overflow_at_max_influence() {
+    let map = WorldMap::standard().unwrap();
+    let italy = map.id_by_name("Italy").unwrap(); // stability 2
+    let mut board = Board::new(&map);
+
+    board.set_influence(italy, Superpower::Us, 255);
+    board.set_influence(italy, Superpower::Ussr, 255);
+    assert_eq!(board.controller(&map, italy), None);
+
+    board.set_influence(italy, Superpower::Us, 255);
+    board.set_influence(italy, Superpower::Ussr, 253);
+    assert_eq!(board.controller(&map, italy), Some(Superpower::Us));
 }
 
 #[test]

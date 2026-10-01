@@ -12,6 +12,7 @@ pub enum MapError {
     Json(serde_json::Error),
     DuplicateName(String),
     UnknownNeighbor { country: String, neighbor: String },
+    DuplicateNeighbor { country: String, neighbor: String },
     AsymmetricAdjacency { country: String, neighbor: String },
     SelfAdjacency(String),
     ZeroStability(String),
@@ -28,6 +29,9 @@ impl fmt::Display for MapError {
                 f,
                 "{country} lists unknown neighbor {neighbor:?} (not a country, USA, or USSR)"
             ),
+            MapError::DuplicateNeighbor { country, neighbor } => {
+                write!(f, "{country} lists {neighbor} as a neighbor more than once")
+            }
             MapError::AsymmetricAdjacency { country, neighbor } => write!(
                 f,
                 "{country} lists {neighbor} as a neighbor, but {neighbor} does not list {country} back"
@@ -113,8 +117,24 @@ impl WorldMap {
                     return Err(MapError::SelfAdjacency(entry.name.clone()));
                 }
                 match neighbor.as_str() {
-                    "USA" => adjacent_superpowers.push(Superpower::Us),
-                    "USSR" => adjacent_superpowers.push(Superpower::Ussr),
+                    "USA" => {
+                        if adjacent_superpowers.contains(&Superpower::Us) {
+                            return Err(MapError::DuplicateNeighbor {
+                                country: entry.name.clone(),
+                                neighbor: neighbor.clone(),
+                            });
+                        }
+                        adjacent_superpowers.push(Superpower::Us)
+                    }
+                    "USSR" => {
+                        if adjacent_superpowers.contains(&Superpower::Ussr) {
+                            return Err(MapError::DuplicateNeighbor {
+                                country: entry.name.clone(),
+                                neighbor: neighbor.clone(),
+                            });
+                        }
+                        adjacent_superpowers.push(Superpower::Ussr)
+                    }
                     _ => {
                         let id = by_name.get(neighbor).copied().ok_or_else(|| {
                             MapError::UnknownNeighbor {
@@ -122,6 +142,12 @@ impl WorldMap {
                                 neighbor: neighbor.clone(),
                             }
                         })?;
+                        if adjacent.contains(&id) {
+                            return Err(MapError::DuplicateNeighbor {
+                                country: entry.name.clone(),
+                                neighbor: neighbor.clone(),
+                            });
+                        }
                         adjacent.push(id);
                     }
                 }

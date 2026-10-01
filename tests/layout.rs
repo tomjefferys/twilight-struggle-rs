@@ -245,6 +245,60 @@ fn rejects_superpower_box_overlap() {
 }
 
 #[test]
+fn rejects_zero_sized_superpower_box() {
+    let map = WorldMap::standard().unwrap();
+    let mut raw: serde_json::Value =
+        serde_json::from_str(include_str!("../data/standard_layout.json")).unwrap();
+    raw["superpowers"]["Us"]["size"] = serde_json::json!([0, 1]);
+    let json = serde_json::to_string(&raw).unwrap();
+    match MapLayout::load(&map, &json) {
+        Err(LayoutError::ZeroSizedSuperpowerBox(_)) => {}
+        other => panic!("expected ZeroSizedSuperpowerBox, got {other:?}"),
+    }
+}
+
+#[test]
+fn rejects_superpower_box_out_of_bounds() {
+    let map = WorldMap::standard().unwrap();
+    let mut raw: serde_json::Value =
+        serde_json::from_str(include_str!("../data/standard_layout.json")).unwrap();
+    raw["superpowers"]["Us"]["cell"] = serde_json::json!([255, 255]);
+    raw["superpowers"]["Us"]["size"] = serde_json::json!([1, 1]);
+    let json = serde_json::to_string(&raw).unwrap();
+    match MapLayout::load(&map, &json) {
+        Err(LayoutError::SuperpowerBoxOutOfBounds { .. }) => {}
+        other => panic!("expected SuperpowerBoxOutOfBounds, got {other:?}"),
+    }
+}
+
+#[test]
+fn rejects_region_order_missing_a_region() {
+    let map = WorldMap::standard().unwrap();
+    let mut raw: serde_json::Value =
+        serde_json::from_str(include_str!("../data/standard_layout.json")).unwrap();
+    raw["region_order"] = serde_json::json!(["Europe", "Asia", "MiddleEast", "Africa", "CentralAmerica"]);
+    let json = serde_json::to_string(&raw).unwrap();
+    match MapLayout::load(&map, &json) {
+        Err(LayoutError::InvalidRegionOrder) => {}
+        other => panic!("expected InvalidRegionOrder, got {other:?}"),
+    }
+}
+
+#[test]
+fn rejects_region_order_with_a_duplicate() {
+    let map = WorldMap::standard().unwrap();
+    let mut raw: serde_json::Value =
+        serde_json::from_str(include_str!("../data/standard_layout.json")).unwrap();
+    raw["region_order"] =
+        serde_json::json!(["Europe", "Europe", "MiddleEast", "Africa", "CentralAmerica", "SouthAmerica"]);
+    let json = serde_json::to_string(&raw).unwrap();
+    match MapLayout::load(&map, &json) {
+        Err(LayoutError::InvalidRegionOrder) => {}
+        other => panic!("expected InvalidRegionOrder, got {other:?}"),
+    }
+}
+
+#[test]
 fn rejects_short_name_too_long() {
     let map = WorldMap::standard().unwrap();
     let mut raw: serde_json::Value =

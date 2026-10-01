@@ -128,6 +128,19 @@ pub enum LayoutError {
     },
     /// The `superpowers` object has no entry for this superpower.
     MissingSuperpowerBox(Superpower),
+    /// A superpower's box has zero rows or columns, so nothing would ever
+    /// be drawn inside it.
+    ZeroSizedSuperpowerBox(Superpower),
+    /// A superpower's box footprint extends past the background art's
+    /// bounds, so the renderer would silently clip it.
+    SuperpowerBoxOutOfBounds {
+        superpower: Superpower,
+        row: u16,
+        col: u16,
+    },
+    /// `region_order` isn't exactly one entry per region — `world.rs`
+    /// trusts it to be a full permutation of the six regions.
+    InvalidRegionOrder,
     /// A country's world cell falls inside a superpower's box footprint.
     SuperpowerBoxOverlap {
         superpower: Superpower,
@@ -202,6 +215,16 @@ impl fmt::Display for LayoutError {
             ),
             LayoutError::MissingSuperpowerBox(sp) => {
                 write!(f, "{sp} has no entry in superpowers")
+            }
+            LayoutError::ZeroSizedSuperpowerBox(sp) => {
+                write!(f, "{sp}'s box has zero rows or columns")
+            }
+            LayoutError::SuperpowerBoxOutOfBounds { superpower, row, col } => write!(
+                f,
+                "{superpower}'s box extends to ({row}, {col}), outside the background art's bounds"
+            ),
+            LayoutError::InvalidRegionOrder => {
+                write!(f, "region_order must list each of the six regions exactly once")
             }
             LayoutError::SuperpowerBoxOverlap { superpower, country, row, col } => write!(
                 f,
@@ -502,6 +525,30 @@ impl MapLayout {
             })
             .collect();
 
+        let background: Vec<String> = WORLD_BACKGROUND_TXT.lines().map(str::to_string).collect();
+        let bg_rows = background.len() as u16;
+        let bg_cols = background.iter().map(|l| l.chars().count()).max().unwrap_or(0) as u16;
+
+        // A zero-sized box would never draw anything, and a box whose
+        // footprint runs off the background art would be silently clipped
+        // by Canvas's own bounds-clipping with no indication anything was
+        // wrong — the same failure mode a country's own world_cell is
+        // checked for below.
+        for (&sp, sbox) in &superpower_boxes {
+            if sbox.rows == 0 || sbox.cols == 0 {
+                return Err(LayoutError::ZeroSizedSuperpowerBox(sp));
+            }
+            let last_row = sbox.cell.row as u16 + sbox.rows as u16 - 1;
+            let last_col = sbox.cell.col as u16 + sbox.cols as u16 - 1;
+            if last_row >= bg_rows || last_col >= bg_cols {
+                return Err(LayoutError::SuperpowerBoxOutOfBounds {
+                    superpower: sp,
+                    row: last_row,
+                    col: last_col,
+                });
+            }
+        }
+
         // Duplicate-world-cell check, global.
         let mut world_seen: HashMap<(u8, u8), CountryId> = HashMap::new();
         for (id, country) in map.iter() {
@@ -537,18 +584,25 @@ impl MapLayout {
         // otherwise it would be drawn off the edge of the canvas, or (worse)
         // silently clipped by Canvas's own bounds-clipping with no
         // indication anything was wrong.
-        let background: Vec<String> = WORLD_BACKGROUND_TXT.lines().map(str::to_string).collect();
-        let bg_rows = background.len() as u8;
-        let bg_cols = background.iter().map(|l| l.chars().count()).max().unwrap_or(0) as u8;
         for (id, country) in map.iter() {
             let cell = entries[id.index()].world_cell;
-            if cell.row >= bg_rows || cell.col >= bg_cols {
+            if cell.row as u16 >= bg_rows || cell.col as u16 >= bg_cols {
                 return Err(LayoutError::WorldCellOutOfBounds {
                     country: country.name.clone(),
                     row: cell.row,
                     col: cell.col,
                 });
             }
+        }
+
+        // world.rs trusts region_order to be a full permutation of the six
+        // regions when laying out the dashboard.
+        let mut sorted_region_order = raw.region_order.clone();
+        sorted_region_order.sort();
+        let mut sorted_all_regions = Region::ALL.to_vec();
+        sorted_all_regions.sort();
+        if sorted_region_order != sorted_all_regions {
+            return Err(LayoutError::InvalidRegionOrder);
         }
 
         let mut layout = MapLayout {

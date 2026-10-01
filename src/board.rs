@@ -61,11 +61,13 @@ impl Board {
     /// controls a country when its influence there is at least the
     /// opponent's influence plus the country's stability.
     pub fn controller(&self, map: &WorldMap, id: CountryId) -> Option<Superpower> {
-        let stability = map.country(id).stability;
+        let stability = map.country(id).stability as u16;
         let inf = self.influence[id.index()];
-        if inf.us >= inf.ussr + stability {
+        let us = inf.us as u16;
+        let ussr = inf.ussr as u16;
+        if us >= ussr + stability {
             Some(Superpower::Us)
-        } else if inf.ussr >= inf.us + stability {
+        } else if ussr >= us + stability {
             Some(Superpower::Ussr)
         } else {
             None
