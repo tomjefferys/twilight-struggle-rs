@@ -18,7 +18,7 @@ use super::{
 fn hint() -> String {
     format!("←→↑↓ select · {BEGIN_HINT} · Esc back")
 }
-const PLACEMENT_HINT: &str = "←→↑↓ select · + place · u undo · ⌫ abandon · c confirm · Esc back";
+const PLACEMENT_HINT: &str = "←→↑↓ select · +/= place · u undo · ⌫ abandon · c confirm · Esc back";
 const REALIGN_HINT: &str = "←→↑↓ select · r roll · ⌫ abandon · c done · Esc back";
 const COUP_HINT: &str = "←→↑↓ select · r coup · ⌫ abandon · c done · Esc back";
 

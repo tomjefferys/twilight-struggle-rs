@@ -851,7 +851,7 @@ Commands:
                           of worldmap/region/country mark touched countries
                           and are navigable inside interactive mode — space
                           plays the selected card, i/a/o start an operation
-                          with it and p passes, + place on region or
+                          with it and p passes, +/= place on region or
                           country, u undo, c confirm, X cancel, Backspace
                           steps back one level the same way `abandon` does
                           — c and X hand the turn over without leaving the

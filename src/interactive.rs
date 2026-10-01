@@ -122,11 +122,21 @@ impl Drop for TerminalGuard {
 /// (`render::render_card`, blitted onto the current screen's own canvas)
 /// for the selected card — both no-ops on an empty hand, and `Space` is
 /// too once a card is already in play (nothing left to select there to
-/// play again). `Esc` closes an open zoom first, before whatever it would
-/// otherwise do; `c`/`X`/`p` actually handing the turn over close it too,
-/// since the newly active side's own hand takes its place. This still
-/// isn't card *event* behaviour — nothing here reads a card's text or
-/// triggers it, only its ops value, via [`Game::play_card`].
+/// play again). The zoomed overlay is modal: since it obscures whichever
+/// map screen is underneath, nothing that acts on the map or the open
+/// operation — the arrow keys, `i`/`a`/`o`/`p`/`c`/`X`/`u`, and
+/// Backspace's usual abandon/return-card cascade — reaches the board
+/// while it's showing; only hand navigation (`[`/`]`) and selection
+/// (`Space`, via the shared [`handle_hand_key`]) still work, `q`/Ctrl-C
+/// still quit, and `Esc`, `Backspace`, and `z` all just close the overlay
+/// (`Esc`/`Backspace` otherwise meaning "leave this screen"/"undo" are
+/// repurposed to that one job while zoomed, rather than doing both).
+/// `Space` actually playing a card closes the overlay too, the same as
+/// `Esc`/`Backspace`/`z` — and, unzoomed, `c`/`X`/`p` actually handing the
+/// turn over close it as well, since the newly active side's own hand
+/// takes its place. This still isn't card *event* behaviour — nothing
+/// here reads a card's text or triggers it, only its ops value, via
+/// [`Game::play_card`].
 pub fn run(map: &WorldMap, layout: &MapLayout, cards: &CardCatalog, game: &mut Game, dice: &mut Dice, color: ColorMode) -> io::Result<()> {
     let _guard = TerminalGuard::enter()?;
     let mut screen = Screen::World { selected: Region::Europe };
@@ -166,27 +176,36 @@ pub fn run(map: &WorldMap, layout: &MapLayout, cards: &CardCatalog, game: &mut G
                 if !std::mem::take(&mut sticky) {
                     message = None;
                 }
+                if zoomed {
+                    // The zoomed card is modal: it obscures the map, so
+                    // only hand navigation/selection and the keys that
+                    // close the overlay do anything here — no operation or
+                    // map-navigation key reaches the match arms below.
+                    match key.code {
+                        KeyCode::Esc | KeyCode::Backspace => zoomed = false,
+                        KeyCode::Char('q') => return Ok(()),
+                        KeyCode::Char('z') => zoomed = false,
+                        KeyCode::Char('[') | KeyCode::BackTab | KeyCode::Char(']') | KeyCode::Tab | KeyCode::Char(' ') => {
+                            if let Some(m) = handle_hand_key(key.code, game, cards, &mut hand_selected, &mut zoomed) {
+                                message = Some(m);
+                            }
+                        }
+                        _ => {}
+                    }
+                    draw(&screen, map, layout, cards, game, message.as_deref(), &hand_selected, zoomed, color)?;
+                    continue;
+                }
                 match key.code {
-                    KeyCode::Esc if zoomed => zoomed = false,
                     KeyCode::Esc if matches!(screen, Screen::World { .. }) => return Ok(()),
                     KeyCode::Char('q') => return Ok(()),
-                    KeyCode::Char('[') => cycle_hand(game, &mut hand_selected, -1),
-                    KeyCode::Char(']') => cycle_hand(game, &mut hand_selected, 1),
                     KeyCode::Char('z') => {
                         if hand_item_count(game, game.active()) > 0 {
                             zoomed = !zoomed;
                         }
                     }
-                    KeyCode::Char(' ') => {
-                        if let Some(id) = selected_hand_card(game, &hand_selected) {
-                            let side = game.active();
-                            message = Some(match game.play_card(cards, id) {
-                                Ok(()) => {
-                                    zoomed = false;
-                                    format!("{side} plays {} ({} ops) — i/a/o to use them", cards.card(id).name, cards.card(id).ops)
-                                }
-                                Err(e) => e.to_string(),
-                            });
+                    KeyCode::Char('[') | KeyCode::BackTab | KeyCode::Char(']') | KeyCode::Tab | KeyCode::Char(' ') => {
+                        if let Some(m) = handle_hand_key(key.code, game, cards, &mut hand_selected, &mut zoomed) {
+                            message = Some(m);
                         }
                     }
                     KeyCode::Char('i') => message = begin(game, OperationKind::Influence),
@@ -362,6 +381,39 @@ fn selected_hand_card(game: &Game, hand_selected: &[usize; 2]) -> Option<CardId>
     }
     let idx = hand_selected[side_index(side)].min(count - 1);
     Some(if idx < hand.len() { hand[idx] } else { CHINA_CARD })
+}
+
+/// `[`/`]`/`Space` share this handler between the normal keymap and the
+/// zoomed-card modal (see `run`'s own doc), since both let hand
+/// navigation and selection work identically. `[`/`]` cycle the
+/// selection and return `None`; `Space` plays the selected card via
+/// [`Game::play_card`], clearing `*zoomed` on success (so playing a card
+/// closes an open zoom, same as selecting it) and returning the status
+/// message either way. A no-op (returning `None`, `*zoomed` untouched) on
+/// an empty hand.
+fn handle_hand_key(code: KeyCode, game: &mut Game, cards: &CardCatalog, hand_selected: &mut [usize; 2], zoomed: &mut bool) -> Option<String> {
+    match code {
+        KeyCode::Char('[') | KeyCode::BackTab => {
+            cycle_hand(game, hand_selected, -1);
+            None
+        }
+        KeyCode::Char(']') | KeyCode::Tab => {
+            cycle_hand(game, hand_selected, 1);
+            None
+        }
+        KeyCode::Char(' ') => {
+            let id = selected_hand_card(game, hand_selected)?;
+            let side = game.active();
+            Some(match game.play_card(cards, id) {
+                Ok(()) => {
+                    *zoomed = false;
+                    format!("{side} plays {} ({} ops) — i/a/o to use them", cards.card(id).name, cards.card(id).ops)
+                }
+                Err(e) => e.to_string(),
+            })
+        }
+        _ => None,
+    }
 }
 
 /// `[`/`]`: moves the active side's own hand selection by `delta` (`-1` or

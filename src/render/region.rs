@@ -20,7 +20,7 @@ const SELECTION_HINT: &str = "←→↑↓ select · Enter open · Esc back";
 /// Shown instead, once an [`InfluencePlacement`](crate::ops::InfluencePlacement) is in progress.
 /// Placement stays bound here too — it's undoable, so it doesn't need the
 /// country screen's confirmation step the way a roll does.
-const PLACEMENT_HINT: &str = "←→↑↓ select · Enter open · + place · u undo · ⌫ abandon · c confirm · Esc back";
+const PLACEMENT_HINT: &str = "←→↑↓ select · Enter open · +/= place · u undo · ⌫ abandon · c confirm · Esc back";
 
 /// Shown instead of [`SELECTION_HINT`], once a [`Realignment`](crate::ops::Realignment)
 /// is in progress. No `r roll` here any more — a roll is irreversible the
