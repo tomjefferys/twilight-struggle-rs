@@ -2,12 +2,12 @@ use std::fs;
 use std::io::{self, IsTerminal, Write};
 
 use twilight_struggle::render::{
-    coup_result_line, log_text, operation_abandoned_line, operation_balance_line, render_card, render_country, render_hand, render_log,
-    render_region, render_world, render_world_map, roll_result_line,
+    coup_result_line, log_entry_line, log_text, operation_abandoned_line, operation_balance_line, render_card, render_country, render_hand,
+    render_log, render_region, render_world, render_world_map, roll_result_line,
 };
 use twilight_struggle::{
-    CardCatalog, CardFound, ColorMode, Dice, Found, Game, GameError, MapLayout, Operation, OperationKind, Region, RollOutcome, Scenario,
-    Superpower, ViewMode, WorldMap, CHINA_CARD,
+    ai, CardCatalog, CardFound, ColorMode, Dice, Found, Game, GameError, MapLayout, Operation, OperationKind, RandomAi, Region,
+    RollOutcome, Scenario, Superpower, ViewMode, WorldMap, CHINA_CARD,
 };
 
 mod interactive;
@@ -34,6 +34,15 @@ struct Session {
     /// one-shot mode, so the documented snapshot-regeneration workflow
     /// stays reproducible.
     dice: Dice,
+    /// Picks the moves for `ai_side`'s turns, via [`ai::play_turn`]. Its own
+    /// seed is independent of `dice`'s (derived from `--seed` when given,
+    /// else entropy) so `--seed`/`seed <n>` keep controlling realignment
+    /// and coup rolls only, not which moves the AI happens to pick.
+    ai: RandomAi,
+    /// Which side (if any) the AI plays instead of a human — at most one,
+    /// so the REPL loop can never drive both sides without a human typing
+    /// anything. `None` means every turn is typed at the prompt as usual.
+    ai_side: Option<Superpower>,
 }
 
 fn main() {
@@ -51,6 +60,7 @@ fn main() {
         ColorMode::Always
     };
     let mut seed: Option<u64> = None;
+    let mut ai_side: Option<Superpower> = None;
     let mut command_words = Vec::new();
 
     while let Some(arg) = args.next() {
@@ -71,6 +81,11 @@ fn main() {
                     seed = Some(s);
                 }
             }
+            "--ai" => {
+                if let Some(side) = args.next().as_deref().and_then(parse_superpower) {
+                    ai_side = Some(side);
+                }
+            }
             other => command_words.push(other.to_string()),
         }
     }
@@ -85,6 +100,16 @@ fn main() {
         None if one_shot => Dice::from_seed(0),
         None => Dice::from_entropy(),
     };
+    // The AI's own seed is independent of `dice`'s (xored with a constant
+    // salt rather than reused outright, so the two generators don't just
+    // replay each other's sequence) — `--seed`/`seed <n>` keep controlling
+    // realignment and coup rolls only, never which moves the AI picks.
+    const AI_SEED_SALT: u64 = 0x41_495F_5345_4544;
+    let ai = match seed {
+        Some(s) => RandomAi::from_seed(s ^ AI_SEED_SALT),
+        None if one_shot => RandomAi::from_seed(AI_SEED_SALT),
+        None => RandomAi::from_entropy(),
+    };
 
     let mut session = Session {
         map,
@@ -95,6 +120,8 @@ fn main() {
         color,
         interactive_ok: !one_shot,
         dice,
+        ai,
+        ai_side,
     };
 
     if one_shot {
@@ -105,6 +132,7 @@ fn main() {
     }
 
     println!("Twilight Struggle — terminal map. Type `help` for commands, `quit` to exit.");
+    maybe_run_ai_turn(&mut session);
     let stdin = io::stdin();
     loop {
         print!("{}", prompt(&session));
@@ -121,6 +149,54 @@ fn main() {
             break;
         }
         run_command(&mut session, line);
+        maybe_run_ai_turn(&mut session);
+    }
+}
+
+/// If `session.ai_side` names whoever's active right now, plays that turn
+/// — a no-op otherwise (no AI side set, or it's the human's turn).
+fn maybe_run_ai_turn(session: &mut Session) {
+    if session.ai_side == Some(session.game.active()) {
+        run_ai_turn(session);
+    }
+}
+
+/// Plays the active side's current turn via [`ai::play_turn`] and echoes
+/// every log entry it produced — the same lines `log` would show — so a
+/// human watching the REPL sees what the AI just did without a separate
+/// `log` call. Used both for automatic play (`maybe_run_ai_turn`, once
+/// `session.ai_side` names the active side) and for the bare `ai` command,
+/// which plays one turn regardless of `ai_side`.
+fn run_ai_turn(session: &mut Session) {
+    let side = session.game.active();
+    println!("{side} (AI) plays:");
+    let before = session.game.log().len();
+    if let Err(e) = ai::play_turn(&mut session.ai, &mut session.game, &session.map, &session.cards, &mut session.dice) {
+        println!("  AI error: {e}");
+    }
+    for entry in &session.game.log().entries()[before..] {
+        println!("  {}", log_entry_line(&session.map, &session.cards, entry));
+    }
+}
+
+/// `ai` plays the active side's turn once, right now, regardless of
+/// whether auto-play is on. `ai us|ussr` turns auto-play on for that side
+/// from now on (every subsequent turn of theirs plays itself, in both the
+/// REPL and the interactive map); `ai off` turns it back off.
+fn run_ai_command(session: &mut Session, words: &[&str]) {
+    match words.get(1).copied() {
+        None => run_ai_turn(session),
+        Some("off") => {
+            session.ai_side = None;
+            println!("AI auto-play off");
+        }
+        Some(s) => match parse_superpower(s) {
+            Some(side) => {
+                session.ai_side = Some(side);
+                println!("AI now plays {side} automatically");
+            }
+            None => println!("usage: ai [us|ussr|off]"),
+        },
     }
 }
 
@@ -158,7 +234,16 @@ fn run_command(session: &mut Session, line: &str) {
                 // now — i/a/o/p/c/X all stay on screen — so there's nothing
                 // left to report on return but the one state the next
                 // prompt won't show on its own: a session left open.
-                match interactive::run(&session.map, &session.layout, &session.cards, &mut session.game, &mut session.dice, session.color) {
+                match interactive::run(
+                    &session.map,
+                    &session.layout,
+                    &session.cards,
+                    &mut session.game,
+                    &mut session.dice,
+                    session.color,
+                    session.ai_side,
+                    &mut session.ai,
+                ) {
                     Ok(()) => {
                         if let Some(op) = session.game.operation() {
                             println!(
@@ -263,6 +348,7 @@ fn run_command(session: &mut Session, line: &str) {
         "abandon" => run_abandon_command(session),
         "status" => run_status_command(session),
         "pass" => run_pass_command(session),
+        "ai" => run_ai_command(session, &words),
         "hand" => run_hand_command(session, &words),
         "card" => run_card_command(session, &words),
         "log" | "history" => run_log_command(session, &words),
@@ -786,6 +872,13 @@ Commands:
   pass                    forfeit the active side's turn — refused with a
                           card in play (return it first) or an operation
                           open — or press p inside the interactive map
+  ai                      have the AI play the active side's current turn,
+                          once, choosing uniformly among whatever
+                          Game::legal_actions lists right now
+  ai us|ussr              from now on, the AI plays that side's turns
+                          automatically (in the REPL and the interactive
+                          map alike) — `--ai us|ussr` sets this at launch
+  ai off                  turn automatic AI play back off
 
   play <id|name>          take a card from the active side's hand (id,
                           name prefix, or exact name — the China Card

@@ -3,9 +3,10 @@
 A Rust CLI implementation of the board game *Twilight Struggle*. Currently
 focused on the data model and terminal display, a handful of the
 ops-spending actions (influence placement, realignment, coups), enforced
-alternating turns, and playing a card from each side's hand purely for its
+alternating turns, playing a card from each side's hand purely for its
 ops value (no card text/events, DEFCON, Military Operations, scoring, or
-redealing yet).
+redealing yet), and a first AI opponent that plays uniformly random legal
+moves.
 
 ## Architecture
 
@@ -221,6 +222,33 @@ redealing yet).
   (`PlayedCard::hand_index` — `None` for the China Card) purely so
   `render::render_hand` can splice it back into its old spot rather than
   just letting it disappear from the strip; see that function's own doc.
+- **`action`** (`src/action.rs`) — the surface an AI opponent drives
+  instead of calling `Game`'s own methods directly: `Action`, one legal
+  forward move (`PlayCard`/`Begin`/`Place`/`Roll`/`Confirm`/`Pass`), plus
+  `Game::legal_actions` (every legal `Action` for whoever's active right
+  now, in a fixed order so a seeded AI's choices stay reproducible) and
+  `Game::apply` (a thin dispatch onto the `Game` method each variant
+  names). Deliberately forward moves only — never `undo`/`abandon`/
+  `return_card` (human-only take-backs an AI never needs, since it simply
+  doesn't choose the action it'd be undoing) or `cancel` (every board
+  outcome it can produce is already reachable through `confirm` alone).
+  That exclusion is also what guarantees the list is never empty and a
+  random walk through it can't stall: every action either spends ops or
+  closes/opens a step, so repeated `legal_actions`/`apply` calls always
+  reach a `Confirm` or `Pass` that hands the turn over.
+- **`ai`** (`src/ai/`) — the framework built on `action.rs`: the `Ai`
+  trait (`choose`, given a game, its map/cards, and the current
+  `legal_actions` list, picks one of them) and `play_turn`, which drives
+  one `Ai` through a whole turn — `legal_actions` → `choose` → `apply`,
+  looped until `Game::active` changes — from any point mid-turn, not just
+  a turn's very start. `ai::random::RandomAi` is the first implementation:
+  picks uniformly among whatever's legal, via its own `Dice` (seeded
+  independently of the game's own, so an AI's choices never shift a
+  realignment's or coup's die sequence). Wired into both `main.rs` (an
+  `ai`/`ai us|ussr|off` REPL command, `--ai us|ussr` at launch) and
+  `interactive.rs` (the same auto-play, driven on every keypress that
+  might have handed the turn to the AI's side) — see each file's own notes
+  below.
 - **`log`** (`src/log.rs`) — `GameLog`, the game's append-only history, a
   `Vec<LogEntry>` built up entirely inside `Game` — the one place every
   mutation already funnels through — so the REPL and `interactive.rs` are
@@ -519,7 +547,20 @@ redealing yet).
   a `CardCatalog`; `hand [us|ussr]` (default: the active side) and
   `card <id|name>` print the static, unselected `render_hand`/
   `render_card` views — the same ones `interactive.rs` draws with a
-  selection.
+  selection. `Session` also carries a `RandomAi` (`Session.ai`) and
+  `Session.ai_side: Option<Superpower>` — at most one side, so the REPL
+  loop can never run without a human typing anything. `--ai us|ussr` sets
+  `ai_side` at launch; the REPL's `ai` command plays the active side's
+  current turn once via `ai::play_turn` regardless of `ai_side`, `ai
+  us|ussr` turns auto-play on for that side from here on, and `ai off`
+  turns it back off. `maybe_run_ai_turn` runs after every REPL command (and
+  once at startup, in case the scenario's starting side is already the
+  AI's) and, whenever `ai_side` matches `Game::active`, plays that whole
+  turn and echoes each new log line via `render::log_entry_line` — the
+  same wording `log` shows. The AI's own `Dice` is seeded independently of
+  `Session.dice` (xored with a constant salt when `--seed` is given), so
+  `--seed`/`seed <n>` keep controlling realignment and coup rolls only,
+  never which moves the AI picks.
 - **`interactive.rs`** — the terminal-driving code for `worldmap`/`wm`
   when run interactively (a real TTY, not one-shot mode): raw mode, the
   alternate screen, and the arrow/Enter/Esc event loop over three screens
@@ -595,6 +636,14 @@ redealing yet).
   redraw already reflects — survives exactly one more keypress before being
   cleared, via a `sticky` flag set alongside it, since it's the one
   message whose content isn't otherwise recoverable from the screen.
+  `run` also takes `ai_side: Option<Superpower>` and `&mut RandomAi`,
+  threaded through from `Session` — `maybe_run_ai_turn` runs before the
+  very first draw and again after every handled keypress, and, whenever
+  `ai_side` matches `Game::active`, plays that whole turn via
+  `ai::play_turn`, folds its log entries into one message line (closing
+  any open zoom overlay and marking the message `sticky`, the same
+  one-extra-keypress survival a roll's own outcome gets), and leaves it
+  for that keypress's own `draw` call to show.
 
   The active side's hand (`render::render_hand`) is drawn as a fixed-
   height strip pinned below every screen — global, like the status bar

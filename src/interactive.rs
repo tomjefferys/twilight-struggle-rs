@@ -13,12 +13,12 @@ use crossterm::terminal::{self, Clear, ClearType, EnterAlternateScreen, LeaveAlt
 use crossterm::{execute, queue};
 
 use twilight_struggle::render::{
-    coup_result_line, operation_abandoned_line, operation_closed_line, operation_header, render_card, render_country, render_hand,
-    render_region, render_status_bar, render_world_map, roll_result_line, Canvas, HAND_ROWS,
+    coup_result_line, log_entry_line, operation_abandoned_line, operation_closed_line, operation_header, render_card, render_country,
+    render_hand, render_region, render_status_bar, render_world_map, roll_result_line, Canvas, HAND_ROWS,
 };
 use twilight_struggle::{
-    CardCatalog, CardId, ColorMode, CountryId, Dice, Direction, Game, GameError, MapLayout, OperationKind, Region, RollOutcome, Superpower,
-    ViewMode, WorldMap, CHINA_CARD,
+    ai, CardCatalog, CardId, ColorMode, CountryId, Dice, Direction, Game, GameError, MapLayout, OperationKind, RandomAi, Region,
+    RollOutcome, Superpower, ViewMode, WorldMap, CHINA_CARD,
 };
 
 /// Which screen is currently showing.
@@ -137,7 +137,17 @@ impl Drop for TerminalGuard {
 /// takes its place. This still isn't card *event* behaviour — nothing
 /// here reads a card's text or triggers it, only its ops value, via
 /// [`Game::play_card`].
-pub fn run(map: &WorldMap, layout: &MapLayout, cards: &CardCatalog, game: &mut Game, dice: &mut Dice, color: ColorMode) -> io::Result<()> {
+#[allow(clippy::too_many_arguments)]
+pub fn run(
+    map: &WorldMap,
+    layout: &MapLayout,
+    cards: &CardCatalog,
+    game: &mut Game,
+    dice: &mut Dice,
+    color: ColorMode,
+    ai_side: Option<Superpower>,
+    ai: &mut RandomAi,
+) -> io::Result<()> {
     let _guard = TerminalGuard::enter()?;
     let mut screen = Screen::World { selected: Region::Europe };
     // Remembers the last country selected in each region, so leaving a
@@ -166,6 +176,7 @@ pub fn run(map: &WorldMap, layout: &MapLayout, cards: &CardCatalog, game: &mut G
     // the newly active side's own hand takes its place.
     let mut zoomed = false;
 
+    maybe_run_ai_turn(ai_side, ai, game, map, cards, dice, &mut message, &mut sticky, &mut zoomed);
     draw(&screen, map, layout, cards, game, message.as_deref(), &hand_selected, zoomed, color)?;
     loop {
         match event::read()? {
@@ -329,12 +340,47 @@ pub fn run(map: &WorldMap, layout: &MapLayout, cards: &CardCatalog, game: &mut G
                         },
                     },
                 }
+                maybe_run_ai_turn(ai_side, ai, game, map, cards, dice, &mut message, &mut sticky, &mut zoomed);
                 draw(&screen, map, layout, cards, game, message.as_deref(), &hand_selected, zoomed, color)?;
             }
             Event::Resize(_, _) => draw(&screen, map, layout, cards, game, message.as_deref(), &hand_selected, zoomed, color)?,
             _ => {}
         }
     }
+}
+
+/// If `ai_side` names whoever's active right now, plays that whole turn
+/// via [`ai::play_turn`] — a no-op otherwise (no AI side set, or it's the
+/// human's turn). Turns the turn's own log entries into the next message
+/// (joined by `\n`, marked `sticky` since — like a roll's own outcome —
+/// they aren't otherwise recoverable from the screen the way a refusal or
+/// a confirm/cancel/pass report already is) and closes any open zoom
+/// overlay, the same way `c`/`X`/`p` do for a human-ended turn.
+#[allow(clippy::too_many_arguments)]
+fn maybe_run_ai_turn(
+    ai_side: Option<Superpower>,
+    ai: &mut RandomAi,
+    game: &mut Game,
+    map: &WorldMap,
+    cards: &CardCatalog,
+    dice: &mut Dice,
+    message: &mut Option<String>,
+    sticky: &mut bool,
+    zoomed: &mut bool,
+) {
+    if ai_side != Some(game.active()) {
+        return;
+    }
+    let side = game.active();
+    let before = game.log().len();
+    let outcome = ai::play_turn(ai, game, map, cards, dice);
+    let mut lines: Vec<String> = game.log().entries()[before..].iter().map(|entry| log_entry_line(map, cards, entry)).collect();
+    if let Err(e) = outcome {
+        lines.push(format!("AI error: {e}"));
+    }
+    *message = Some(format!("{side} (AI) plays: {}", lines.join(" · ")));
+    *sticky = true;
+    *zoomed = false;
 }
 
 /// `i`/`a`/`o`: opens `kind` for the active side. `None` on success — the

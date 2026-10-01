@@ -1,3 +1,5 @@
+pub mod action;
+pub mod ai;
 pub mod board;
 pub mod cards;
 pub mod country;
@@ -11,6 +13,8 @@ pub mod render;
 pub mod scenario;
 pub mod status;
 
+pub use action::Action;
+pub use ai::{play_turn, Ai, RandomAi};
 pub use board::{Board, Influence};
 pub use cards::{Card, CardCatalog, CardError, CardFound, CardId, CardPhase, CardSide, Hands, CHINA_CARD};
 pub use country::{Country, CountryId, Direction, Region, SubRegion, Superpower};
