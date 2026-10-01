@@ -106,6 +106,9 @@ fn side_label(side: Option<Superpower>) -> String {
 /// differently without duplicating the match.
 fn action_and_detail(map: &WorldMap, cards: &CardCatalog, entry: &LogEntry) -> (&'static str, String) {
     match &entry.event {
+        // The first thing a turn does: pushed the instant `Game::play_card`
+        // succeeds, before the operation it funds has even opened.
+        Event::Selected { card } => ("select", selected_detail(cards, *card)),
         // The placement analogue of a resolved roll: its own "influence"
         // line, pushed just before the `Closed` entry that reports whether
         // it was confirmed or cancelled.
@@ -118,9 +121,9 @@ fn action_and_detail(map: &WorldMap, cards: &CardCatalog, entry: &LogEntry) -> (
             let side = entry.side.expect("a coup attempt is always stamped with the acting side");
             ("coup", coup_detail(map, side, result))
         }
-        Event::Closed { kind, committed, card, rolls, ops_spent, ops_total } => {
+        Event::Closed { kind, committed, rolls, ops_spent, ops_total } => {
             let action = if *committed { "confirm" } else { "cancel" };
-            (action, closed_detail(cards, *kind, *card, *rolls, *ops_spent, *ops_total))
+            (action, closed_detail(*kind, *rolls, *ops_spent, *ops_total))
         }
         Event::Pass => ("pass", String::new()),
         Event::Edit { country, side, before, after } => ("edit", edit_detail(map, *country, *side, *before, *after)),
@@ -136,22 +139,27 @@ fn ops_str(spent: u8, total: u8) -> String {
     }
 }
 
+/// The card named, with its ops value — e.g. `Fidel (2 ops)`.
+fn selected_detail(cards: &CardCatalog, card: CardId) -> String {
+    let card = cards.card(card);
+    format!("{} ({} ops)", card.name, card.ops)
+}
+
 /// `Event::Placed` is only ever pushed with at least one country (see its
 /// own doc), so there's no empty case to render here.
 fn placed_detail(map: &WorldMap, countries: &[(CountryId, u8)]) -> String {
     countries.iter().map(|&(id, n)| format!("{} +{n}", map.country(id).name)).collect::<Vec<_>>().join(", ")
 }
 
-fn closed_detail(cards: &CardCatalog, kind: OperationKind, card: CardId, rolls: u8, spent: u8, total: u8) -> String {
-    let name = &cards.card(card).name;
+fn closed_detail(kind: OperationKind, rolls: u8, spent: u8, total: u8) -> String {
     let ops = ops_str(spent, total);
     match kind {
         OperationKind::Realign => {
             let noun = if rolls == 1 { "roll" } else { "rolls" };
-            format!("{name}: realign, {rolls} {noun}, {ops}")
+            format!("realign, {rolls} {noun}, {ops}")
         }
-        OperationKind::Coup => format!("{name}: coup, {ops}"),
-        OperationKind::Influence => format!("{name}: influence, {ops}"),
+        OperationKind::Coup => format!("coup, {ops}"),
+        OperationKind::Influence => format!("influence, {ops}"),
     }
 }
 

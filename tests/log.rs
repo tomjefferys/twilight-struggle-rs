@@ -71,12 +71,12 @@ fn scripted_game() -> (WorldMap, CardCatalog, Game) {
 }
 
 /// A closed placement should read the same way a closed realignment or
-/// coup does: an "influence" line naming what was placed (the placement
-/// analogue of a resolved roll), followed by its own `confirm`/`cancel`
-/// line — never merged onto one line the way a bare `influence` summary
-/// used to be.
+/// coup does: a "select" line naming the card played, before an
+/// "influence" line naming what was placed (the placement analogue of a
+/// resolved roll), before its own `confirm`/`cancel` line — never merged
+/// onto one line the way a bare `influence` summary used to be.
 #[test]
-fn a_cancelled_placement_gets_an_influence_line_and_its_own_cancel_line() {
+fn a_cancelled_placement_gets_a_select_line_an_influence_line_and_its_own_cancel_line() {
     use twilight_struggle::render::log_entry_line;
 
     let (map, cards, mut game) = started_game();
@@ -87,16 +87,19 @@ fn a_cancelled_placement_gets_an_influence_line_and_its_own_cancel_line() {
     game.cancel().unwrap();
 
     let entries = game.log().entries();
-    assert_eq!(entries.len(), 2, "expected an influence line and a separate cancel line");
+    assert_eq!(entries.len(), 3, "expected a select line, an influence line, and a separate cancel line");
 
-    let influence_line = log_entry_line(&map, &cards, &entries[0]);
+    let select_line = log_entry_line(&map, &cards, &entries[0]);
+    assert!(select_line.contains("select"), "expected a select line, got {select_line:?}");
+    assert!(select_line.contains("Socialist Governments"), "expected the card named in the detail, got {select_line:?}");
+
+    let influence_line = log_entry_line(&map, &cards, &entries[1]);
     assert!(influence_line.contains("Poland +1"), "expected the placed points, got {influence_line:?}");
     assert!(!influence_line.contains("cancel"), "the influence line itself shouldn't say cancel: {influence_line:?}");
 
-    let cancel_line = log_entry_line(&map, &cards, &entries[1]);
+    let cancel_line = log_entry_line(&map, &cards, &entries[2]);
     assert!(cancel_line.contains("cancel"), "expected a cancel line, got {cancel_line:?}");
     assert!(cancel_line.contains("influence,"), "expected the kind named in the detail, got {cancel_line:?}");
-    assert!(cancel_line.contains("Socialist Governments"), "expected the card named in the detail, got {cancel_line:?}");
 }
 
 #[test]

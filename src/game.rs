@@ -326,6 +326,11 @@ impl Game {
     /// implies a card was already played), the card has no ops to spend
     /// ([`GameError::ScoringCard`]), or it isn't actually available to the
     /// active side ([`GameError::NotInHand`]/[`GameError::ChinaCardFaceDown`]).
+    /// On success, pushes an [`Event::Selected`] entry immediately —
+    /// playing a card is the first thing a turn does, so it's logged the
+    /// instant it happens rather than folded into a later entry, the same
+    /// way a realignment's or coup's roll is logged the instant *it*
+    /// resolves rather than waiting for the operation to close.
     ///
     /// The China Card ([`CHINA_CARD`]) is the one exception to "in your
     /// hand": it never lives in a [`Hands`] list (see that type's own
@@ -358,6 +363,7 @@ impl Game {
             Some(self.hands.remove(side, id).ok_or(GameError::NotInHand)?)
         };
         self.card = Some(PlayedCard { id, ops: card.ops, hand_index });
+        self.log.push(LogEntry { turn: self.status.turn, action_round: self.status.action_round, side: Some(side), event: Event::Selected { card: id } });
         Ok(())
     }
 
@@ -532,14 +538,13 @@ impl Game {
     /// Pushes the log entry (entries, for a placement) for a closing
     /// operation — called from `confirm`/`cancel` *before* [`Game::advance`],
     /// so they carry the turn/AR the operation actually happened in, not
-    /// the next one. Reads `self.card` for the `Closed` entry's own card —
-    /// still `Some` at this point, since [`Game::discard_played_card`]
-    /// hasn't run yet.
+    /// the next one. Doesn't need to read `self.card`: which card funded
+    /// this operation is already in the log, from the `Event::Selected`
+    /// entry [`Game::play_card`] pushed when the turn started.
     fn log_close(&mut self, op: &Operation, committed: bool) {
         let turn = self.status.turn;
         let action_round = self.status.action_round;
         let side = Some(op.side());
-        let card = self.card.expect("an open operation always has a card played first").id;
         let mut push = |event| self.log.push(LogEntry { turn, action_round, side, event });
 
         let (kind, rolls, ops_spent, ops_total) = match op {
@@ -559,7 +564,7 @@ impl Game {
             Operation::Realign(r) => (OperationKind::Realign, r.history().len() as u8, r.ops_spent(), r.ops_total()),
             Operation::Coup(c) => (OperationKind::Coup, c.result().is_some() as u8, c.ops_spent(), c.ops_total()),
         };
-        push(Event::Closed { kind, committed, card, rolls, ops_spent, ops_total });
+        push(Event::Closed { kind, committed, rolls, ops_spent, ops_total });
     }
 
     /// Discards whichever card was in play — called from `confirm`/`cancel`
@@ -868,27 +873,35 @@ mod tests {
     }
 
     #[test]
-    fn abandoning_leaves_no_trace_in_the_log() {
+    fn abandoning_leaves_no_trace_of_the_operation_in_the_log() {
+        // The card's own `Selected` entry is already logged by the time
+        // `begin` even runs (see `Game::play_card`'s own doc) and
+        // `abandon` doesn't touch it — only the operation itself (which
+        // never got far enough to log anything) leaves no trace.
         let map = map();
         let cards = cards();
         let mut game = Game::from_scenario(&scenario(&map, &cards));
-        play(&mut game, &cards, "Fidel");
+        let fidel = play(&mut game, &cards, "Fidel");
         game.begin(OperationKind::Coup).unwrap();
         game.abandon().unwrap();
-        assert!(game.log().is_empty(), "an abandoned operation should leave the log exactly as it was");
+        let entries = game.log().entries();
+        assert_eq!(entries.len(), 1, "an abandoned operation should add nothing beyond the card's own Selected entry");
+        assert!(matches!(entries[0].event, Event::Selected { card } if card == fidel));
     }
 
     #[test]
-    fn abandoning_a_placement_with_pending_points_leaves_no_trace_in_the_log_either() {
+    fn abandoning_a_placement_with_pending_points_leaves_no_trace_of_the_placement_in_the_log_either() {
         let map = map();
         let cards = cards();
         let poland = id(&map, "Poland");
         let mut game = Game::from_scenario(&scenario(&map, &cards));
-        play(&mut game, &cards, "Socialist Governments");
+        let sg = play(&mut game, &cards, "Socialist Governments");
         game.begin(OperationKind::Influence).unwrap();
         game.place(&map, poland).unwrap();
         game.abandon().unwrap();
-        assert!(game.log().is_empty(), "as far as the history's concerned, an abandoned placement never happened either");
+        let entries = game.log().entries();
+        assert_eq!(entries.len(), 1, "as far as the history's concerned, an abandoned placement never happened either");
+        assert!(matches!(entries[0].event, Event::Selected { card } if card == sg));
     }
 
     #[test]
@@ -979,12 +992,14 @@ mod tests {
         game.pass().unwrap(); // USSR -> US
 
         let events: Vec<_> = game.log().entries().iter().map(|e| &e.event).collect();
-        assert!(matches!(events[0], Event::Placed { .. }));
-        assert!(matches!(events[1], Event::Closed { kind: OperationKind::Influence, committed: true, .. }));
-        assert!(matches!(events[2], Event::Realign(_)));
-        assert!(matches!(events[3], Event::Closed { kind: OperationKind::Realign, committed: false, .. }));
-        assert!(matches!(events[4], Event::Pass));
-        assert_eq!(events.len(), 5);
+        assert!(matches!(events[0], Event::Selected { .. }));
+        assert!(matches!(events[1], Event::Placed { .. }));
+        assert!(matches!(events[2], Event::Closed { kind: OperationKind::Influence, committed: true, .. }));
+        assert!(matches!(events[3], Event::Selected { .. }));
+        assert!(matches!(events[4], Event::Realign(_)));
+        assert!(matches!(events[5], Event::Closed { kind: OperationKind::Realign, committed: false, .. }));
+        assert!(matches!(events[6], Event::Pass));
+        assert_eq!(events.len(), 7);
     }
 
     #[test]
@@ -1001,7 +1016,10 @@ mod tests {
         game.begin(OperationKind::Influence).unwrap();
         game.confirm().unwrap(); // USSR -> US, rolls the turn over on the *next* US confirm
 
-        let entry = &game.log().entries()[0];
+        // entries[0] is the card's own `Selected` entry, stamped the same
+        // way at the same moment; entries[1] is `Closed` itself.
+        let entry = &game.log().entries()[1];
+        assert!(matches!(entry.event, Event::Closed { .. }));
         assert_eq!(entry.turn, 1);
         assert_eq!(entry.action_round, 2);
         assert_eq!(entry.side, Some(Ussr));
@@ -1021,15 +1039,16 @@ mod tests {
         game.cancel().unwrap();
 
         let entries = game.log().entries();
-        assert_eq!(entries.len(), 2);
+        assert_eq!(entries.len(), 3);
         match &entries[0].event {
+            Event::Selected { card } => assert_eq!(*card, sg),
+            other => panic!("expected a Selected event naming the played card, got {other:?}"),
+        }
+        match &entries[1].event {
             Event::Placed { countries } => assert_eq!(countries, &vec![(poland, 1)]),
             other => panic!("expected a Placed event, got {other:?}"),
         }
-        match &entries[1].event {
-            Event::Closed { kind: OperationKind::Influence, committed: false, card, .. } => assert_eq!(*card, sg),
-            other => panic!("expected a Closed(Influence) event naming the played card, got {other:?}"),
-        }
+        assert!(matches!(entries[2].event, Event::Closed { kind: OperationKind::Influence, committed: false, .. }));
         assert_eq!(game.board().influence(poland, Ussr), 0);
     }
 
@@ -1043,9 +1062,10 @@ mod tests {
         game.cancel().unwrap();
 
         let entries = game.log().entries();
-        assert_eq!(entries.len(), 1);
+        assert_eq!(entries.len(), 2);
+        assert!(matches!(entries[0].event, Event::Selected { .. }));
         assert!(matches!(
-            entries[0].event,
+            entries[1].event,
             Event::Closed { kind: OperationKind::Influence, committed: false, .. }
         ));
     }
@@ -1061,11 +1081,12 @@ mod tests {
         game.begin(OperationKind::Realign).unwrap();
         game.roll(&map, poland, &mut dice).unwrap();
 
-        assert_eq!(game.log().len(), 1);
-        assert!(matches!(game.log().entries()[0].event, Event::Realign(_)));
+        assert_eq!(game.log().len(), 2);
+        assert!(matches!(game.log().entries()[0].event, Event::Selected { .. }));
+        assert!(matches!(game.log().entries()[1].event, Event::Realign(_)));
 
         game.confirm().unwrap();
-        assert_eq!(game.log().len(), 2);
+        assert_eq!(game.log().len(), 3);
     }
 
     #[test]

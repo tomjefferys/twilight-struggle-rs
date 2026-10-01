@@ -224,11 +224,20 @@ redealing yet).
 - **`log`** (`src/log.rs`) — `GameLog`, the game's append-only history, a
   `Vec<LogEntry>` built up entirely inside `Game` — the one place every
   mutation already funnels through — so the REPL and `interactive.rs` are
-  both covered without either having to remember to log anything. Every
-  operation closes with an `Event::Closed` entry (pushed from
-  `confirm`/`cancel`, stamped with the turn/AR/side *before* `advance`
-  runs) naming the operation kind, the card that funded it, and its final
-  ops balance — a realignment's or coup's dice already have their own entries by then
+  both covered without either having to remember to log anything. A turn's
+  log entries read in the order things actually happen: playing a card is
+  the first thing a turn does, so `Event::Selected` is pushed the instant
+  `Game::play_card` succeeds — before the operation it funds has even
+  opened — rather than being named only in a later entry as an
+  afterthought; it's pushed unconditionally, so a card selected and then
+  returned (`Game::return_card`) without ever funding anything still shows
+  up, same as a realignment's or coup's roll is logged the instant *it*
+  resolves regardless of what `cancel` does afterward. Every operation
+  closes with an `Event::Closed` entry (pushed from `confirm`/`cancel`,
+  stamped with the turn/AR/side *before* `advance` runs) naming the
+  operation kind and its final ops balance — not which card funded it,
+  since the preceding `Selected` entry already said so — mirroring how a
+  realignment's or coup's dice already have their own entries by then
   (`Event::Realign`/`Event::Coup`, pushed the instant `Game::roll`
   resolves, since a roll is irreversible the moment it happens), and an
   influence placement's points get the same treatment: `Event::Placed`,
@@ -236,8 +245,12 @@ redealing yet).
   analogue of a resolved roll (omitted entirely if nothing was placed, the
   same way zero rolls simply mean zero `Event::Realign` entries) — so
   `log`/`export` show `confirm`/`cancel` as its own line for every
-  operation kind, never merged onto the line reporting what happened.
-  `Event::Pass` covers `Game::pass`. `Game::board_mut` is the one mutator
+  operation kind, never merged onto the line reporting what happened. An
+  *abandoned* operation (`Game::abandon`) still leaves no trace of
+  itself — no `Placed`/`Realign`/`Coup`/`Closed` entry — but the card's
+  own `Selected` entry, already pushed when it was played, isn't and
+  can't be retracted; only the operation built on top of it is undone for
+  free. `Event::Pass` covers `Game::pass`. `Game::board_mut` is the one mutator
   `Game` can't observe by itself (`set`/`add`/`remove` in `main.rs` bypass
   the operation system entirely), so `Game::record_edit` and
   `Game::record_note` exist for a caller to report an edit or an
@@ -342,9 +355,10 @@ redealing yet).
     function `put_border_title` for the outer box's own
     `┌─ * Poland ─── Europe · stability 3 ─┐` top border.
   - `log.rs` — turns a `GameLog` into text: `log_entry_line` (now taking a
-    `CardCatalog` alongside the `WorldMap`, so a `Closed` entry's own card
-    can be named) is the canonical rendering of one entry, fixed-column
-    and tagged so a roll's numbers can't be mistaken for each other (`d6:`
+    `CardCatalog` alongside the `WorldMap`, so an `Event::Selected`
+    entry's own card can be named) is the canonical rendering of one
+    entry, fixed-column and tagged so a roll's numbers can't be mistaken
+    for each other (`d6:`
     only ever the actual die; `mod:`/`ops:`/`target:`/`sum:` label
     everything else by where it came from — a bare `4+4=8` doesn't say
     which 4 was rolled). `log_text` joins a header plus every

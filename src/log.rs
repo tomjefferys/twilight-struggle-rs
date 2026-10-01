@@ -6,14 +6,19 @@
 //! split kept here — turning a [`LogEntry`] into text is `render::log`'s
 //! job, not this module's.
 //!
-//! Every operation closes with an [`Event::Closed`] entry — `confirm`'s or
-//! `cancel`'s own line, naming the operation kind, the card that funded
-//! it, and its final ops balance — mirroring how a realignment or coup's
-//! dice already get their own entries the instant they resolve, before the
-//! operation itself closes: [`crate::ops::InfluencePlacement`]'s
-//! individual points are speculative until then, so they collapse into a
-//! single [`Event::Placed`] pushed alongside the `Closed` entry, the
-//! placement analogue of a resolved roll.
+//! A turn's log reads in the order things actually happen: playing a card
+//! is the first thing a turn does, so [`Event::Selected`] is pushed the
+//! instant [`crate::game::Game::play_card`] succeeds — before the
+//! operation it funds has even opened, let alone closed — rather than
+//! being folded into a later entry as an afterthought. Every operation
+//! closes with an [`Event::Closed`] entry — `confirm`'s or `cancel`'s own
+//! line, naming the operation kind and its final ops balance — mirroring
+//! how a realignment or coup's dice already get their own entries the
+//! instant they resolve, before the operation itself closes:
+//! [`crate::ops::InfluencePlacement`]'s individual points are speculative
+//! until then, so they collapse into a single [`Event::Placed`] pushed
+//! alongside the `Closed` entry, the placement analogue of a resolved
+//! roll.
 
 use crate::cards::CardId;
 use crate::country::{CountryId, Superpower};
@@ -23,6 +28,14 @@ use crate::ops::{CoupResult, RollResult};
 /// What happened, with no opinion on how it should be displayed.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Event {
+    /// A card taken from the active side's hand via
+    /// [`crate::game::Game::play_card`] — pushed immediately, on success,
+    /// since playing a card is real and done the instant it happens,
+    /// unlike a placement's still-speculative points. Logged even if the
+    /// card is later returned ([`crate::game::Game::return_card`]) without
+    /// ever funding an operation — the log says what was actually
+    /// selected, not just what it led to.
+    Selected { card: CardId },
     /// An influence placement's points, all at once — pushed alongside the
     /// [`Event::Closed`] entry that closes the operation, since individual
     /// points are only ever speculative until then. Omitted entirely if
@@ -41,17 +54,14 @@ pub enum Event {
     /// realignment's or coup's rolls are already in the log as their own
     /// entries by the time this is pushed; a placement's points arrive in
     /// the immediately preceding [`Event::Placed`] entry instead, since it
-    /// has no rolls of its own. `card` is the card whose ops funded the
-    /// operation — [`crate::game::Game::play_card`]'s own entry doesn't
-    /// exist (playing a card isn't logged on its own; only what it paid for
-    /// is), so this is the one place the card shows up. `rolls` is only
-    /// meaningful for `OperationKind::Realign` — a coup resolves at most
-    /// one attempt and a placement none, so both leave it at 0 and the
-    /// renderer ignores it for those kinds.
+    /// has no rolls of its own. Doesn't repeat which card funded it — the
+    /// [`Event::Selected`] entry already named that, earlier in the same
+    /// turn. `rolls` is only meaningful for `OperationKind::Realign` — a
+    /// coup resolves at most one attempt and a placement none, so both
+    /// leave it at 0 and the renderer ignores it for those kinds.
     Closed {
         kind: OperationKind,
         committed: bool,
-        card: CardId,
         rolls: u8,
         ops_spent: u8,
         ops_total: u8,
