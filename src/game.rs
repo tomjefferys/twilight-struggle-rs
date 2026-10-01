@@ -148,11 +148,17 @@ impl From<CoupError> for GameError {
 /// operation with. `hand_index` is where it came from, so
 /// [`Game::return_card`] can put it back in the same spot; `None` for the
 /// China Card, which never lives in a [`Hands`] list in the first place.
+/// `logged` tracks whether [`Game::log_card_selected`] has already pushed
+/// this card's [`Event::Selected`] entry — the log is a record of the
+/// actual game, not of application-level steps, so playing a card alone
+/// writes nothing; `logged` only flips to `true` once the selection is
+/// irrevocable (see that function's own doc).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct PlayedCard {
     id: CardId,
     ops: u8,
     hand_index: Option<usize>,
+    logged: bool,
 }
 
 /// The live game: status (including whose turn it is), the committed
@@ -326,11 +332,12 @@ impl Game {
     /// implies a card was already played), the card has no ops to spend
     /// ([`GameError::ScoringCard`]), or it isn't actually available to the
     /// active side ([`GameError::NotInHand`]/[`GameError::ChinaCardFaceDown`]).
-    /// On success, pushes an [`Event::Selected`] entry immediately —
-    /// playing a card is the first thing a turn does, so it's logged the
-    /// instant it happens rather than folded into a later entry, the same
-    /// way a realignment's or coup's roll is logged the instant *it*
-    /// resolves rather than waiting for the operation to close.
+    /// Writes nothing to the log by itself: the log is a record of the
+    /// actual game, not of application-level steps, and a card that's
+    /// merely selected can still be taken back with no trace, via
+    /// [`Game::return_card`] (or [`Game::abandon`] then `return_card`) —
+    /// see [`Game::log_card_selected`] for where its entry really comes
+    /// from.
     ///
     /// The China Card ([`CHINA_CARD`]) is the one exception to "in your
     /// hand": it never lives in a [`Hands`] list (see that type's own
@@ -362,8 +369,7 @@ impl Game {
         } else {
             Some(self.hands.remove(side, id).ok_or(GameError::NotInHand)?)
         };
-        self.card = Some(PlayedCard { id, ops: card.ops, hand_index });
-        self.log.push(LogEntry { turn: self.status.turn, action_round: self.status.action_round, side: Some(side), event: Event::Selected { card: id } });
+        self.card = Some(PlayedCard { id, ops: card.ops, hand_index, logged: false });
         Ok(())
     }
 
@@ -419,6 +425,12 @@ impl Game {
     /// immediately and irreversibly, the way a die roll can't be taken
     /// back. Doesn't advance the turn; only [`Game::confirm`],
     /// [`Game::cancel`], and [`Game::pass`] do that.
+    ///
+    /// The *first* roll of either kind is also what makes the card that
+    /// funded it irrevocable — [`Game::abandon`] refuses a realignment or
+    /// coup from here on — so this is where [`Game::log_card_selected`]
+    /// finally writes the card's own entry, immediately before the roll's
+    /// own.
     pub fn roll(&mut self, map: &WorldMap, id: CountryId, dice: &mut Dice) -> Result<RollOutcome, GameError> {
         let side = self.status.active;
         let outcome = match &mut self.op {
@@ -427,6 +439,7 @@ impl Game {
             Some(op) => return Err(GameError::WrongKind { open: op.verb() }),
             None => return Err(GameError::NoOperation),
         };
+        self.log_card_selected();
         let event = match outcome {
             RollOutcome::Realign(result) => Event::Realign(result),
             RollOutcome::Coup(result) => Event::Coup(result),
@@ -535,13 +548,47 @@ impl Game {
         Ok(())
     }
 
+    /// Pushes [`Event::Selected`] for the card currently in play, if it
+    /// hasn't been already (`PlayedCard::logged` — a no-op otherwise).
+    /// This, not [`Game::play_card`], is where the entry really comes
+    /// from: the log is a record of the actual game, not of
+    /// application-level steps, so a card that's merely *selected* writes
+    /// nothing — only once its selection can no longer be taken back does
+    /// it become something that really happened. That point differs by
+    /// what the card ends up funding: [`Game::roll`] calls this itself,
+    /// right before a realignment's or coup's *first* roll (the instant
+    /// [`Game::abandon`] stops being able to undo it); [`Game::log_close`]
+    /// calls it for everything else — a placement, confirmed or cancelled
+    /// with any (or no) points pending, or a realignment/coup that never
+    /// rolled at all, discarding the card either way. If neither ever
+    /// runs — the operation (or the bare card) is abandoned and
+    /// [`Game::return_card`] puts it back in the hand — this never runs
+    /// either, and the log shows no sign the card was ever picked up.
+    fn log_card_selected(&mut self) {
+        let Some(card) = &mut self.card else { return };
+        if card.logged {
+            return;
+        }
+        card.logged = true;
+        let id = card.id;
+        self.log.push(LogEntry {
+            turn: self.status.turn,
+            action_round: self.status.action_round,
+            side: Some(self.status.active),
+            event: Event::Selected { card: id },
+        });
+    }
+
     /// Pushes the log entry (entries, for a placement) for a closing
     /// operation — called from `confirm`/`cancel` *before* [`Game::advance`],
     /// so they carry the turn/AR the operation actually happened in, not
-    /// the next one. Doesn't need to read `self.card`: which card funded
-    /// this operation is already in the log, from the `Event::Selected`
-    /// entry [`Game::play_card`] pushed when the turn started.
+    /// the next one. Starts with [`Game::log_card_selected`], so a
+    /// placement (or an un-rolled realignment/coup) gets its card's own
+    /// entry here, right before everything else this closing operation
+    /// writes — a realignment or coup that *did* roll already logged it,
+    /// back at the first roll, so this is a no-op for those.
     fn log_close(&mut self, op: &Operation, committed: bool) {
+        self.log_card_selected();
         let turn = self.status.turn;
         let action_round = self.status.action_round;
         let side = Some(op.side());
@@ -873,35 +920,84 @@ mod tests {
     }
 
     #[test]
-    fn abandoning_leaves_no_trace_of_the_operation_in_the_log() {
-        // The card's own `Selected` entry is already logged by the time
-        // `begin` even runs (see `Game::play_card`'s own doc) and
-        // `abandon` doesn't touch it — only the operation itself (which
-        // never got far enough to log anything) leaves no trace.
+    fn abandoning_leaves_no_trace_in_the_log() {
+        // Not even the card's own `Selected` entry: a coup that never
+        // rolled, then abandoned, means the card's selection was never
+        // irrevocable (`Game::log_card_selected` only runs at the first
+        // roll or at `confirm`/`cancel`, neither of which happened here).
         let map = map();
         let cards = cards();
         let mut game = Game::from_scenario(&scenario(&map, &cards));
-        let fidel = play(&mut game, &cards, "Fidel");
+        play(&mut game, &cards, "Fidel");
         game.begin(OperationKind::Coup).unwrap();
         game.abandon().unwrap();
-        let entries = game.log().entries();
-        assert_eq!(entries.len(), 1, "an abandoned operation should add nothing beyond the card's own Selected entry");
-        assert!(matches!(entries[0].event, Event::Selected { card } if card == fidel));
+        assert!(game.log().is_empty(), "an abandoned operation should leave the log exactly as it was");
     }
 
     #[test]
-    fn abandoning_a_placement_with_pending_points_leaves_no_trace_of_the_placement_in_the_log_either() {
+    fn abandoning_a_placement_with_pending_points_leaves_no_trace_in_the_log_either() {
         let map = map();
         let cards = cards();
         let poland = id(&map, "Poland");
         let mut game = Game::from_scenario(&scenario(&map, &cards));
-        let sg = play(&mut game, &cards, "Socialist Governments");
+        play(&mut game, &cards, "Socialist Governments");
         game.begin(OperationKind::Influence).unwrap();
         game.place(&map, poland).unwrap();
         game.abandon().unwrap();
+        assert!(game.log().is_empty(), "as far as the history's concerned, an abandoned placement never happened either");
+    }
+
+    #[test]
+    fn returning_a_card_that_never_funded_anything_leaves_no_trace_in_the_log() {
+        let map = map();
+        let cards = cards();
+        let mut game = Game::from_scenario(&scenario(&map, &cards));
+        play(&mut game, &cards, "Fidel");
+        game.return_card().unwrap();
+        assert!(game.log().is_empty(), "a card selected and returned without ever being played shouldn't appear in the log");
+    }
+
+    #[test]
+    fn a_card_is_logged_the_instant_its_first_roll_makes_it_irrevocable() {
+        let map = map();
+        let cards = cards();
+        let poland = id(&map, "Poland");
+        let mut game = Game::from_scenario(&scenario_with(&map, &cards, "Poland", 1, 0));
+        let fidel = play(&mut game, &cards, "Fidel");
+        game.begin(OperationKind::Coup).unwrap();
+        assert!(game.log().is_empty(), "playing a card and opening an operation shouldn't log anything yet");
+
+        let mut dice = Dice::from_seed(0);
+        game.roll(&map, poland, &mut dice).unwrap();
+
         let entries = game.log().entries();
-        assert_eq!(entries.len(), 1, "as far as the history's concerned, an abandoned placement never happened either");
+        assert_eq!(entries.len(), 2, "the roll's first action should log the card, then the roll itself");
+        assert!(matches!(entries[0].event, Event::Selected { card } if card == fidel));
+        assert!(matches!(entries[1].event, Event::Coup(_)));
+
+        // A second roll on the same operation shouldn't log the card
+        // again — it's `CoupError` territory (a coup only ever attempts
+        // once), but a multi-roll realignment is the real-world case this
+        // guards: `log_card_selected` must be idempotent per card.
+    }
+
+    #[test]
+    fn an_un_rolled_realignment_that_closes_still_logs_the_card() {
+        // No roll happened, so `Game::roll` never got the chance to log
+        // the card — `log_close` is the fallback that catches a card
+        // whose operation still closed (confirm or cancel) without ever
+        // becoming irrevocable the other way.
+        let map = map();
+        let cards = cards();
+        let mut game = Game::from_scenario(&scenario(&map, &cards));
+        let sg = play(&mut game, &cards, "Socialist Governments");
+        game.begin(OperationKind::Realign).unwrap();
+        game.cancel().unwrap();
+
+        let entries = game.log().entries();
+        assert_eq!(entries.len(), 2);
         assert!(matches!(entries[0].event, Event::Selected { card } if card == sg));
+        assert!(matches!(entries[1].event, Event::Closed { kind: OperationKind::Realign, committed: false, .. }));
     }
 
     #[test]

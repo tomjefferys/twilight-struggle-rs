@@ -6,19 +6,23 @@
 //! split kept here — turning a [`LogEntry`] into text is `render::log`'s
 //! job, not this module's.
 //!
-//! A turn's log reads in the order things actually happen: playing a card
-//! is the first thing a turn does, so [`Event::Selected`] is pushed the
-//! instant [`crate::game::Game::play_card`] succeeds — before the
-//! operation it funds has even opened, let alone closed — rather than
-//! being folded into a later entry as an afterthought. Every operation
-//! closes with an [`Event::Closed`] entry — `confirm`'s or `cancel`'s own
-//! line, naming the operation kind and its final ops balance — mirroring
-//! how a realignment or coup's dice already get their own entries the
-//! instant they resolve, before the operation itself closes:
-//! [`crate::ops::InfluencePlacement`]'s individual points are speculative
-//! until then, so they collapse into a single [`Event::Placed`] pushed
-//! alongside the `Closed` entry, the placement analogue of a resolved
-//! roll.
+//! This is a record of the actual game, not of every step taken inside the
+//! application — merely *selecting* a card
+//! ([`crate::game::Game::play_card`]) writes nothing, since it can still
+//! be taken back with no trace ([`crate::game::Game::return_card`]).
+//! [`Event::Selected`] only gets pushed, by
+//! [`crate::game::Game::log_card_selected`], once that selection is
+//! actually irrevocable — which still lands it *before* the operation it
+//! funds has necessarily closed, reading in the order things actually
+//! happen rather than as an afterthought folded into a later entry. Every
+//! operation closes with an [`Event::Closed`] entry — `confirm`'s or
+//! `cancel`'s own line, naming the operation kind and its final ops
+//! balance — mirroring how a realignment or coup's dice already get their
+//! own entries the instant they resolve, before the operation itself
+//! closes: [`crate::ops::InfluencePlacement`]'s individual points are
+//! speculative until then, so they collapse into a single
+//! [`Event::Placed`] pushed alongside the `Closed` entry, the placement
+//! analogue of a resolved roll.
 
 use crate::cards::CardId;
 use crate::country::{CountryId, Superpower};
@@ -29,12 +33,12 @@ use crate::ops::{CoupResult, RollResult};
 #[derive(Debug, Clone, PartialEq)]
 pub enum Event {
     /// A card taken from the active side's hand via
-    /// [`crate::game::Game::play_card`] — pushed immediately, on success,
-    /// since playing a card is real and done the instant it happens,
-    /// unlike a placement's still-speculative points. Logged even if the
-    /// card is later returned ([`crate::game::Game::return_card`]) without
-    /// ever funding an operation — the log says what was actually
-    /// selected, not just what it led to.
+    /// [`crate::game::Game::play_card`] — but only once its selection
+    /// becomes irrevocable (see [`crate::game::Game::log_card_selected`]).
+    /// A card that's played and then returned
+    /// ([`crate::game::Game::return_card`]) without ever reaching that
+    /// point gets no entry at all: as far as the actual game is
+    /// concerned, it was never really played.
     Selected { card: CardId },
     /// An influence placement's points, all at once — pushed alongside the
     /// [`Event::Closed`] entry that closes the operation, since individual

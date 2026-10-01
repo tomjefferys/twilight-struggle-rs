@@ -224,19 +224,29 @@ redealing yet).
 - **`log`** (`src/log.rs`) — `GameLog`, the game's append-only history, a
   `Vec<LogEntry>` built up entirely inside `Game` — the one place every
   mutation already funnels through — so the REPL and `interactive.rs` are
-  both covered without either having to remember to log anything. A turn's
-  log entries read in the order things actually happen: playing a card is
-  the first thing a turn does, so `Event::Selected` is pushed the instant
-  `Game::play_card` succeeds — before the operation it funds has even
-  opened — rather than being named only in a later entry as an
-  afterthought; it's pushed unconditionally, so a card selected and then
-  returned (`Game::return_card`) without ever funding anything still shows
-  up, same as a realignment's or coup's roll is logged the instant *it*
-  resolves regardless of what `cancel` does afterward. Every operation
-  closes with an `Event::Closed` entry (pushed from `confirm`/`cancel`,
-  stamped with the turn/AR/side *before* `advance` runs) naming the
-  operation kind and its final ops balance — not which card funded it,
-  since the preceding `Selected` entry already said so — mirroring how a
+  both covered without either having to remember to log anything. This is
+  a record of the actual game, not of every step taken inside the
+  application: `Game::play_card` itself writes nothing, since a card
+  that's merely *selected* can still be taken back with no trace
+  (`Game::return_card`, with or without an abandoned operation in
+  between). `Game::log_card_selected` is what actually pushes
+  `Event::Selected`, and only once that selection is irrevocable — which
+  still lands it, in the finished log, *before* the operation it funds has
+  necessarily closed, reading in the order things actually happened
+  rather than as a later afterthought. Where "irrevocable" falls differs
+  by what the card ends up funding: `Game::roll` calls
+  `log_card_selected` itself, right before a realignment's or coup's
+  *first* roll — the exact instant `Game::abandon` stops being able to
+  undo it (idempotent past that: a second roll in the same realignment
+  doesn't log the card again). Everything else — a placement confirmed or
+  cancelled with any (or no) points pending, or a realignment/coup that
+  never rolled at all — only becomes real at `confirm`/`cancel`, so
+  `log_close` calls `log_card_selected` itself, as the first thing it
+  does (a no-op if a roll already did). Every operation closes with an
+  `Event::Closed` entry (pushed from `confirm`/`cancel`, stamped with the
+  turn/AR/side *before* `advance` runs) naming the operation kind and its
+  final ops balance — not which card funded it, since the `Selected`
+  entry already said so, earlier in the same log — mirroring how a
   realignment's or coup's dice already have their own entries by then
   (`Event::Realign`/`Event::Coup`, pushed the instant `Game::roll`
   resolves, since a roll is irreversible the moment it happens), and an
@@ -247,10 +257,9 @@ redealing yet).
   `log`/`export` show `confirm`/`cancel` as its own line for every
   operation kind, never merged onto the line reporting what happened. An
   *abandoned* operation (`Game::abandon`) still leaves no trace of
-  itself — no `Placed`/`Realign`/`Coup`/`Closed` entry — but the card's
-  own `Selected` entry, already pushed when it was played, isn't and
-  can't be retracted; only the operation built on top of it is undone for
-  free. `Event::Pass` covers `Game::pass`. `Game::board_mut` is the one mutator
+  itself — no `Placed`/`Realign`/`Coup`/`Closed`/`Selected` entry, since
+  abandon is only ever possible before `log_card_selected` has run for
+  either of its two triggers. `Event::Pass` covers `Game::pass`. `Game::board_mut` is the one mutator
   `Game` can't observe by itself (`set`/`add`/`remove` in `main.rs` bypass
   the operation system entirely), so `Game::record_edit` and
   `Game::record_note` exist for a caller to report an edit or an
