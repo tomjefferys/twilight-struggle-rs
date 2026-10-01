@@ -995,7 +995,7 @@ fn hand_strip_matches_snapshot() {
     let cards = cards();
     let scenario = Scenario::demo(&map, &cards).unwrap();
     let hand = scenario.hands.hand(Superpower::Ussr);
-    let canvas = render_hand(&cards, hand, Some(scenario.status.china_card_face_up), Superpower::Ussr, None);
+    let canvas = render_hand(&cards, hand, Some(scenario.status.china_card_face_up), Superpower::Ussr, None, None);
     let expected = include_str!("snapshots/hand_ussr.txt");
     assert_eq!(canvas.render(ColorMode::Never), expected.trim_end_matches('\n'));
 }

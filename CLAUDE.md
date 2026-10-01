@@ -217,6 +217,10 @@ redealing yet).
   reflecting what `play_card`/`return_card` have done to it — there's
   still no draw or redeal) and `Game::card_in_play()`, which names
   whichever card `play_card` has taken but not yet discarded.
+  `Game::card_in_play_slot()` pairs that id with where it came from
+  (`PlayedCard::hand_index` — `None` for the China Card) purely so
+  `render::render_hand` can splice it back into its old spot rather than
+  just letting it disappear from the strip; see that function's own doc.
 - **`log`** (`src/log.rs`) — `GameLog`, the game's append-only history, a
   `Vec<LogEntry>` built up entirely inside `Game` — the one place every
   mutation already funnels through — so the REPL and `interactive.rs` are
@@ -379,6 +383,21 @@ redealing yet).
     read from the hand list itself, since `Hands` deliberately never
     carries it (see `cards.rs`'s own doc). More than 10 cards paginates
     around whichever one is selected rather than shrinking the slots.
+    `render_hand`'s `in_play: Option<(CardId, Option<usize>)>` — exactly
+    `Game::card_in_play_slot()`'s own shape — is how a played card stays
+    on screen instead of vanishing the instant `Game::play_card` removes
+    it from the hand: the id is spliced back into its original index (the
+    `Option<usize>`; `None` for the China Card, which was never spliced
+    out of the hand list to begin with — it's drawn via `china`
+    regardless of whether it's the one in play) and drawn with
+    `SlotRole::Played` — a bold, bright `Color::Selected` thick box and an
+    `IN PLAY` line in place of its usual side/phase one — while every
+    *other* slot drawn that call is `SlotRole::Dimmed` instead of
+    `SlotRole::Selected`, so the one card that matters isn't competing
+    with a leftover browsing cursor. `in_play` stays non-`None` for as
+    long as the card does — through a whole operation, not just the
+    keypress that played it — since `Game::confirm`/`cancel` are the only
+    things that ever clear it.
   - `card.rs` — `render_card`, one card's full detail: a titled box like
     `country.rs`'s own outer box (the title on the top border via
     `put_border_title`, not a divider — its left half is the card's own

@@ -432,7 +432,7 @@ fn draw(
     let hand = game.hand(side);
     let item_count = hand.len() + china.is_some() as usize;
     let selected_idx = (item_count > 0).then(|| hand_selected[side_index(side)].min(item_count - 1));
-    let hand_canvas = render_hand(cards, hand, china, side, selected_idx);
+    let hand_canvas = render_hand(cards, hand, china, side, selected_idx, game.card_in_play_slot());
 
     if zoomed && let Some(id) = selected_hand_card(game, hand_selected) {
         let china_face_up = (id == CHINA_CARD).then_some(status.china_card_face_up);

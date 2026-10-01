@@ -513,7 +513,10 @@ fn run_hand_command(session: &Session, words: &[&str]) {
     };
     let status = session.game.status();
     let china = (status.china_card == side).then_some(status.china_card_face_up);
-    let canvas = render_hand(&session.cards, session.game.hand(side), china, side, None);
+    // Only the active side can have a card in play, so a named inactive
+    // side's hand never shows one.
+    let in_play = (side == session.game.active()).then(|| session.game.card_in_play_slot()).flatten();
+    let canvas = render_hand(&session.cards, session.game.hand(side), china, side, None, in_play);
     println!("{}", canvas.render(session.color));
 }
 

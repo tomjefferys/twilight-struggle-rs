@@ -291,6 +291,18 @@ impl Game {
         self.card.map(|c| c.id)
     }
 
+    /// [`Game::card_in_play`] plus the index it should be spliced back
+    /// into the hand at for display — its original position before
+    /// [`Game::play_card`] removed it (`PlayedCard::hand_index`), or
+    /// `None` for the China Card, which was never in the hand list to
+    /// begin with. `render::render_hand`'s caller uses this to keep the
+    /// played card visible in its usual spot, prominently marked, rather
+    /// than just naming it in the status bar — see that function's own
+    /// doc.
+    pub fn card_in_play_slot(&self) -> Option<(CardId, Option<usize>)> {
+        self.card.map(|c| (c.id, c.hand_index))
+    }
+
     pub fn operation(&self) -> Option<&Operation> {
         self.op.as_ref()
     }
