@@ -4,21 +4,21 @@
 //! comes from `twilight_struggle::render`, which stays a pure `Canvas`
 //! producer per its own module doc.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::io::{self, Write};
 
 use crossterm::cursor::{Hide, MoveTo, Show};
-use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers};
+use crossterm::event::{self, Event as TermEvent, KeyCode, KeyEventKind, KeyModifiers};
 use crossterm::terminal::{self, Clear, ClearType, EnterAlternateScreen, LeaveAlternateScreen};
 use crossterm::{execute, queue};
 
 use twilight_struggle::render::{
-    coup_result_line, log_entry_line, operation_abandoned_line, operation_closed_line, operation_header, render_card, render_country,
-    render_hand, render_region, render_status_bar, render_world_map, roll_result_line, Canvas, HAND_ROWS,
+    log_entry_line, operation_abandoned_line, operation_closed_line, operation_header, render_card, render_country, render_hand,
+    render_region, render_roll_result, render_status_bar, render_world_map, Canvas, RollReport, HAND_ROWS,
 };
 use twilight_struggle::{
-    ai, CardCatalog, CardId, ColorMode, CountryId, Dice, Direction, Game, GameError, MapLayout, OperationKind, RandomAi, Region,
-    RollOutcome, Superpower, ViewMode, WorldMap, CHINA_CARD,
+    ai, Board, CardCatalog, CardId, ColorMode, CountryId, Dice, Direction, Event, Game, GameError, LogEntry, MapLayout, OperationKind,
+    RandomAi, Region, RollOutcome, Superpower, ViewMode, WorldMap, CHINA_CARD,
 };
 
 /// Which screen is currently showing.
@@ -154,17 +154,25 @@ pub fn run(
     // region and coming back to it later re-selects the same one instead
     // of always resetting to its top-left-most country.
     let mut last_selected: HashMap<Region, CountryId> = HashMap::new();
-    // The most recent refusal or roll outcome, shown on one extra row
-    // below the canvas until the next key changes something. Cleared at
-    // the top of every keypress *unless* `sticky` says to keep it — set
-    // only by a roll's own outcome, the one message worth reading through
-    // the next keypress since it's not recoverable from the screen the
-    // way a refusal or a confirm/cancel/pass report is (the status bar
-    // already reflects those). Kept here rather than threaded into
-    // `render/`, which never touches the terminal or takes free-text
-    // messages.
+    // The most recent refusal, shown on one extra row below the canvas
+    // until the next key changes something. Cleared at the top of every
+    // keypress *unless* `sticky` says to keep it — set only by the AI's
+    // own end-of-turn summary, the one message worth reading through the
+    // next keypress since it's not recoverable from the screen the way a
+    // refusal or a confirm/cancel/pass report is (the status bar already
+    // reflects those). Kept here rather than threaded into `render/`,
+    // which never touches the terminal or takes free-text messages.
     let mut message: Option<String> = None;
     let mut sticky = false;
+    // A resolved realignment roll or coup attempt is shown as its own
+    // modal (`render::render_roll_result`) rather than a message-row line
+    // — it's the one event in the whole session that's both irreversible
+    // and easy to miss in a dense line of dice and modifiers. Queued
+    // rather than a single `Option`, since an AI's turn can roll several
+    // times (a multi-op realignment) before handing control back; each is
+    // shown in turn, dismissed with Enter, the human and AI cases sharing
+    // the same queue.
+    let mut roll_modal: VecDeque<RollReport> = VecDeque::new();
     // Each side's selected index into its own hand (China Card appended
     // last, when it holds it) — kept per side, indexed via `side_index`,
     // so passing the turn back and forth doesn't lose either side's place.
@@ -176,13 +184,31 @@ pub fn run(
     // the newly active side's own hand takes its place.
     let mut zoomed = false;
 
-    maybe_run_ai_turn(ai_side, ai, game, map, cards, dice, &mut message, &mut sticky, &mut zoomed);
-    draw(&screen, map, layout, cards, game, message.as_deref(), &hand_selected, zoomed, color)?;
+    maybe_run_ai_turn(ai_side, ai, game, map, cards, dice, &mut message, &mut sticky, &mut zoomed, &mut roll_modal);
+    draw(&screen, map, layout, cards, game, message.as_deref(), &hand_selected, zoomed, &roll_modal, color)?;
     loop {
         match event::read()? {
-            Event::Key(key) if key.kind == KeyEventKind::Press => {
+            TermEvent::Key(key) if key.kind == KeyEventKind::Press => {
                 if key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL) {
                     return Ok(());
+                }
+                if !roll_modal.is_empty() {
+                    // The roll-result modal is strictly in front of
+                    // everything else — a zoomed card can't even be open
+                    // at the same time, since both the human's own `r`
+                    // and the AI's turn close it the instant a roll
+                    // happens. Only Enter (and Esc, as a harmless
+                    // synonym) dismiss the front of the queue; nothing
+                    // else reaches the map or the hand while it's up.
+                    match key.code {
+                        KeyCode::Enter | KeyCode::Esc => {
+                            roll_modal.pop_front();
+                        }
+                        KeyCode::Char('q') => return Ok(()),
+                        _ => {}
+                    }
+                    draw(&screen, map, layout, cards, game, message.as_deref(), &hand_selected, zoomed, &roll_modal, color)?;
+                    continue;
                 }
                 if !std::mem::take(&mut sticky) {
                     message = None;
@@ -203,7 +229,7 @@ pub fn run(
                         }
                         _ => {}
                     }
-                    draw(&screen, map, layout, cards, game, message.as_deref(), &hand_selected, zoomed, color)?;
+                    draw(&screen, map, layout, cards, game, message.as_deref(), &hand_selected, zoomed, &roll_modal, color)?;
                     continue;
                 }
                 match key.code {
@@ -318,15 +344,9 @@ pub fn run(
                             }
                             KeyCode::Char('r') => {
                                 let side = game.active();
+                                let before = (game.board().influence(*selected, Superpower::Us), game.board().influence(*selected, Superpower::Ussr));
                                 match game.roll(map, *selected, dice) {
-                                    Ok(RollOutcome::Realign(result)) => {
-                                        message = Some(roll_result_line(map, side, &result));
-                                        sticky = true;
-                                    }
-                                    Ok(RollOutcome::Coup(result)) => {
-                                        message = Some(coup_result_line(map, side, &result));
-                                        sticky = true;
-                                    }
+                                    Ok(outcome) => roll_modal.push_back(RollReport { side, outcome, before }),
                                     Err(GameError::Realign(e)) => message = Some(format!("{}: {e}", map.country(*selected).name)),
                                     Err(GameError::Coup(e)) => message = Some(format!("{}: {e}", map.country(*selected).name)),
                                     Err(_) => {}
@@ -340,10 +360,10 @@ pub fn run(
                         },
                     },
                 }
-                maybe_run_ai_turn(ai_side, ai, game, map, cards, dice, &mut message, &mut sticky, &mut zoomed);
-                draw(&screen, map, layout, cards, game, message.as_deref(), &hand_selected, zoomed, color)?;
+                maybe_run_ai_turn(ai_side, ai, game, map, cards, dice, &mut message, &mut sticky, &mut zoomed, &mut roll_modal);
+                draw(&screen, map, layout, cards, game, message.as_deref(), &hand_selected, zoomed, &roll_modal, color)?;
             }
-            Event::Resize(_, _) => draw(&screen, map, layout, cards, game, message.as_deref(), &hand_selected, zoomed, color)?,
+            TermEvent::Resize(_, _) => draw(&screen, map, layout, cards, game, message.as_deref(), &hand_selected, zoomed, &roll_modal, color)?,
             _ => {}
         }
     }
@@ -352,10 +372,13 @@ pub fn run(
 /// If `ai_side` names whoever's active right now, plays that whole turn
 /// via [`ai::play_turn`] — a no-op otherwise (no AI side set, or it's the
 /// human's turn). Turns the turn's own log entries into the next message
-/// (joined by `\n`, marked `sticky` since — like a roll's own outcome —
-/// they aren't otherwise recoverable from the screen the way a refusal or
-/// a confirm/cancel/pass report already is) and closes any open zoom
-/// overlay, the same way `c`/`X`/`p` do for a human-ended turn.
+/// (joined by `\n`, marked `sticky` since — like the roll-result modal —
+/// it isn't otherwise recoverable from the screen the way a refusal or a
+/// confirm/cancel/pass report already is), queues a [`RollReport`] modal
+/// for every realignment roll or coup attempt the turn made
+/// ([`reconstruct_roll_reports`]) — the human and the AI share the same
+/// modal, dismissed the same way — and closes any open zoom overlay, the
+/// same way `c`/`X`/`p` do for a human-ended turn.
 #[allow(clippy::too_many_arguments)]
 fn maybe_run_ai_turn(
     ai_side: Option<Superpower>,
@@ -367,6 +390,7 @@ fn maybe_run_ai_turn(
     message: &mut Option<String>,
     sticky: &mut bool,
     zoomed: &mut bool,
+    roll_modal: &mut VecDeque<RollReport>,
 ) {
     if ai_side != Some(game.active()) {
         return;
@@ -374,13 +398,71 @@ fn maybe_run_ai_turn(
     let side = game.active();
     let before = game.log().len();
     let outcome = ai::play_turn(ai, game, map, cards, dice);
-    let mut lines: Vec<String> = game.log().entries()[before..].iter().map(|entry| log_entry_line(map, cards, entry)).collect();
+    let new_entries = &game.log().entries()[before..];
+    let mut lines: Vec<String> = new_entries.iter().map(|entry| log_entry_line(map, cards, entry)).collect();
     if let Err(e) = outcome {
         lines.push(format!("AI error: {e}"));
+    }
+    for report in reconstruct_roll_reports(game.board(), new_entries) {
+        roll_modal.push_back(report);
     }
     *message = Some(format!("{side} (AI) plays: {}", lines.join(" · ")));
     *sticky = true;
     *zoomed = false;
+}
+
+/// Rebuilds a [`RollReport`] for every [`Event::Realign`]/[`Event::Coup`]
+/// entry in `entries` (one AI turn's worth of newly-pushed log lines),
+/// each needing the target country's influence the instant *before* that
+/// roll — which the log itself doesn't carry, only what changed. Walked
+/// in reverse from `board` (the real board, already holding every one of
+/// these rolls' effects): undoing the last roll on a given country
+/// recovers the influence state right after the roll before it touched
+/// that same country (or, if none did, the state the whole turn started
+/// from) — exactly the "before" the earlier roll needs, and exactly the
+/// "after" it leaves behind for an even earlier roll on the same country
+/// to build from in turn. A realignment/coup turn's rolls are the only
+/// board-mutating events in its own log slice (a placement can't share a
+/// turn with either), so no other entry needs accounting for here.
+fn reconstruct_roll_reports(board: &Board, entries: &[LogEntry]) -> Vec<RollReport> {
+    let mut state: HashMap<CountryId, (u8, u8)> = HashMap::new();
+    let mut reports = VecDeque::new();
+    for entry in entries.iter().rev() {
+        let (side, target, outcome) = match &entry.event {
+            Event::Realign(result) => (entry.side.expect("a realignment roll always belongs to a side"), result.target, RollOutcome::Realign(*result)),
+            Event::Coup(result) => (entry.side.expect("a coup attempt always belongs to a side"), result.target, RollOutcome::Coup(*result)),
+            _ => continue,
+        };
+        let after = *state
+            .entry(target)
+            .or_insert_with(|| (board.influence(target, Superpower::Us), board.influence(target, Superpower::Ussr)));
+        let before = match &outcome {
+            RollOutcome::Realign(result) => match result.loser {
+                Some(Superpower::Us) => (after.0 + result.removed, after.1),
+                Some(Superpower::Ussr) => (after.0, after.1 + result.removed),
+                None => after,
+            },
+            RollOutcome::Coup(result) => {
+                // `removed` came out of the opponent's pile, `added` went
+                // into the acting side's own — different fields, so both
+                // undo independently onto `after` with no risk of
+                // double-counting the same number twice.
+                let mut before = after;
+                match side.opponent() {
+                    Superpower::Us => before.0 += result.removed,
+                    Superpower::Ussr => before.1 += result.removed,
+                }
+                match side {
+                    Superpower::Us => before.0 = before.0.saturating_sub(result.added),
+                    Superpower::Ussr => before.1 = before.1.saturating_sub(result.added),
+                }
+                before
+            }
+        };
+        state.insert(target, before);
+        reports.push_front(RollReport { side, outcome, before });
+    }
+    reports.into_iter().collect()
 }
 
 /// `i`/`a`/`o`: opens `kind` for the active side. `None` on success — the
@@ -497,13 +579,29 @@ fn step_or_jump(map: &WorldMap, layout: &MapLayout, last_selected: &mut HashMap<
     *selected = next;
 }
 
-/// Draws the status bar, the current screen (with a zoomed card's detail
-/// blitted over it, if `zoomed`), the message row, and — pinned to the
-/// bottom, always [`HAND_ROWS`] tall — the active side's hand strip.
-/// Everything but the screen's own view is kept in full; the view is what
-/// gets clipped from the bottom when the terminal is too short for all of
-/// it, the same rule the status bar already followed before the hand
-/// strip existed.
+/// Blits `overlay` centred on `canvas`, widening `canvas` first (its
+/// existing content pinned at the top-left) if `overlay` is bigger in
+/// either dimension — shared by the zoomed-card overlay and the
+/// roll-result modal below, neither of which should ever be clipped by a
+/// view too small for it.
+fn blit_centred(canvas: &mut Canvas, overlay: &Canvas) {
+    if overlay.width() > canvas.width() || overlay.height() > canvas.height() {
+        let mut widened = Canvas::new(canvas.width().max(overlay.width()), canvas.height().max(overlay.height()));
+        widened.blit(canvas, 0, 0);
+        *canvas = widened;
+    }
+    let row = canvas.height().saturating_sub(overlay.height()) / 2;
+    let col = canvas.width().saturating_sub(overlay.width()) / 2;
+    canvas.blit(overlay, row, col);
+}
+
+/// Draws the status bar, the current screen (with a zoomed card's detail,
+/// and/or the roll-result modal, blitted over it), the message row, and —
+/// pinned to the bottom, always [`HAND_ROWS`] tall — the active side's
+/// hand strip. Everything but the screen's own view is kept in full; the
+/// view is what gets clipped from the bottom when the terminal is too
+/// short for all of it, the same rule the status bar already followed
+/// before the hand strip existed.
 #[allow(clippy::too_many_arguments)]
 fn draw(
     screen: &Screen,
@@ -514,6 +612,7 @@ fn draw(
     message: Option<&str>,
     hand_selected: &[usize; 2],
     zoomed: bool,
+    roll_modal: &VecDeque<RollReport>,
     color: ColorMode,
 ) -> io::Result<()> {
     let board = game.board();
@@ -535,17 +634,16 @@ fn draw(
     if zoomed && let Some(id) = selected_hand_card(game, hand_selected) {
         let china_face_up = (id == CHINA_CARD).then_some(status.china_card_face_up);
         let card_canvas = render_card(cards, id, china_face_up);
-        // The overlay should never be clipped by a view too small for
-        // it — widen the canvas first if it needs to be, rather than
-        // letting `blit` silently cut the card off.
-        if card_canvas.width() > canvas.width() || card_canvas.height() > canvas.height() {
-            let mut widened = Canvas::new(canvas.width().max(card_canvas.width()), canvas.height().max(card_canvas.height()));
-            widened.blit(&canvas, 0, 0);
-            canvas = widened;
-        }
-        let row = canvas.height().saturating_sub(card_canvas.height()) / 2;
-        let col = canvas.width().saturating_sub(card_canvas.width()) / 2;
-        canvas.blit(&card_canvas, row, col);
+        blit_centred(&mut canvas, &card_canvas);
+    }
+
+    // The roll-result modal sits on top of everything, including a zoomed
+    // card — the two can't actually be open together (see `run`'s own
+    // doc), but drawing it last keeps that true even if that ever changes.
+    if let Some(report) = roll_modal.front() {
+        let queue_pos = (roll_modal.len() > 1).then_some((1, roll_modal.len()));
+        let modal_canvas = render_roll_result(map, report, queue_pos);
+        blit_centred(&mut canvas, &modal_canvas);
     }
 
     let card_in_play = game.card_in_play().map(|id| cards.card(id));
