@@ -5,22 +5,38 @@
 //! touches a terminal.
 
 use crate::board::Board;
+use crate::cards::Card;
 use crate::country::Superpower;
 use crate::layout::MapLayout;
 use crate::ops::Operation;
 use crate::status::GameStatus;
 
-use super::{operation_balance_line, vp_line, BEGIN_HINT, Canvas, Color, Style};
+use super::{operation_balance_line, vp_line, Canvas, Color, Style};
+
+/// Row 1's wording when no card is in play yet — the status bar's own
+/// three-state hint (see [`render_status_bar`]'s own doc), distinct from
+/// `BEGIN_HINT`'s card-agnostic one-liner shown by the region/world-map/
+/// country views, which never know whether a card's already been played.
+const PLAY_HINT: &str = "no card in play — [ ] select · space play · p pass";
 
 /// The bar's height, always — with or without an operation open — so the
 /// view drawn below it never shifts up or down as one opens or closes.
 pub const STATUS_BAR_ROWS: usize = 3;
 
-/// Row 0: turn/AR/active side/DEFCON/VP. Row 1: the open operation's
-/// balance (the exact text `operation_balance_line` gives the region and
-/// world-map footers, so the three can't disagree), or a prompt naming the
-/// keys that start one. Row 2: a plain rule, separating the bar from
-/// whichever screen it sits above.
+/// Row 0: turn/AR/active side/DEFCON/VP. Row 1 is one of three states,
+/// depending on `card` (the card currently in play, if any — see
+/// [`crate::game::Game::card_in_play`]) and `op`:
+/// - No card in play: [`PLAY_HINT`], naming the keys to select and play
+///   one.
+/// - A card in play, no operation open yet: the card's own name and ops,
+///   with the keys to spend it or return it.
+/// - An operation open: the exact text `operation_balance_line` gives the
+///   region and world-map footers (so the three can't disagree), prefixed
+///   with the card's name — the only one of the three states that also
+///   needed `board`.
+///
+/// Row 2: a plain rule, separating the bar from whichever screen it sits
+/// above.
 ///
 /// `board` should be the caller's *committed* board, not a speculative
 /// one — `operation_balance_line` only reads it through a realignment's or
@@ -30,7 +46,7 @@ pub const STATUS_BAR_ROWS: usize = 3;
 /// `width` is a minimum, not a fixed size: the canvas grows to fit
 /// whichever row is longer, the same rule `render_world`/`render_region`
 /// already follow for their own content, so nothing here is ever clipped.
-pub fn render_status_bar(layout: &MapLayout, board: &Board, status: &GameStatus, op: Option<&Operation>, width: usize) -> Canvas {
+pub fn render_status_bar(layout: &MapLayout, board: &Board, status: &GameStatus, card: Option<&Card>, op: Option<&Operation>, width: usize) -> Canvas {
     let turn_line = format!(
         "TURN {} · AR {}/{} · {} to act · DEFCON {} · VP {}",
         status.turn,
@@ -40,9 +56,16 @@ pub fn render_status_bar(layout: &MapLayout, board: &Board, status: &GameStatus,
         status.defcon,
         vp_line(status.vp),
     );
-    let (op_line, op_style) = match op {
-        Some(operation) => (operation_balance_line(layout, board, operation), Style::color(Color::Selected)),
-        None => (format!("no operation open — {BEGIN_HINT}"), Style::color(Color::Muted)),
+    let (op_line, op_style) = match (card, op) {
+        (_, Some(operation)) => {
+            let name = card.map(|c| c.name.as_str()).unwrap_or("?");
+            (format!("{name} · {}", operation_balance_line(layout, board, operation)), Style::color(Color::Selected))
+        }
+        (Some(card), None) => (
+            format!("playing {} ({} ops) — i influence · a realign · o coup · ⌫ return card", card.name, card.ops),
+            Style::color(Color::Selected),
+        ),
+        (None, None) => (PLAY_HINT.to_string(), Style::color(Color::Muted)),
     };
 
     let content_width = width.max(turn_line.chars().count()).max(op_line.chars().count()).max(1);
@@ -77,6 +100,7 @@ fn draw_turn_line(canvas: &mut Canvas, status: &GameStatus) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::cards::{CardCatalog, CardId};
     use crate::country::Superpower;
     use crate::layout::MapLayout;
     use crate::map::WorldMap;
@@ -93,45 +117,64 @@ mod tests {
         GameStatus { turn: 5, action_round: 3, action_rounds_per_turn: 7, active: Superpower::Ussr, defcon: 3, vp: 4, ..Default::default() }
     }
 
+    /// Fidel (card #8, 2 ops) — any non-scoring, non-China card will do.
+    fn fidel(cards: &CardCatalog) -> &Card {
+        cards.card(CardId(8))
+    }
+
     #[test]
     fn the_bar_is_always_three_rows() {
         let (map, layout) = fixtures();
         let board = Board::new(&map);
-        assert_eq!(render_status_bar(&layout, &board, &status(), None, 60).height(), STATUS_BAR_ROWS);
+        assert_eq!(render_status_bar(&layout, &board, &status(), None, None, 60).height(), STATUS_BAR_ROWS);
         let placement = InfluencePlacement::new(Superpower::Ussr, 4, &board);
         let op = Operation::Influence(placement);
-        assert_eq!(render_status_bar(&layout, &board, &status(), Some(&op), 60).height(), STATUS_BAR_ROWS);
+        assert_eq!(render_status_bar(&layout, &board, &status(), None, Some(&op), 60).height(), STATUS_BAR_ROWS);
     }
 
     #[test]
     fn the_first_row_names_the_turn_the_active_side_and_the_score() {
         let (map, layout) = fixtures();
         let board = Board::new(&map);
-        let text = render_status_bar(&layout, &board, &status(), None, 60).render(ColorMode::Never);
+        let text = render_status_bar(&layout, &board, &status(), None, None, 60).render(ColorMode::Never);
         let first_line = text.lines().next().unwrap();
         assert_eq!(first_line, "TURN 5 · AR 3/7 · USSR to act · DEFCON 3 · VP US +4");
     }
 
     #[test]
-    fn the_second_row_prompts_for_an_operation_when_none_is_open() {
+    fn the_second_row_prompts_to_play_a_card_when_none_is_in_play() {
         let (map, layout) = fixtures();
         let board = Board::new(&map);
-        let text = render_status_bar(&layout, &board, &status(), None, 60).render(ColorMode::Never);
-        assert!(text.contains("i influence"), "missing begin hint:\n{text}");
-        assert!(text.contains("a realign"), "missing begin hint:\n{text}");
-        assert!(text.contains("o coup"), "missing begin hint:\n{text}");
-        assert!(text.contains("p pass"), "missing begin hint:\n{text}");
+        let text = render_status_bar(&layout, &board, &status(), None, None, 60).render(ColorMode::Never);
+        assert!(text.contains("no card in play"), "missing play hint:\n{text}");
+        assert!(text.contains("space play"), "missing play hint:\n{text}");
+        assert!(text.contains("p pass"), "missing play hint:\n{text}");
     }
 
     #[test]
-    fn the_second_row_shows_the_open_operations_balance() {
+    fn the_second_row_names_the_card_in_play_with_no_operation_open() {
         let (map, layout) = fixtures();
         let board = Board::new(&map);
-        let placement = InfluencePlacement::new(Superpower::Ussr, 4, &board);
+        let cards = CardCatalog::standard().unwrap();
+        let text = render_status_bar(&layout, &board, &status(), Some(fidel(&cards)), None, 60).render(ColorMode::Never);
+        assert!(text.contains("Fidel"), "missing the card's name:\n{text}");
+        assert!(text.contains("2 ops"), "missing the card's ops:\n{text}");
+        assert!(text.contains("i influence"), "missing the operation keys:\n{text}");
+        assert!(text.contains("return card"), "missing the return-card hint:\n{text}");
+        assert!(!text.contains("no card in play"), "shouldn't still prompt to play a card:\n{text}");
+    }
+
+    #[test]
+    fn the_second_row_shows_the_open_operations_balance_prefixed_with_the_card() {
+        let (map, layout) = fixtures();
+        let board = Board::new(&map);
+        let cards = CardCatalog::standard().unwrap();
+        let placement = InfluencePlacement::new(Superpower::Ussr, 2, &board);
         let op = Operation::Influence(placement);
-        let text = render_status_bar(&layout, &board, &status(), Some(&op), 60).render(ColorMode::Never);
+        let text = render_status_bar(&layout, &board, &status(), Some(fidel(&cards)), Some(&op), 60).render(ColorMode::Never);
         assert!(text.contains(&operation_balance_line(&layout, &board, &op)), "balance line missing:\n{text}");
-        assert!(!text.contains("i influence"), "an open operation shouldn't still prompt to start one:\n{text}");
+        assert!(text.contains("Fidel"), "should name the card funding the operation:\n{text}");
+        assert!(!text.contains("no card in play"), "an open operation shouldn't still prompt to play a card:\n{text}");
     }
 
     #[test]
@@ -140,12 +183,12 @@ mod tests {
         let board = Board::new(&map);
         let mut ussr_active = status();
         ussr_active.active = Superpower::Ussr;
-        let ussr_text = render_status_bar(&layout, &board, &ussr_active, None, 60).render(ColorMode::Always);
+        let ussr_text = render_status_bar(&layout, &board, &ussr_active, None, None, 60).render(ColorMode::Always);
         assert!(ussr_text.contains('\x1b'), "active side should carry a colour code:\n{ussr_text}");
 
         let mut us_active = status();
         us_active.active = Superpower::Us;
-        let us_text = render_status_bar(&layout, &board, &us_active, None, 60).render(ColorMode::Always);
+        let us_text = render_status_bar(&layout, &board, &us_active, None, None, 60).render(ColorMode::Always);
         assert_ne!(ussr_text, us_text, "USSR and USA active should render differently under colour");
     }
 
@@ -155,7 +198,7 @@ mod tests {
         let board = Board::new(&map);
         let placement = InfluencePlacement::new(Superpower::Ussr, 4, &board);
         let op = Operation::Influence(placement);
-        let text = render_status_bar(&layout, &board, &status(), Some(&op), 60).render(ColorMode::Never);
+        let text = render_status_bar(&layout, &board, &status(), None, Some(&op), 60).render(ColorMode::Never);
         assert!(!text.contains('\x1b'), "ColorMode::Never should emit no escapes:\n{text}");
     }
 
@@ -163,14 +206,14 @@ mod tests {
     fn the_bar_is_never_narrower_than_the_requested_width() {
         let (map, layout) = fixtures();
         let board = Board::new(&map);
-        assert_eq!(render_status_bar(&layout, &board, &status(), None, 200).width(), 200);
+        assert_eq!(render_status_bar(&layout, &board, &status(), None, None, 200).width(), 200);
     }
 
     #[test]
     fn no_status_bar_line_exceeds_its_own_width() {
         let (map, layout) = fixtures();
         let board = Board::new(&map);
-        let canvas = render_status_bar(&layout, &board, &status(), None, 10);
+        let canvas = render_status_bar(&layout, &board, &status(), None, None, 10);
         let width = canvas.width();
         for line in canvas.render(ColorMode::Never).lines() {
             assert!(line.chars().count() <= width, "line {line:?} exceeds width {width}");

@@ -4,9 +4,11 @@
 //! (`CardCatalog`) kept separate from the mutable per-game state
 //! (`Hands`, alongside `Board` in spirit) — though `Hands` lives here
 //! rather than in its own module since it's a thin `[Vec<CardId>; 2]`
-//! with nothing else to say about it. No card *behaviour* yet: nothing in
-//! this module plays, draws, or discards a card — that's future work once
-//! the display and UI around a hand are settled.
+//! (plus a shared discard pile) with nothing else to say about it. This
+//! module itself still has no opinion on what playing a card *does* —
+//! [`Hands::remove`]/[`Hands::insert`]/[`Hands::discard`] just move a
+//! [`CardId`] around; [`crate::game::Game::play_card`] is what a card play
+//! actually means (ops to spend, no event triggered yet).
 
 use std::collections::HashMap;
 use std::fmt;
@@ -315,6 +317,11 @@ impl CardCatalog {
 /// ([`CHINA_CARD`]), which is tracked separately (`GameStatus::china_card`)
 /// since it changes hands outside the normal draw/discard cycle.
 ///
+/// Also holds the shared `discard` pile a played card lands in once its
+/// operation closes ([`crate::game::Game::confirm`]/`cancel`) — nothing
+/// reads it yet (no redraw or reshuffle exists), but a played card needs
+/// *somewhere* to go once it leaves a hand.
+///
 /// Cheap to clone, like [`crate::board::Board`] and every other piece of
 /// per-game state `Game` carries — the same reason: `Game` itself needs to
 /// stay clonable for AI lookahead.
@@ -322,11 +329,12 @@ impl CardCatalog {
 pub struct Hands {
     us: Vec<CardId>,
     ussr: Vec<CardId>,
+    discard: Vec<CardId>,
 }
 
 impl Hands {
     pub fn new(us: Vec<CardId>, ussr: Vec<CardId>) -> Self {
-        Hands { us, ussr }
+        Hands { us, ussr, discard: Vec::new() }
     }
 
     pub fn hand(&self, side: Superpower) -> &[CardId] {
@@ -334,6 +342,43 @@ impl Hands {
             Superpower::Us => &self.us,
             Superpower::Ussr => &self.ussr,
         }
+    }
+
+    fn hand_mut(&mut self, side: Superpower) -> &mut Vec<CardId> {
+        match side {
+            Superpower::Us => &mut self.us,
+            Superpower::Ussr => &mut self.ussr,
+        }
+    }
+
+    /// Removes `card` from `side`'s hand, if it's there, returning the
+    /// index it was removed from — so [`Hands::insert`] can put it back in
+    /// the same place a mistaken play is undone from
+    /// ([`crate::game::Game::return_card`]).
+    pub fn remove(&mut self, side: Superpower, card: CardId) -> Option<usize> {
+        let hand = self.hand_mut(side);
+        let index = hand.iter().position(|&c| c == card)?;
+        hand.remove(index);
+        Some(index)
+    }
+
+    /// Puts `card` back into `side`'s hand at `index` (clamped to the
+    /// hand's current length, in case something else changed it in the
+    /// meantime) — the undo half of [`Hands::remove`].
+    pub fn insert(&mut self, side: Superpower, index: usize, card: CardId) {
+        let hand = self.hand_mut(side);
+        let index = index.min(hand.len());
+        hand.insert(index, card);
+    }
+
+    /// Sends `card` to the shared discard pile — where a played card lands
+    /// once its operation closes.
+    pub fn discard(&mut self, card: CardId) {
+        self.discard.push(card);
+    }
+
+    pub fn discards(&self) -> &[CardId] {
+        &self.discard
     }
 }
 

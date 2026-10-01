@@ -3,9 +3,9 @@
 A Rust CLI implementation of the board game *Twilight Struggle*. Currently
 focused on the data model and terminal display, a handful of the
 ops-spending actions (influence placement, realignment, coups), enforced
-alternating turns, and browsing (not yet playing) each side's hand of
-cards; full game rules (card events, DEFCON, Military Operations, scoring,
-etc.) haven't been built yet.
+alternating turns, and playing a card from each side's hand purely for its
+ops value (no card text/events, DEFCON, Military Operations, scoring, or
+redealing yet).
 
 ## Architecture
 
@@ -63,21 +63,25 @@ etc.) haven't been built yet.
   `CardError`) with a `find` lookup (`CardFound`) like `WorldMap::find`'s,
   except a numeric query matches a card's id (its printed number) before
   falling back to name matching. `Hands` is the mutable per-game state — a
-  `[Vec<CardId>; 2]` indexed by `Superpower` — kept here rather than its
-  own module since it's a thin wrapper with nothing else to say about it;
-  cheap to clone like `Board`, for the same reason (`Game` needs to stay
-  clonable for AI lookahead). Deliberately never includes `CHINA_CARD`
-  (id 6): it changes hands outside the normal draw/discard cycle, so it's
-  tracked via `GameStatus::china_card`/`china_card_face_up` instead and
-  always shown as its own slot. `Card::ops_label` is the one small piece
-  of display logic that lives on the data type rather than in `render/`:
-  how a card's ops value reads wherever space is tight — its digit, `S`
-  for a scoring card, or `★{ops}` for the China Card — shared by the hand
-  strip's mini-card boxes and (everywhere else) nothing, since the zoom
-  view's own title has room to spell "Ops" out instead. No card
-  *behaviour* exists yet — nothing here plays, draws, or discards a card;
-  this is display and UI only (`render/hand.rs`, `render/card.rs`,
-  `interactive.rs` below).
+  `[Vec<CardId>; 2]` indexed by `Superpower`, plus a shared `discard` pile
+  a played card lands in once its operation closes — kept here rather than
+  its own module since it's still a thin wrapper with nothing else to say
+  about it; cheap to clone like `Board`, for the same reason (`Game` needs
+  to stay clonable for AI lookahead). `Hands::remove`/`insert` move a card
+  out of (and back into, at the same index) a hand — the mechanics
+  `Game::play_card`/`return_card` below drive, not a policy of their own.
+  Deliberately never includes `CHINA_CARD` (id 6) in a hand: it changes
+  hands outside the normal draw/discard cycle, so it's tracked via
+  `GameStatus::china_card`/`china_card_face_up` instead and always shown
+  as its own slot. `Card::ops_label` is the one small piece of display
+  logic that lives on the data type rather than in `render/`: how a card's
+  ops value reads wherever space is tight — its digit, `S` for a scoring
+  card, or `★{ops}` for the China Card — shared by the hand strip's
+  mini-card boxes and (everywhere else) nothing, since the zoom view's own
+  title has room to spell "Ops" out instead. Still no card *event*
+  behaviour — nothing here reads or triggers a card's text; `Game` below
+  is the first place playing a card means anything (its ops value, nothing
+  else).
 - **`Scenario`** (`src/scenario.rs`) / **`GameStatus`** (`src/status.rs`)
   — a named starting state (currently just `data/demo_state.json`): a
   `Board` snapshot, starting `Hands` (`Scenario::from_json` resolves each
@@ -144,26 +148,44 @@ etc.) haven't been built yet.
   `InfluencePlacement`, `Realignment`, `Coup`, and `Operation` all derive
   `Clone` — cheap, per `Board`'s own design note — for the same reason:
   `Game` (below) needs to be clonable for AI lookahead.
-- **`Game`** (`src/game.rs`) — turns. Owns the status, the board, and
-  whichever `Operation` is open, so "an operation belongs to the active
-  side, and closing it passes the turn" lives in one place rather than
-  being duplicated between the REPL and interactive mode. `begin(kind)` is
-  the entire enforcement mechanism: it always opens with `active()` and a
-  full turn's ops (`OPS_PER_ACTION_ROUND`, 4), so there's no argument
-  through which a caller could name the wrong side, and it's refused while
-  an operation is already open. One turn spends exactly one operation —
+- **`Game`** (`src/game.rs`) — turns. Owns the status, the board, whichever
+  card is in play, and whichever `Operation` is open, so "a turn plays a
+  card, then spends its ops on one operation, then closing that operation
+  passes the turn" lives in one place rather than being duplicated between
+  the REPL and interactive mode. `play_card(cards, id)` is the first step
+  of a turn now: it takes `id` from the active side's hand (nothing about
+  the card's text or event — only its ops value), refusing a scoring card
+  (`ScoringCard`), a card not actually available to the active side
+  (`NotInHand`), or a second card while one's already in play
+  (`CardInPlay`). The China Card (`CHINA_CARD`) is the one exception to
+  "in your hand": it's playable instead whenever `GameStatus::china_card`
+  names the active side and `china_card_face_up` is true
+  (`ChinaCardFaceDown` otherwise — see `Hands`'s own doc for why it's
+  never in a hand list at all). `begin(kind)` is the entire *operation*
+  enforcement mechanism: it always opens with `active()` and the played
+  card's own ops (refused with `NoCard` if none has been played), so
+  there's no argument through which a caller could name the wrong side or
+  the wrong ops count, and it's refused while an operation is already
+  open. One turn spends exactly one card on exactly one operation —
   `confirm`/`cancel` are the only two ways to close one *for real*, and
-  both hand the turn to the other side via the private `advance` (USSR →
-  USA; USA → USSR plus `action_round += 1`, rolling `turn` over once
-  `action_round` exceeds `action_rounds_per_turn`). `pass` is the same
-  handover with no operation opened. Ending a turn with ops unspent is
+  both discard the played card (sending it to `Hands`'s own discard pile,
+  or — for the China Card — passing it face down to the opponent instead,
+  via the private `discard_played_card`) and hand the turn to the other
+  side via the private `advance` (USSR → USA; USA → USSR plus
+  `action_round += 1`, rolling `turn` over — and flipping the China Card
+  face up again, wherever it's landed — once `action_round` exceeds
+  `action_rounds_per_turn`). `pass` is the same handover with no operation
+  opened, refused with `CardInPlay` if a card's already been taken from
+  the hand — there's nothing left to "pass" on at that point, so
+  `return_card` is the way out instead. Ending a turn with ops unspent is
   allowed and simply forfeits them, the same as `InfluencePlacement` never
   requiring every op to be spent. `abandon` is the third, narrower way to
-  close one — with **no turn cost**, exactly as if `begin` had never been
-  called — the free undo for opening the wrong kind of operation by
-  mistake, distinct from `cancel`'s "I'm done, whatever happened stands"
-  (which always hands the turn over, even with nothing spent). What it
-  refuses differs by kind, since what counts as irreversible does: an
+  close an *operation* — with **no turn cost**, exactly as if `begin` had
+  never been called, and leaving the card in play rather than discarding
+  it — the free undo for opening the wrong kind of operation by mistake,
+  distinct from `cancel`'s "I'm done, whatever happened stands" (which
+  always hands the turn over, even with nothing spent). What it refuses
+  differs by kind, since what counts as irreversible does: an
   `InfluencePlacement` can always be abandoned, however many points are
   pending — placement never rolls a die, so nothing about it is hidden or
   committed until `confirm` runs, and every pending point is simply
@@ -172,29 +194,59 @@ etc.) haven't been built yet.
   first roll or attempt — refused the instant `Operation::ops_spent() > 0`
   for either of those two kinds, since a roll writes straight to the real
   board and reveals a result that can't be un-rolled; `cancel` is the only
-  way to close one from there. Leaves no log entry either way — as far as
-  the history is concerned, an abandoned operation never happened, unlike
-  `confirm`/`cancel`, which always push a `Closed`
-  entry even when nothing was spent. `Game` takes no `WorldMap` or `Dice` of its own — both are
+  way to close one from there. `return_card` is `abandon`'s card-level
+  counterpart: with no operation open, it puts the card currently in play
+  back in the hand at the index it came from (refused, `OperationOpen`, if
+  one's still open — abandon that first) — so a mistaken `play_card` has
+  the same free, no-turn-cost undo an operation does, just one level
+  further out. Neither `abandon` nor `return_card` leaves a log entry — as
+  far as the history is concerned, neither ever happened — unlike
+  `confirm`/`cancel`, which always push a `Closed` entry (now naming the
+  card that funded the operation) even when nothing was spent. `Game`
+  takes no `WorldMap`, `Dice`, or `CardCatalog` of its own — all are
   passed per call, matching how the ops modules already split `Board` out
   — and is cheap to `Clone`, which is the whole point: nothing in this
   module touches a terminal, so it's the complete surface a future AI
   opponent drives, and lookahead means cloning a `Game` to try a line of
   play without touching the real one. `Game::lookahead` clones status,
-  board, and open operation like `Clone` does, but starts the copy's log
-  empty, since the log is the one field whose size isn't bounded and a
-  search cloning many nodes shouldn't drag a growing history through every
-  branch it never plays out. `Game` also carries the scenario's starting
-  `Hands`, read-only via `Game::hand(side)` — there's no way to mutate
-  them yet (no draw, play, or discard), so this only ever reflects what
-  the scenario dealt.
+  board, the card in play, and open operation like `Clone` does, but
+  starts the copy's log empty, since the log is the one field whose size
+  isn't bounded and a search cloning many nodes shouldn't drag a growing
+  history through every branch it never plays out. `Game` also carries the
+  scenario's starting `Hands`, read-only via `Game::hand(side)` (always
+  reflecting what `play_card`/`return_card` have done to it — there's
+  still no draw or redeal) and `Game::card_in_play()`, which names
+  whichever card `play_card` has taken but not yet discarded.
+  `Game::card_in_play_slot()` pairs that id with where it came from
+  (`PlayedCard::hand_index` — `None` for the China Card) purely so
+  `render::render_hand` can splice it back into its old spot rather than
+  just letting it disappear from the strip; see that function's own doc.
 - **`log`** (`src/log.rs`) — `GameLog`, the game's append-only history, a
   `Vec<LogEntry>` built up entirely inside `Game` — the one place every
   mutation already funnels through — so the REPL and `interactive.rs` are
-  both covered without either having to remember to log anything. Every
-  operation closes with an `Event::Closed` entry (pushed from
-  `confirm`/`cancel`, stamped with the turn/AR/side *before* `advance`
-  runs) naming the operation kind and its final ops balance — a
+  both covered without either having to remember to log anything. This is
+  a record of the actual game, not of every step taken inside the
+  application: `Game::play_card` itself writes nothing, since a card
+  that's merely *selected* can still be taken back with no trace
+  (`Game::return_card`, with or without an abandoned operation in
+  between). `Game::log_card_selected` is what actually pushes
+  `Event::Selected`, and only once that selection is irrevocable — which
+  still lands it, in the finished log, *before* the operation it funds has
+  necessarily closed, reading in the order things actually happened
+  rather than as a later afterthought. Where "irrevocable" falls differs
+  by what the card ends up funding: `Game::roll` calls
+  `log_card_selected` itself, right before a realignment's or coup's
+  *first* roll — the exact instant `Game::abandon` stops being able to
+  undo it (idempotent past that: a second roll in the same realignment
+  doesn't log the card again). Everything else — a placement confirmed or
+  cancelled with any (or no) points pending, or a realignment/coup that
+  never rolled at all — only becomes real at `confirm`/`cancel`, so
+  `log_close` calls `log_card_selected` itself, as the first thing it
+  does (a no-op if a roll already did). Every operation closes with an
+  `Event::Closed` entry (pushed from `confirm`/`cancel`, stamped with the
+  turn/AR/side *before* `advance` runs) naming the operation kind and its
+  final ops balance — not which card funded it, since the `Selected`
+  entry already said so, earlier in the same log — mirroring how a
   realignment's or coup's dice already have their own entries by then
   (`Event::Realign`/`Event::Coup`, pushed the instant `Game::roll`
   resolves, since a roll is irreversible the moment it happens), and an
@@ -203,8 +255,11 @@ etc.) haven't been built yet.
   analogue of a resolved roll (omitted entirely if nothing was placed, the
   same way zero rolls simply mean zero `Event::Realign` entries) — so
   `log`/`export` show `confirm`/`cancel` as its own line for every
-  operation kind, never merged onto the line reporting what happened.
-  `Event::Pass` covers `Game::pass`. `Game::board_mut` is the one mutator
+  operation kind, never merged onto the line reporting what happened. An
+  *abandoned* operation (`Game::abandon`) still leaves no trace of
+  itself — no `Placed`/`Realign`/`Coup`/`Closed`/`Selected` entry, since
+  abandon is only ever possible before `log_card_selected` has run for
+  either of its two triggers. `Event::Pass` covers `Game::pass`. `Game::board_mut` is the one mutator
   `Game` can't observe by itself (`set`/`add`/`remove` in `main.rs` bypass
   the operation system entirely), so `Game::record_edit` and
   `Game::record_note` exist for a caller to report an edit or an
@@ -308,24 +363,30 @@ etc.) haven't been built yet.
     `draw_divider` for the `├─ Title ─┤` rows between panels, and the free
     function `put_border_title` for the outer box's own
     `┌─ * Poland ─── Europe · stability 3 ─┐` top border.
-  - `log.rs` — turns a `GameLog` into text: `log_entry_line` is the
-    canonical rendering of one entry, fixed-column and tagged so a roll's
-    numbers can't be mistaken for each other (`d6:` only ever the actual
-    die; `mod:`/`ops:`/`target:`/`sum:` label everything else by where it
-    came from — a bare `4+4=8` doesn't say which 4 was rolled).
-    `log_text` joins a header plus every `log_entry_line` into the exact
-    string `export` writes to a file; `render_log` draws the same lines
-    into a `Canvas`, coloured by side (`Color::Us`/`Color::Ussr`, `Muted`
-    for a debug edit or note) — `render_log(..).render(ColorMode::Never)`
-    is byte-identical to `log_text`, so the on-screen `log` command and
-    the exported file are guaranteed to be one format, not two.
+  - `log.rs` — turns a `GameLog` into text: `log_entry_line` (now taking a
+    `CardCatalog` alongside the `WorldMap`, so an `Event::Selected`
+    entry's own card can be named) is the canonical rendering of one
+    entry, fixed-column and tagged so a roll's numbers can't be mistaken
+    for each other (`d6:`
+    only ever the actual die; `mod:`/`ops:`/`target:`/`sum:` label
+    everything else by where it came from — a bare `4+4=8` doesn't say
+    which 4 was rolled). `log_text` joins a header plus every
+    `log_entry_line` into the exact string `export` writes to a file;
+    `render_log` draws the same lines into a `Canvas`, coloured by side
+    (`Color::Us`/`Color::Ussr`, `Muted` for a debug edit or note) —
+    `render_log(..).render(ColorMode::Never)` is byte-identical to
+    `log_text`, so the on-screen `log` command and the exported file are
+    guaranteed to be one format, not two.
   - `statusbar.rs` — the two-row turn/operation bar `interactive.rs` draws
     above every map screen: turn/AR/active side (its own colour)/DEFCON/
-    VP, then the open operation's balance (`operation_balance_line`,
-    reused rather than reworded) or a prompt naming the keys that start
-    one. The only view besides `world.rs` that reads a `GameStatus`,
-    deliberately its own compact line rather than the dashboard's
-    (already clipped at width 104) — the two share only `vp_line`'s
+    VP, then one of three states for the card/operation row — no card in
+    play (a prompt naming the keys to select and play one); a card in play
+    with no operation open yet (its name/ops and the keys to spend or
+    return it); or an open operation (`operation_balance_line`, reused
+    rather than reworded, prefixed with the card's name). The only view
+    besides `world.rs` that reads a `GameStatus`, deliberately its own
+    compact line rather than the dashboard's (already clipped at width
+    104) — the two share only `vp_line`'s
     wording, extracted so they can't drift. Always exactly
     `STATUS_BAR_ROWS` (3) regardless of whether an operation is open, so
     the view drawn below it never shifts; takes `width` as a minimum and
@@ -345,6 +406,21 @@ etc.) haven't been built yet.
     read from the hand list itself, since `Hands` deliberately never
     carries it (see `cards.rs`'s own doc). More than 10 cards paginates
     around whichever one is selected rather than shrinking the slots.
+    `render_hand`'s `in_play: Option<(CardId, Option<usize>)>` — exactly
+    `Game::card_in_play_slot()`'s own shape — is how a played card stays
+    on screen instead of vanishing the instant `Game::play_card` removes
+    it from the hand: the id is spliced back into its original index (the
+    `Option<usize>`; `None` for the China Card, which was never spliced
+    out of the hand list to begin with — it's drawn via `china`
+    regardless of whether it's the one in play) and drawn with
+    `SlotRole::Played` — a bold, bright `Color::Selected` thick box and an
+    `IN PLAY` line in place of its usual side/phase one — while every
+    *other* slot drawn that call is `SlotRole::Dimmed` instead of
+    `SlotRole::Selected`, so the one card that matters isn't competing
+    with a leftover browsing cursor. `in_play` stays non-`None` for as
+    long as the card does — through a whole operation, not just the
+    keypress that played it — since `Game::confirm`/`cancel` are the only
+    things that ever clear it.
   - `card.rs` — `render_card`, one card's full detail: a titled box like
     `country.rs`'s own outer box (the title on the top border via
     `put_border_title`, not a divider — its left half is the card's own
@@ -394,28 +470,37 @@ etc.) haven't been built yet.
 - **`main.rs`** — a REPL (`cargo run`) plus one-shot mode
   (`cargo run -- <command>`). Type `help` inside the REPL for the command
   list. `Session` holds a `Game` (`src/game.rs`), so turns are enforced
-  everywhere the REPL touches the board: `influence`/`realign`/`coup` take
-  no arguments any more — the side and the 4 ops are always `Game::begin`'s,
-  never typed in — and `place`/`undo`/`confirm`/`cancel`/`roll` all read
-  and write through `Session.game` rather than a bare `Board` and
-  `Option<Operation>`. `influence`/`place`/`undo`/`confirm`/`cancel` stage and
-  commit an influence placement; `realign`/`roll`/`confirm`/`cancel` run a
-  realignment and `coup`/`roll`/`confirm`/`cancel` a coup, where `roll`
-  resolves either kind immediately (a coup's `roll` spends every op on its
-  one attempt) without ending the turn, and `undo` always refuses for
-  either. `confirm` and `cancel` are the only two ways to close an
-  operation, and both hand the turn to the other side (reported in the
-  next prompt, which names the active side and the AR counter); `pass`
-  does the same handover with no operation open, refused if one is.
-  `abandon` closes an operation with no turn cost at all — always for an
-  influence placement (discarding any pending points), but refused,
-  naming the roll already spent, once a realignment or coup has rolled —
-  the free undo for a mistaken `influence`/`realign`/`coup`. `status`
-  reports the turn/AR/active side and the open
-  operation's balance. `influence`/`realign`/`coup`/`pass`/`abandon` are
-  no longer REPL-only — the same five are bound to `i`/`a`/`o`/`p`/
-  Backspace inside `interactive.rs`, which is also where `confirm`/
-  `cancel` stay bound to `c`/`X`; the `wm`
+  everywhere the REPL touches the board. `play <id|name>` is the new first
+  step of a turn: it takes a card from the active side's hand (the same
+  forgiving `CardCatalog::find` lookup `card` uses) and makes it the card
+  `Game::begin` will spend; `influence`/`realign`/`coup` still take no
+  arguments — the side and the ops are always the played card's, via
+  `Game::begin`, never typed in — and `place`/`undo`/`confirm`/`cancel`/
+  `roll` all read and write through `Session.game` rather than a bare
+  `Board` and `Option<Operation>`. `influence`/`place`/`undo`/`confirm`/
+  `cancel` stage and commit an influence placement; `realign`/`roll`/
+  `confirm`/`cancel` run a realignment and `coup`/`roll`/`confirm`/
+  `cancel` a coup, where `roll` resolves either kind immediately (a coup's
+  `roll` spends every op on its one attempt) without ending the turn, and
+  `undo` always refuses for either. `confirm` and `cancel` are the only
+  two ways to close an operation, and both discard the card that funded
+  it (the China Card instead passes face down to the opponent) and hand
+  the turn to the other side (reported in the next prompt, which names
+  the active side, the AR counter, and any card still in play); `pass`
+  does the same handover with no operation open, refused if one is, or if
+  a card's been played but not yet spent. `abandon` steps back exactly
+  one level, the same cascade Backspace drives in the interactive map:
+  with an operation open, it closes *that* for free (always for an
+  influence placement, discarding any pending points; refused, naming the
+  roll already spent, once a realignment or coup has rolled), leaving the
+  card in play; with no operation open but a card in play, it returns the
+  card to the hand instead (`Game::return_card`) — the free undo for a
+  mistaken `play`/`influence`/`realign`/`coup`. `status` reports the
+  turn/AR/active side, whichever card is in play, and the open
+  operation's balance. `play`/`influence`/`realign`/`coup`/`pass`/
+  `abandon` are no longer REPL-only — the same six are bound to
+  `space`/`i`/`a`/`o`/`p`/Backspace inside `interactive.rs`, which is also
+  where `confirm`/`cancel` stay bound to `c`/`X`; the `wm`
   arm no longer reports a confirm/cancel/pass that happened inside the
   map (interactive mode's own message row already did), only a session
   left open on the way out. Either way, `set`/`add`/`remove`/`load` are refused while a
@@ -467,23 +552,31 @@ etc.) haven't been built yet.
   every key handler goes through it and turns stay enforced here too, and
   a two-row status bar (`render::render_status_bar`) is drawn above
   whichever screen is showing — turn/AR/active side (in its own colour)/
-  DEFCON/VP, then the open operation's balance or a prompt naming the
-  keys that start one — since a keypress alone carries no "USSR" the way
-  the REPL prompt does. `i`/`a`/`o` open an influence placement,
-  realignment, or coup for the active side with a full turn's ops, and
-  `p` passes the turn (`Game::pass`) — all four global, working from any
-  of the three screens, and refused while an operation is already open
-  (`GameError`'s own text shown in the message row): `Game::begin` and
+  DEFCON/VP, then one of its three states for the card/operation row (see
+  `statusbar.rs` above) — since a keypress alone carries no "USSR" the way
+  the REPL prompt does. A turn now starts with `Space`, which plays the
+  selected hand card (`Game::play_card`) — a no-op on an empty hand, or
+  once a card's already in play. Only then do `i`/`a`/`o` open an
+  influence placement, realignment, or coup for the active side, spending
+  that card's own ops, and `p` passes the turn (`Game::pass`) — all four
+  global, working from any of the three screens, and refused
+  (`GameError`'s own text shown in the message row) while an operation is
+  already open, or — for `i`/`a`/`o` — with no card in play yet, or — for
+  `p` — with a card in play but no operation open: `Game::begin` and
   `Game::pass` always act for `Game::active`, so there's no side to infer
   from the key itself, which is what makes a keypress binding possible at
   all. `c` confirms/closes the open operation via `Game::confirm` and `X`
-  cancels/closes it via `Game::cancel` — either way handing the turn to
-  the other side *without leaving the map*, so the newly active side can
-  immediately press `i`/`a`/`o` on the same screen; Backspace abandons it
-  via `Game::abandon` instead — no turn cost, always available for a
-  placement (however many points are pending) but refused (with
-  `GameError::CannotAbandon`'s own text) once a realignment or coup has
-  rolled, where `X`/`cancel` is the only way out. `run` therefore only
+  cancels/closes it via `Game::cancel` — either way discarding the card
+  that funded it (or, for the China Card, passing it face down to the
+  opponent) and handing the turn to the other side *without leaving the
+  map*, so the newly active side can immediately play its own card from
+  the same screen. Backspace steps back exactly one level: with an
+  operation open, it closes *that* via `Game::abandon` — no turn cost,
+  always available for a placement (however many points are pending) but
+  refused (with `GameError::CannotAbandon`'s own text) once a realignment
+  or coup has rolled, where `X`/`cancel` is the only way out — leaving the
+  card in play; with no operation open but a card in play, it returns the
+  card to the hand instead, via `Game::return_card`. `run` therefore only
   returns (`io::Result<()>`) on `Esc` from the world view, `q`, or Ctrl-C,
   and the REPL reads `Game::operation()` itself to report a session left
   open, rather than switching on a return value naming what happened
@@ -498,26 +591,30 @@ etc.) haven't been built yet.
   untouched rather than clearing it, so it can be resumed from the REPL
   or by reopening the map. A roll's outcome is shown in the same message
   row as a refusal, but — unlike a refusal, and unlike a confirm/cancel/
-  abandon/pass/begin report, all of which the status bar's own next
+  abandon/pass/begin/play report, all of which the status bar's own next
   redraw already reflects — survives exactly one more keypress before being
   cleared, via a `sticky` flag set alongside it, since it's the one
   message whose content isn't otherwise recoverable from the screen.
 
   The active side's hand (`render::render_hand`) is drawn as a fixed-
-  height strip pinned below every screen — global and card-browsing only,
-  like the status bar above it, not tied to any one screen. `[`/`]` cycle
-  its selection (wrapping at either end) and `z` toggles a zoomed detail
-  overlay (`render::render_card`, `Canvas::blit`ted onto the current
-  screen, widening the canvas first if the card itself is bigger) for the
-  selected card; both are no-ops on an empty hand. Each side keeps its
-  own selected index (`hand_selected`, indexed via `side_index`) so
-  swapping the active side never loses the other side's place. `Esc`
-  closes an open zoom first, before whatever it would otherwise do on
-  that screen; `c`/`X`/`p` close it too, but only when they actually hand
-  the turn over (a refusal leaves it open) — the newly active side's own
-  hand takes its place either way. None of this is card *behaviour* —
-  nothing here plays, draws, or discards a card, only browses what
-  `Game::hand` already holds.
+  height strip pinned below every screen — global, like the status bar
+  above it, not tied to any one screen. `[`/`]` cycle its selection
+  (wrapping at either end, and a no-op once a card's in play, since the
+  played card's own slot is already gone from the strip) and `z` toggles a
+  zoomed detail overlay (`render::render_card`, `Canvas::blit`ted onto the
+  current screen, widening the canvas first if the card itself is bigger)
+  for the selected card — both no-ops on an empty hand. The `selected_hand_card`
+  helper resolves the strip's current selection to a `CardId` (the China
+  Card once the index runs past the held hand — see `hand.rs` above),
+  shared by `Space` and the zoom overlay so they always agree on which
+  card is selected. Each side keeps its own selected index (`hand_selected`,
+  indexed via `side_index`) so swapping the active side never loses the
+  other side's place. `Esc` closes an open zoom first, before whatever it
+  would otherwise do on that screen; `c`/`X`/`p` close it too, but only
+  when they actually hand the turn over (a refusal leaves it open) — the
+  newly active side's own hand takes its place either way. This still
+  isn't card *event* behaviour — nothing here reads a card's text or
+  triggers it, only its ops value, via `Game::play_card`.
 
   The only place in the crate that touches the terminal directly —
   everything it draws still comes from `render::render_world_map`/

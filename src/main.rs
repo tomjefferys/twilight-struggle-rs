@@ -7,7 +7,7 @@ use twilight_struggle::render::{
 };
 use twilight_struggle::{
     CardCatalog, CardFound, ColorMode, Dice, Found, Game, GameError, MapLayout, Operation, OperationKind, Region, RollOutcome, Scenario,
-    Superpower, ViewMode, WorldMap, CHINA_CARD, OPS_PER_ACTION_ROUND,
+    Superpower, ViewMode, WorldMap, CHINA_CARD,
 };
 
 mod interactive;
@@ -16,11 +16,11 @@ struct Session {
     map: WorldMap,
     layout: MapLayout,
     cards: CardCatalog,
-    /// Status, board, and whichever operation is open — see [`Game`]'s own
-    /// doc for why these three move together. Turns are enforced entirely
-    /// through this: `influence`/`realign`/`coup` no longer take a side or
-    /// an ops count, because `Game::begin` always uses the active side and
-    /// a full turn's allowance.
+    /// Status, board, whichever card is in play, and whichever operation is
+    /// open — see [`Game`]'s own doc for why these four move together.
+    /// Turns are enforced entirely through this: a turn starts with `play`,
+    /// which hands `influence`/`realign`/`coup` the card's own ops — none
+    /// of the three take a side or an ops count of their own.
     game: Game,
     width: usize,
     color: ColorMode,
@@ -124,11 +124,16 @@ fn main() {
     }
 }
 
-/// A turn-aware prompt — e.g. `USSR AR 3/7 > ` — so whose turn it is
-/// never needs a separate `status` call to see.
+/// A turn-aware prompt — e.g. `USSR AR 3/7 > ` or, with a card in play,
+/// `USSR AR 3/7 [Fidel] > ` — so whose turn it is, and what's already been
+/// played, never needs a separate `status` call to see.
 fn prompt(session: &Session) -> String {
     let status = session.game.status();
-    format!("{} AR {}/{} > ", session.game.active(), status.action_round, status.action_rounds_per_turn)
+    let card = match session.game.card_in_play() {
+        Some(id) => format!("[{}] ", session.cards.card(id).name),
+        None => String::new(),
+    };
+    format!("{} AR {}/{} {card}> ", session.game.active(), status.action_round, status.action_rounds_per_turn)
 }
 
 fn detect_width() -> usize {
@@ -246,6 +251,7 @@ fn run_command(session: &mut Session, line: &str) {
                 println!("usage: load demo");
             }
         }
+        "play" => run_play_command(session, &words),
         "influence" => run_begin_command(session, OperationKind::Influence, &words),
         "realign" => run_begin_command(session, OperationKind::Realign, &words),
         "coup" => run_begin_command(session, OperationKind::Coup, &words),
@@ -322,18 +328,48 @@ fn print_ambiguous(session: &Session, ids: &[twilight_struggle::CountryId]) {
     println!("ambiguous: {}", names.join(", "));
 }
 
-/// `influence`/`realign`/`coup` open an operation for the active side with
-/// a full turn's ops — no arguments, since enforcing turns means there's
-/// nothing left for a caller to name. Refused if a session is already
-/// open, per [`Game::begin`].
+/// `play <id|name>` takes a card from the active side's hand (or, for the
+/// China Card, from wherever it currently sits face up) and makes it the
+/// card in play — the first step of a turn now, since `influence`/
+/// `realign`/`coup` all need a card's ops to open with. The same forgiving
+/// lookup `card` uses (`CardCatalog::find`).
+fn run_play_command(session: &mut Session, words: &[&str]) {
+    let Some(query) = words.get(1..).map(|w| w.join(" ")) else {
+        println!("usage: play <id|name>");
+        return;
+    };
+    if query.is_empty() {
+        println!("usage: play <id|name>");
+        return;
+    }
+    match session.cards.find(&query) {
+        CardFound::One(id) => {
+            let side = session.game.active();
+            match session.game.play_card(&session.cards, id) {
+                Ok(()) => println!(
+                    "{side} plays {} ({} ops) — influence/realign/coup to use them",
+                    session.cards.card(id).name,
+                    session.cards.card(id).ops,
+                ),
+                Err(e) => println!("{e}"),
+            }
+        }
+        CardFound::None => println!("no card matches {query:?}"),
+        CardFound::Ambiguous(ids) => {
+            let names: Vec<&str> = ids.iter().map(|&id| session.cards.card(id).name.as_str()).collect();
+            println!("ambiguous: {}", names.join(", "));
+        }
+    }
+}
+
+/// `influence`/`realign`/`coup` open an operation for the active side,
+/// spending whichever card's already in play — no arguments, since
+/// enforcing turns means there's nothing left for a caller to name.
+/// Refused if a session is already open, or no card has been played yet
+/// (`play` first), per [`Game::begin`].
 fn run_begin_command(session: &mut Session, kind: OperationKind, words: &[&str]) {
     if words.len() != 1 {
-        println!(
-            "{} takes no arguments now — it always starts for {}, the active side, with {} ops",
-            words[0],
-            session.game.active(),
-            OPS_PER_ACTION_ROUND,
-        );
+        println!("{} takes no arguments now — it always starts for {}, the active side, spending the card already in play", words[0], session.game.active());
         return;
     }
     match session.game.begin(kind) {
@@ -477,7 +513,10 @@ fn run_hand_command(session: &Session, words: &[&str]) {
     };
     let status = session.game.status();
     let china = (status.china_card == side).then_some(status.china_card_face_up);
-    let canvas = render_hand(&session.cards, session.game.hand(side), china, side, None);
+    // Only the active side can have a card in play, so a named inactive
+    // side's hand never shows one.
+    let in_play = (side == session.game.active()).then(|| session.game.card_in_play_slot()).flatten();
+    let canvas = render_hand(&session.cards, session.game.hand(side), china, side, None, in_play);
     println!("{}", canvas.render(session.color));
 }
 
@@ -509,12 +548,10 @@ fn run_card_command(session: &Session, words: &[&str]) {
 
 fn run_undo_command(session: &mut Session) {
     match session.game.undo(&session.map) {
-        Ok(id) => println!(
-            "undid a point in {} — {} of {} ops left",
-            session.map.country(id).name,
-            session.game.ops_available(),
-            OPS_PER_ACTION_ROUND,
-        ),
+        Ok(id) => {
+            let total = session.game.placement().map_or(0, |p| p.ops_total());
+            println!("undid a point in {} — {} of {total} ops left", session.map.country(id).name, session.game.ops_available());
+        }
         Err(e) => println!("{e}"),
     }
 }
@@ -601,33 +638,46 @@ fn run_cancel_command(session: &mut Session) {
     println!("{} to act", session.game.active());
 }
 
-/// `abandon` closes the open operation without costing the turn, as long
-/// as nothing irreversible has happened. A placement can always be
-/// abandoned this way, however many points are pending — they're simply
-/// discarded — since it never rolls a die. A realignment or coup can only
-/// be abandoned before its first roll or attempt; `cancel` is the only
-/// way out once one's been made.
+/// `abandon` steps back exactly one level, the same cascade Backspace
+/// drives in the interactive map: with an operation open, it closes
+/// *that* — for free, as long as nothing irreversible has happened (a
+/// placement can always be abandoned, however many points are pending,
+/// since it never rolls a die; a realignment or coup can only be abandoned
+/// before its first roll or attempt — `cancel` is the only way out once
+/// one's been made) — leaving the card in play. With no operation open but
+/// a card in play, it puts the card back in the hand instead.
 fn run_abandon_command(session: &mut Session) {
-    match session.game.abandon() {
-        Ok(op) => println!("{}", operation_abandoned_line(&op)),
-        Err(e) => println!("{e}"),
+    if session.game.operation().is_some() {
+        match session.game.abandon() {
+            Ok(op) => println!("{}", operation_abandoned_line(&op)),
+            Err(e) => println!("{e}"),
+        }
+    } else {
+        match session.game.return_card() {
+            Ok(id) => println!("{} returned to hand", session.cards.card(id).name),
+            Err(e) => println!("{e}"),
+        }
     }
 }
 
-/// Reports whose turn it is, the turn/action-round counters, and — if
-/// one's open — the balance of the current operation. Takes over the
-/// reporting role bare `influence`/`realign`/`coup` used to have, now that those
-/// always start a new operation instead.
+/// Reports whose turn it is, the turn/action-round counters, whichever
+/// card is in play, and — if one's open — the balance of the current
+/// operation. Takes over the reporting role bare `influence`/`realign`/
+/// `coup` used to have, now that those always start a new operation
+/// instead.
 fn run_status_command(session: &Session) {
     let status = session.game.status();
+    let card = match session.game.card_in_play() {
+        Some(id) => format!("{} in play", session.cards.card(id).name),
+        None => "no card in play".to_string(),
+    };
     println!(
-        "TURN {}   AR {}/{}   {} to act   {} of {} ops available",
+        "TURN {}   AR {}/{}   {} to act   {card}   {} ops available",
         status.turn,
         status.action_round,
         status.action_rounds_per_turn,
         session.game.active(),
         session.game.ops_available(),
-        OPS_PER_ACTION_ROUND,
     );
     print_operation_banner(session);
 }
@@ -652,7 +702,7 @@ fn run_log_command(session: &Session, words: &[&str]) {
         return;
     }
     let tail = words.get(1).and_then(|s| s.parse().ok());
-    let canvas = render_log(&session.map, session.game.log(), tail);
+    let canvas = render_log(&session.map, &session.cards, session.game.log(), tail);
     println!("{}", canvas.render(session.color));
 }
 
@@ -664,7 +714,7 @@ fn run_export_command(session: &Session, words: &[&str]) {
         println!("usage: export <path>");
         return;
     };
-    let mut text = log_text(&session.map, session.game.log());
+    let mut text = log_text(&session.map, &session.cards, session.game.log());
     text.push('\n');
     match fs::write(path, text) {
         Ok(()) => println!("wrote {} entries to {path}", session.game.log().len()),
@@ -717,13 +767,12 @@ Commands:
                           attempt actually happens, with the calculation on
                           screen above the key that resolves it). A status
                           bar at the top of every screen names the turn, AR,
-                          active side, DEFCON, VP, and the open operation's
-                          balance; i/a/o start an influence placement,
-                          realignment, or coup for the active side right
-                          there and p passes — no need to leave the map.
-                          The active side's hand is drawn below every
-                          screen; [ and ] cycle the selected card, z
-                          zooms it into a full detail overlay
+                          active side, DEFCON, VP, and either the card in
+                          play (and the open operation's balance, once one
+                          is) or a prompt to play one. The active side's
+                          hand is drawn below every screen; [ and ] cycle
+                          the selected card, z zooms it into a full detail
+                          overlay, space plays it
   region <name>, 1-6      zoom into one region (europe/asia/middleeast/africa/centralamerica/southamerica)
   country <name>, /<name> a single country's detail, with all its neighbours (name or code)
   set <c> <us|ussr> <n>   set a country's influence
@@ -731,71 +780,86 @@ Commands:
   remove <c> <us|ussr> <n> remove influence (saturates at 0)
   load demo               reload the bundled demo scenario
 
-  status                  whose turn it is, the turn/AR counters, and the
-                          open operation's balance, if any
-  pass                    forfeit the active side's turn with no operation
+  status                  whose turn it is, the turn/AR counters, whichever
+                          card is in play, and the open operation's
+                          balance, if any
+  pass                    forfeit the active side's turn — refused with a
+                          card in play (return it first) or an operation
                           open — or press p inside the interactive map
 
-  influence               start placing influence for the active side with
-                          this turn's 4 ops — or press i inside the
-                          interactive map
+  play <id|name>          take a card from the active side's hand (id,
+                          name prefix, or exact name — the China Card
+                          included, when it's held face up) — its ops
+                          value is what influence/realign/coup spend next;
+                          nothing about the card's text happens — or press
+                          space inside the interactive map
+
+  influence               start placing influence for the active side,
+                          spending the card already in play — or press i
+                          inside the interactive map
   place <country> [n]     place n influence (default 1); 1 op, or 2 in an
                           opponent-controlled country — refused if there's
                           no influence there, in a neighbour, or a border
                           with your own superpower
   undo                    take back the last point placed, refunding it
 
-  realign                 start realigning for the active side with this
-                          turn's 4 ops; view a country (country <name>,
-                          region, or worldmap) to see the modifier and
-                          odds breakdown first — or press a inside the
-                          interactive map
+  realign                 start realigning for the active side, spending
+                          the card already in play; view a country
+                          (country <name>, region, or worldmap) to see the
+                          modifier and odds breakdown first — or press a
+                          inside the interactive map
   roll <country>          resolve one realignment roll for 1 op — resolves
                           immediately onto the board and CANNOT be undone
   undo                    (during a realignment) refuses: rolls can't be
                           taken back, only placement points can
 
-  coup                    start a coup for the active side with this
-                          turn's 4 ops; view a country to see its target
-                          number (stability ×2) and success odds first —
-                          or press o inside the interactive map
-  roll <country>          resolve the coup's one attempt, spending all 4
-                          ops at once — resolves immediately onto the
-                          board and CANNOT be undone; a second `roll`
+  coup                    start a coup for the active side, spending the
+                          card already in play; view a country to see its
+                          target number (stability ×2) and success odds
+                          first — or press o inside the interactive map
+  roll <country>          resolve the coup's one attempt, spending all the
+                          card's ops at once — resolves immediately onto
+                          the board and CANNOT be undone; a second `roll`
                           in the same session is refused
   undo                    (during a coup) refuses: a resolved attempt
                           can't be taken back
 
   confirm                 commit a pending placement, or close a finished
                           realignment or coup (whose rolls are already on
-                          the board) — either way, the turn passes to the
+                          the board) — either way, the card played is
+                          discarded (the China Card instead passes face
+                          down to the opponent) and the turn passes to the
                           other side; unspent ops are simply lost
   cancel                  discard an unconfirmed placement, unspent; or
                           close a realignment or coup, leaving any rolls
-                          already made in place — the turn passes to the
-                          other side either way
-  abandon                 close the operation for free — no turn cost,
-                          unlike cancel — as long as nothing irreversible
-                          has happened: a placement can always abandon,
-                          however many points are pending (they're just
-                          discarded); a realignment or coup can only
+                          already made in place — either way the card
+                          played is discarded the same way `confirm` does,
+                          and the turn passes to the other side
+  abandon                 step back exactly one level, for free — no turn
+                          cost: with an operation open, close *that* (as
+                          long as nothing irreversible has happened — a
+                          placement can always abandon, however many
+                          points are pending, since they're just
+                          discarded; a realignment or coup can only
                           abandon before its first roll or attempt —
-                          cancel is the only way out once one's been made
+                          cancel is the only way out once one's been made),
+                          leaving the card in play; with no operation open
+                          but a card in play, return the card to the hand
+                          instead
                           (while a session is open: map/world show a balance
                           banner, region/country show it inline; all three
                           of worldmap/region/country mark touched countries
-                          and are navigable inside interactive mode — i/a/o
-                          start an operation for the active side and p
-                          passes, + place on region or country, u undo,
-                          c confirm, X cancel, Backspace abandon (free —
-                          always for a placement, only pre-roll for a
-                          realignment or coup) — c and X hand the turn
-                          over without leaving the map, so the next side
-                          can start its own operation from the same
-                          screen; r rolls or attempts a coup only on the
-                          country screen, opened from region with Enter or
-                          r; set/add/remove/load are refused until you
-                          confirm or cancel)
+                          and are navigable inside interactive mode — space
+                          plays the selected card, i/a/o start an operation
+                          with it and p passes, + place on region or
+                          country, u undo, c confirm, X cancel, Backspace
+                          steps back one level the same way `abandon` does
+                          — c and X hand the turn over without leaving the
+                          map, so the next side can start its own card from
+                          the same screen; r rolls or attempts a coup only
+                          on the country screen, opened from region with
+                          Enter or r; set/add/remove/load are refused until
+                          you confirm or cancel)
 
   hand [us|ussr]          the named side's hand (default: active side),
                           as a strip of mini-card boxes — or see it drawn

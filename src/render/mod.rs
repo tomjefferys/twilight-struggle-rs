@@ -614,15 +614,17 @@ pub fn operation_closed_line(op: &crate::ops::Operation, committed: bool, next: 
 /// The map screens' one-line report of what
 /// [`crate::game::Game::abandon`] returned — always the same side still
 /// to act, which is exactly the reassurance worth printing: unlike
-/// [`operation_closed_line`], abandoning never hands the turn over. A
-/// realignment or coup only ever abandons with nothing spent (`abandon`
-/// refuses either the moment a roll's been made); a placement can abandon
-/// with several points pending, so those get their own wording naming
-/// what was undone rather than claiming nothing happened.
+/// [`operation_closed_line`], abandoning never hands the turn over, or
+/// discards the card that funded it — that card is still in play,
+/// ready for another `i`/`a`/`o`. A realignment or coup only ever
+/// abandons with nothing spent (`abandon` refuses either the moment a
+/// roll's been made); a placement can abandon with several points
+/// pending, so those get their own wording naming what was undone rather
+/// than claiming nothing happened.
 pub fn operation_abandoned_line(op: &crate::ops::Operation) -> String {
     let spent = op.ops_spent();
     let detail = if spent == 0 { "nothing spent".to_string() } else { format!("{spent} of {} ops undone", op.ops_total()) };
-    format!("{} {} abandoned — {detail}, {} still to act", op.side(), op.verb(), op.side())
+    format!("{} {} abandoned — {detail}, card still in play", op.side(), op.verb())
 }
 
 /// Victory points, worded the way the dashboard header and the status bar
@@ -636,7 +638,11 @@ pub(crate) fn vp_line(vp: i8) -> String {
     }
 }
 
-/// The keys that open an operation or pass the turn — named by every
-/// view's no-operation hint and by the status bar's own second row, kept
-/// in one place so the four can't drift apart.
-pub(crate) const BEGIN_HINT: &str = "i influence · a realign · o coup · p pass";
+/// The keys that play a card, open an operation with it, or pass the turn
+/// — named by every view's no-operation hint. A region/world-map/country
+/// screen only ever sees `Option<&Operation>`, never whether a card is
+/// already in play, so this stays one card-agnostic sentence covering both
+/// steps rather than two different hints the caller would have to choose
+/// between. The status bar (which does know) uses its own three-state
+/// wording instead — see `statusbar.rs`.
+pub(crate) const BEGIN_HINT: &str = "space play card · i/a/o influence/realign/coup · p pass";

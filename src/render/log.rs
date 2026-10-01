@@ -10,6 +10,7 @@
 //! sum — a `4+4=8` reads as ambiguous once both the die and the ops value
 //! can be 4.
 
+use crate::cards::{CardCatalog, CardId};
 use crate::country::{CountryId, Superpower};
 use crate::game::OperationKind;
 use crate::log::{Event, GameLog, LogEntry};
@@ -26,8 +27,8 @@ const ACTION_WIDTH: usize = 11;
 /// The canonical text of one entry, with no trailing whitespace — matching
 /// what [`Canvas::render`] would emit for the same row, since both trim
 /// trailing spaces the same way.
-pub fn log_entry_line(map: &WorldMap, entry: &LogEntry) -> String {
-    let (action, detail) = action_and_detail(map, entry);
+pub fn log_entry_line(map: &WorldMap, cards: &CardCatalog, entry: &LogEntry) -> String {
+    let (action, detail) = action_and_detail(map, cards, entry);
     let line = format!(
         "{:<STAMP_WIDTH$}{:<AR_WIDTH$}{:<SIDE_WIDTH$}{:<ACTION_WIDTH$}{detail}",
         format!("T{}", entry.turn),
@@ -41,10 +42,10 @@ pub fn log_entry_line(map: &WorldMap, entry: &LogEntry) -> String {
 /// The whole log as plain text: two `#`-prefixed header lines (so a parser
 /// can skip them, and a reader gets a legend), then one [`log_entry_line`]
 /// per entry. What `export` writes.
-pub fn log_text(map: &WorldMap, log: &GameLog) -> String {
+pub fn log_text(map: &WorldMap, cards: &CardCatalog, log: &GameLog) -> String {
     header_lines()
         .into_iter()
-        .chain(log.entries().iter().map(|e| log_entry_line(map, e)))
+        .chain(log.entries().iter().map(|e| log_entry_line(map, cards, e)))
         .collect::<Vec<_>>()
         .join("\n")
 }
@@ -57,13 +58,13 @@ pub fn log_text(map: &WorldMap, log: &GameLog) -> String {
 /// `render_log(..).render(ColorMode::Never)` is guaranteed to equal
 /// [`log_text`] for the same log and the same `tail` — colour never
 /// changes what character ends up in a cell, only how it's painted.
-pub fn render_log(map: &WorldMap, log: &GameLog, tail: Option<usize>) -> Canvas {
+pub fn render_log(map: &WorldMap, cards: &CardCatalog, log: &GameLog, tail: Option<usize>) -> Canvas {
     let entries = match tail {
         Some(n) => log.tail(n),
         None => log.entries(),
     };
     let header = header_lines();
-    let lines: Vec<String> = header.iter().cloned().chain(entries.iter().map(|e| log_entry_line(map, e))).collect();
+    let lines: Vec<String> = header.iter().cloned().chain(entries.iter().map(|e| log_entry_line(map, cards, e))).collect();
     let width = lines.iter().map(|l| l.chars().count()).max().unwrap_or(1).max(1);
     let mut canvas = Canvas::new(width, lines.len());
 
@@ -77,7 +78,7 @@ pub fn render_log(map: &WorldMap, log: &GameLog, tail: Option<usize>) -> Canvas 
             Some(Superpower::Ussr) => Color::Ussr,
             None => Color::Muted,
         };
-        let (action, detail) = action_and_detail(map, entry);
+        let (action, detail) = action_and_detail(map, cards, entry);
         let prefix = format!(
             "{:<STAMP_WIDTH$}{:<AR_WIDTH$}{:<SIDE_WIDTH$}{:<ACTION_WIDTH$}",
             format!("T{}", entry.turn),
@@ -103,8 +104,12 @@ fn side_label(side: Option<Superpower>) -> String {
 /// The action keyword and the detail text for one entry. Split out from
 /// [`log_entry_line`] so [`render_log`] can style the two parts
 /// differently without duplicating the match.
-fn action_and_detail(map: &WorldMap, entry: &LogEntry) -> (&'static str, String) {
+fn action_and_detail(map: &WorldMap, cards: &CardCatalog, entry: &LogEntry) -> (&'static str, String) {
     match &entry.event {
+        // The first thing a turn does — logged, once irrevocable, before
+        // the operation it funds has necessarily closed (see
+        // `Game::log_card_selected`'s own doc for exactly when).
+        Event::Selected { card } => ("card", selected_detail(cards, *card)),
         // The placement analogue of a resolved roll: its own "influence"
         // line, pushed just before the `Closed` entry that reports whether
         // it was confirmed or cancelled.
@@ -133,6 +138,12 @@ fn ops_str(spent: u8, total: u8) -> String {
     } else {
         format!("{spent} of {total} ops")
     }
+}
+
+/// The card named, with its ops value — e.g. `Fidel (2 ops)`.
+fn selected_detail(cards: &CardCatalog, card: CardId) -> String {
+    let card = cards.card(card);
+    format!("{} ({} ops)", card.name, card.ops)
 }
 
 /// `Event::Placed` is only ever pushed with at least one country (see its
