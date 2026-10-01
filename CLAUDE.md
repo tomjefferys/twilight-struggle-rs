@@ -465,6 +465,22 @@ moves.
     the China Card specifically, the flags line is replaced with its
     face-up/down status (`china_face_up`), since the normal flags say
     nothing useful about it.
+  - `roll.rs` — `render_roll_result`, the interactive map's post-roll
+    modal for a resolved realignment roll or coup attempt: a titled box
+    (`Realignment · Poland` / `Coup · Iran`) spelling out each side's die
+    and modifier breakdown (`Modifiers::reasons`, word-wrapped onto its
+    own indented line so a long reason list never widens the box), who
+    won and by how much, the resulting influence change in the target
+    country, and a `Control: X → Y` line if that flipped — bordered in
+    the winner's colour (`Muted` for a tie or a failed coup). Takes a
+    `RollReport` (`side`, the `RollOutcome` `Game::roll` returned, and the
+    target's influence for *both* sides just before the roll — the one
+    thing the result itself doesn't carry, since it only records what
+    changed) and an optional `(n, total)` queue position, appended to the
+    "Enter to continue" hint when more rolls are queued behind this one.
+    Replaces the dense one-line `roll_result_line`/`coup_result_line`
+    summaries for interactive mode specifically; those two stay as they
+    are for the REPL's own `roll` command, which has no modal to show.
 
   `render_region`, `render_world_map`, and `render_country` all take an
   optional `&Operation` (`region.rs`/`worldmap.rs`/`country.rs`). `None`
@@ -630,20 +646,34 @@ moves.
   country screen, and `u` always refuses there: a resolved roll or
   attempt can't be taken back. `Esc`/`q` leave a still-open session
   untouched rather than clearing it, so it can be resumed from the REPL
-  or by reopening the map. A roll's outcome is shown in the same message
-  row as a refusal, but — unlike a refusal, and unlike a confirm/cancel/
-  abandon/pass/begin/play report, all of which the status bar's own next
-  redraw already reflects — survives exactly one more keypress before being
-  cleared, via a `sticky` flag set alongside it, since it's the one
-  message whose content isn't otherwise recoverable from the screen.
+  or by reopening the map. A roll's outcome — unlike a refusal, or a
+  confirm/cancel/abandon/pass/begin/play report, all of which the status
+  bar's own next redraw already reflects — isn't otherwise recoverable
+  from the screen, so rather than a message-row line it opens
+  `render::render_roll_result` as a modal, blitted centred over whichever
+  screen is showing (`blit_centred`, shared with the hand's zoomed-card
+  overlay below) and dismissed only by Enter (or Esc, as a synonym) —
+  every other key is swallowed while it's up, the same modal precedence
+  the zoom overlay has, and the two can never be open together (both
+  close the other the instant they'd open). Queued rather than a single
+  slot (`roll_modal: VecDeque<RollReport>`), since a single keypress can
+  still only resolve one roll at a time but an AI's turn can make several
+  in a row; each is shown in order, and the hint row names its position
+  once more than one is queued.
   `run` also takes `ai_side: Option<Superpower>` and `&mut RandomAi`,
   threaded through from `Session` — `maybe_run_ai_turn` runs before the
   very first draw and again after every handled keypress, and, whenever
   `ai_side` matches `Game::active`, plays that whole turn via
   `ai::play_turn`, folds its log entries into one message line (closing
-  any open zoom overlay and marking the message `sticky`, the same
-  one-extra-keypress survival a roll's own outcome gets), and leaves it
-  for that keypress's own `draw` call to show.
+  any open zoom overlay and marking the message `sticky`, the one
+  remaining use of that flag — the one-extra-keypress survival the AI's
+  own summary line still needs, now that a roll's outcome has its own
+  modal instead), reconstructs a `RollReport` for each realignment roll
+  or coup attempt the turn made (`reconstruct_roll_reports`, walking the
+  turn's own new log entries in reverse from the real board to recover
+  each roll's "before" state — the one thing the log doesn't carry) and
+  queues them the same way the human's own `r` does, and leaves the
+  message for that keypress's own `draw` call to show.
 
   The active side's hand (`render::render_hand`) is drawn as a fixed-
   height strip pinned below every screen — global, like the status bar
