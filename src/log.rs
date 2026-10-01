@@ -7,14 +7,15 @@
 //! job, not this module's.
 //!
 //! Every operation closes with an [`Event::Closed`] entry — `confirm`'s or
-//! `cancel`'s own line, naming the operation kind and its final ops
-//! balance — mirroring how a realignment or coup's dice already get their
-//! own entries the instant they resolve, before the operation itself
-//! closes: [`crate::ops::InfluencePlacement`]'s individual points are
-//! speculative until then, so they collapse into a single
-//! [`Event::Placed`] pushed alongside the `Closed` entry, the placement
-//! analogue of a resolved roll.
+//! `cancel`'s own line, naming the operation kind, the card that funded
+//! it, and its final ops balance — mirroring how a realignment or coup's
+//! dice already get their own entries the instant they resolve, before the
+//! operation itself closes: [`crate::ops::InfluencePlacement`]'s
+//! individual points are speculative until then, so they collapse into a
+//! single [`Event::Placed`] pushed alongside the `Closed` entry, the
+//! placement analogue of a resolved roll.
 
+use crate::cards::CardId;
 use crate::country::{CountryId, Superpower};
 use crate::game::OperationKind;
 use crate::ops::{CoupResult, RollResult};
@@ -40,13 +41,17 @@ pub enum Event {
     /// realignment's or coup's rolls are already in the log as their own
     /// entries by the time this is pushed; a placement's points arrive in
     /// the immediately preceding [`Event::Placed`] entry instead, since it
-    /// has no rolls of its own. `rolls` is only meaningful for
-    /// `OperationKind::Realign` — a coup resolves at most one attempt and
-    /// a placement none, so both leave it at 0 and the renderer ignores it
-    /// for those kinds.
+    /// has no rolls of its own. `card` is the card whose ops funded the
+    /// operation — [`crate::game::Game::play_card`]'s own entry doesn't
+    /// exist (playing a card isn't logged on its own; only what it paid for
+    /// is), so this is the one place the card shows up. `rolls` is only
+    /// meaningful for `OperationKind::Realign` — a coup resolves at most
+    /// one attempt and a placement none, so both leave it at 0 and the
+    /// renderer ignores it for those kinds.
     Closed {
         kind: OperationKind,
         committed: bool,
+        card: CardId,
         rolls: u8,
         ops_spent: u8,
         ops_total: u8,

@@ -1,9 +1,9 @@
 //! Turn structure: alternating US/USSR action rounds, enforced. `Game`
-//! owns the three things that have to move in lockstep — the status
-//! (turn/action round/active side), the board, and whichever [`Operation`]
-//! is open — so "an operation belongs to the active side, and closing it
-//! passes the turn" lives in exactly one place, rather than being
-//! duplicated between the REPL and interactive mode.
+//! owns the four things that have to move in lockstep — the status
+//! (turn/action round/active side), the board, whichever card is in play,
+//! and whichever [`Operation`] is open — so "an operation spends a played
+//! card's ops, and closing it passes the turn" lives in exactly one place,
+//! rather than being duplicated between the REPL and interactive mode.
 //!
 //! This module is deliberately the only place that mutates
 //! [`GameStatus::active`], `turn`, or `action_round` — see [`Game::advance`].
@@ -13,17 +13,21 @@
 //! play on a copy without touching the real game.
 //!
 //! Rule 6.x's one-card-one-action shape means a turn spends exactly one
-//! operation: [`Game::begin`] opens it with the active side's 4 ops, and
+//! card on exactly one operation: [`Game::play_card`] takes a card from the
+//! active side's hand (nothing about its text or event — just its ops
+//! value), then [`Game::begin`] opens an operation with that many ops, and
 //! [`Game::confirm`]/[`Game::cancel`] — the only two ways to close it —
-//! both hand the turn to the other side. Ending a turn with ops unspent is
-//! allowed (a confirm needn't spend everything, matching the ops modules'
-//! own behaviour) and simply forfeits them; [`Game::pass`] is the same
-//! forfeiture with no operation opened at all.
+//! both discard the card and hand the turn to the other side. Ending a turn
+//! with ops unspent is allowed (a confirm needn't spend everything,
+//! matching the ops modules' own behaviour) and simply forfeits them;
+//! [`Game::pass`] is refused with a card in play — there's nothing to pass
+//! on once a card's been committed to the turn, so [`Game::return_card`] is
+//! the way out of a card played by mistake.
 
 use std::fmt;
 
 use crate::board::Board;
-use crate::cards::{CardId, Hands};
+use crate::cards::{CardCatalog, CardId, Hands, CHINA_CARD};
 use crate::country::{CountryId, Superpower};
 use crate::dice::Dice;
 use crate::log::{Event, GameLog, LogEntry};
@@ -34,11 +38,6 @@ use crate::ops::{
 use crate::ops::{Coup, CoupResult};
 use crate::scenario::Scenario;
 use crate::status::GameStatus;
-
-/// Operation points the active side gets each turn. There is no per-turn
-/// pool separate from this — an operation's own `ops_total` *is* the
-/// turn's budget, since a turn spends exactly one operation.
-pub const OPS_PER_ACTION_ROUND: u8 = 4;
 
 /// Which kind of operation [`Game::begin`] should open.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -79,6 +78,21 @@ pub enum GameError {
     /// [`Game::cancel`] can close it now, which keeps the roll and costs
     /// the turn the normal way.
     CannotAbandon { verb: &'static str, ops_spent: u8, ops_total: u8 },
+    /// [`Game::begin`] needs a card in play to know how many ops to open
+    /// with — [`Game::play_card`] first.
+    NoCard,
+    /// [`Game::play_card`] refused: a card is already in play, or
+    /// [`Game::pass`] refused for the same reason — there's nothing to pass
+    /// on once a card's been committed to the turn.
+    CardInPlay { card: CardId },
+    /// [`Game::play_card`] refused: `card` isn't in the active side's hand
+    /// (or, for the China Card, the active side doesn't hold it).
+    NotInHand,
+    /// [`Game::play_card`] refused: a scoring card has no ops to spend.
+    ScoringCard,
+    /// [`Game::play_card`] refused: the China Card is face down, so it
+    /// can't be played for its ops this turn.
+    ChinaCardFaceDown,
     Placement(PlacementError),
     Realign(RealignError),
     Coup(CoupError),
@@ -97,6 +111,11 @@ impl fmt::Display for GameError {
             GameError::CannotAbandon { verb, ops_spent, ops_total } => {
                 write!(f, "a {verb} session already has {ops_spent} of {ops_total} ops spent on a roll that can't be undone — cancel it instead")
             }
+            GameError::NoCard => write!(f, "no card in play — play one first"),
+            GameError::CardInPlay { card } => write!(f, "card #{card} is already in play — play an operation with it, or return it first"),
+            GameError::NotInHand => write!(f, "that card isn't in your hand"),
+            GameError::ScoringCard => write!(f, "a scoring card has no ops to spend"),
+            GameError::ChinaCardFaceDown => write!(f, "the China Card is face down and can't be played yet"),
             GameError::Placement(e) => write!(f, "{e}"),
             GameError::Realign(e) => write!(f, "{e}"),
             GameError::Coup(e) => write!(f, "{e}"),
@@ -124,8 +143,21 @@ impl From<CoupError> for GameError {
     }
 }
 
+/// A card taken from the active side's hand via [`Game::play_card`], not
+/// yet discarded — its ops value is what [`Game::begin`] opens the next
+/// operation with. `hand_index` is where it came from, so
+/// [`Game::return_card`] can put it back in the same spot; `None` for the
+/// China Card, which never lives in a [`Hands`] list in the first place.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct PlayedCard {
+    id: CardId,
+    ops: u8,
+    hand_index: Option<usize>,
+}
+
 /// The live game: status (including whose turn it is), the committed
-/// board, and whichever operation the active side currently has open.
+/// board, whichever card is currently in play, and whichever operation the
+/// active side currently has open.
 ///
 /// `Clone` is cheap, per [`Board`]'s own design note, and exists for the
 /// same reason: AI lookahead over a copy, without touching the real game.
@@ -133,18 +165,20 @@ impl From<CoupError> for GameError {
 pub struct Game {
     status: GameStatus,
     board: Board,
+    card: Option<PlayedCard>,
     op: Option<Operation>,
     log: GameLog,
     hands: Hands,
 }
 
 impl Game {
-    /// Starts from a scenario's status, board, and hands, with no
-    /// operation open and an empty history.
+    /// Starts from a scenario's status, board, and hands, with no card
+    /// played, no operation open, and an empty history.
     pub fn from_scenario(scenario: &Scenario) -> Self {
         Game {
             status: scenario.status,
             board: scenario.board.clone(),
+            card: None,
             op: None,
             log: GameLog::new(),
             hands: scenario.hands.clone(),
@@ -186,20 +220,27 @@ impl Game {
         });
     }
 
-    /// A copy for AI lookahead: same status, board, and open operation,
-    /// but an empty history. `Game` is cheap to clone by design (see the
-    /// module doc), and the log is the one field whose size isn't
+    /// A copy for AI lookahead: same status, board, card in play, and open
+    /// operation, but an empty history. `Game` is cheap to clone by design
+    /// (see the module doc), and the log is the one field whose size isn't
     /// bounded — a search that clones many nodes should use this instead
     /// of [`Clone::clone`], so lookahead doesn't drag a growing `Vec`
     /// through every branch it never plays out.
     pub fn lookahead(&self) -> Game {
-        Game { status: self.status, board: self.board.clone(), op: self.op.clone(), log: GameLog::new(), hands: self.hands.clone() }
+        Game {
+            status: self.status,
+            board: self.board.clone(),
+            card: self.card,
+            op: self.op.clone(),
+            log: GameLog::new(),
+            hands: self.hands.clone(),
+        }
     }
 
     /// `side`'s held cards, in hand order. Doesn't include the China Card
-    /// ([`crate::cards::CHINA_CARD`]) — see [`Hands`]'s own doc. No card
-    /// can be played or drawn yet, so this only ever reflects the
-    /// scenario's starting deal.
+    /// ([`crate::cards::CHINA_CARD`]) — see [`Hands`]'s own doc — nor
+    /// whatever's currently [`Game::card_in_play`], which
+    /// [`Game::play_card`] has already removed.
     pub fn hand(&self, side: Superpower) -> &[CardId] {
         self.hands.hand(side)
     }
@@ -235,9 +276,19 @@ impl Game {
 
     /// Ops available to the active side right now: the open operation's
     /// own `remaining()` if one is open (so this and the operation never
-    /// disagree mid-action), otherwise the full per-turn allowance.
+    /// disagree mid-action), else the played card's own ops if one's in
+    /// play but no operation's open yet, else 0 — there's no ops to spend
+    /// with nothing played.
     pub fn ops_available(&self) -> u8 {
-        self.op.as_ref().map_or(OPS_PER_ACTION_ROUND, Operation::remaining)
+        self.op.as_ref().map(Operation::remaining).or(self.card.map(|c| c.ops)).unwrap_or(0)
+    }
+
+    /// The card currently in play, if any — taken from the active side's
+    /// hand by [`Game::play_card`], not yet discarded by
+    /// [`Game::confirm`]/[`Game::cancel`]. Its ops value is what
+    /// [`Game::begin`] will open the next operation with.
+    pub fn card_in_play(&self) -> Option<CardId> {
+        self.card.map(|c| c.id)
     }
 
     pub fn operation(&self) -> Option<&Operation> {
@@ -255,19 +306,81 @@ impl Game {
         }
     }
 
-    /// Opens a new operation for the active side with a full turn's ops.
-    /// This is the entire enforcement mechanism: there is no argument
-    /// through which a caller could name the wrong side or the wrong ops
-    /// count. Refused if an operation is already open.
-    pub fn begin(&mut self, kind: OperationKind) -> Result<(), GameError> {
+    /// Takes `id` from the active side's hand, making it the
+    /// [`Game::card_in_play`] whose ops value the next [`Game::begin`]
+    /// spends — nothing about the card's text or event happens here, only
+    /// its ops. Refused if a card is already in play
+    /// ([`GameError::CardInPlay`]), an operation is open (opening one
+    /// implies a card was already played), the card has no ops to spend
+    /// ([`GameError::ScoringCard`]), or it isn't actually available to the
+    /// active side ([`GameError::NotInHand`]/[`GameError::ChinaCardFaceDown`]).
+    ///
+    /// The China Card ([`CHINA_CARD`]) is the one exception to "in your
+    /// hand": it never lives in a [`Hands`] list (see that type's own
+    /// doc), so it's playable instead whenever `GameStatus::china_card`
+    /// names the active side *and* `china_card_face_up` is true — a side
+    /// that's just received it face down (see [`Game::confirm`]/`cancel`)
+    /// can't play it again until the next turn flips it back up
+    /// ([`Game::advance`]).
+    pub fn play_card(&mut self, cards: &CardCatalog, id: CardId) -> Result<(), GameError> {
+        if let Some(card) = self.card {
+            return Err(GameError::CardInPlay { card: card.id });
+        }
         if let Some(op) = &self.op {
             return Err(GameError::OperationOpen { verb: op.verb(), remaining: op.remaining(), total: op.ops_total() });
         }
         let side = self.status.active;
+        let card = cards.card(id);
+        if card.scoring {
+            return Err(GameError::ScoringCard);
+        }
+        let hand_index = if id == CHINA_CARD {
+            if self.status.china_card != side {
+                return Err(GameError::NotInHand);
+            }
+            if !self.status.china_card_face_up {
+                return Err(GameError::ChinaCardFaceDown);
+            }
+            None
+        } else {
+            Some(self.hands.remove(side, id).ok_or(GameError::NotInHand)?)
+        };
+        self.card = Some(PlayedCard { id, ops: card.ops, hand_index });
+        Ok(())
+    }
+
+    /// Puts the card currently in play back in the active side's hand at
+    /// the index it was taken from (a no-op position for the China Card,
+    /// which was never removed from one) — the free undo for a mistaken
+    /// [`Game::play_card`]. Refused while an operation is open (abandon it
+    /// first via [`Game::abandon`]) or with no card in play.
+    pub fn return_card(&mut self) -> Result<CardId, GameError> {
+        if let Some(op) = &self.op {
+            return Err(GameError::OperationOpen { verb: op.verb(), remaining: op.remaining(), total: op.ops_total() });
+        }
+        let card = self.card.take().ok_or(GameError::NoCard)?;
+        if let Some(index) = card.hand_index {
+            self.hands.insert(self.status.active, index, card.id);
+        }
+        Ok(card.id)
+    }
+
+    /// Opens a new operation for the active side, spending the ops of
+    /// whichever card is currently in play. This is the entire enforcement
+    /// mechanism beyond the card itself: there is no argument through which
+    /// a caller could name the wrong side or the wrong ops count. Refused
+    /// if an operation is already open, or if no card has been played yet
+    /// ([`GameError::NoCard`] — [`Game::play_card`] first).
+    pub fn begin(&mut self, kind: OperationKind) -> Result<(), GameError> {
+        if let Some(op) = &self.op {
+            return Err(GameError::OperationOpen { verb: op.verb(), remaining: op.remaining(), total: op.ops_total() });
+        }
+        let ops = self.card.ok_or(GameError::NoCard)?.ops;
+        let side = self.status.active;
         self.op = Some(match kind {
-            OperationKind::Influence => Operation::Influence(InfluencePlacement::new(side, OPS_PER_ACTION_ROUND, &self.board)),
-            OperationKind::Realign => Operation::Realign(Realignment::new(side, OPS_PER_ACTION_ROUND, &self.board)),
-            OperationKind::Coup => Operation::Coup(Coup::new(side, OPS_PER_ACTION_ROUND, &self.board)),
+            OperationKind::Influence => Operation::Influence(InfluencePlacement::new(side, ops, &self.board)),
+            OperationKind::Realign => Operation::Realign(Realignment::new(side, ops, &self.board)),
+            OperationKind::Coup => Operation::Coup(Coup::new(side, ops, &self.board)),
         });
         Ok(())
     }
@@ -333,6 +446,7 @@ impl Game {
             self.board = p.board().clone();
         }
         self.log_close(&op, true);
+        self.discard_played_card();
         self.advance();
         Ok(op)
     }
@@ -344,6 +458,7 @@ impl Game {
     pub fn cancel(&mut self) -> Result<Operation, GameError> {
         let op = self.op.take().ok_or(GameError::NoOperation)?;
         self.log_close(&op, false);
+        self.discard_played_card();
         self.advance();
         Ok(op)
     }
@@ -382,10 +497,15 @@ impl Game {
     }
 
     /// Forfeits the active side's turn without opening an operation.
-    /// Refused if one is already open — cancel it first.
+    /// Refused if one is already open — cancel it first — or if a card is
+    /// in play: once a card's been taken from the hand, there's nothing
+    /// left to "pass" on, so [`Game::return_card`] is the way out instead.
     pub fn pass(&mut self) -> Result<(), GameError> {
         if let Some(op) = &self.op {
             return Err(GameError::OperationOpen { verb: op.verb(), remaining: op.remaining(), total: op.ops_total() });
+        }
+        if let Some(card) = self.card {
+            return Err(GameError::CardInPlay { card: card.id });
         }
         self.log.push(LogEntry {
             turn: self.status.turn,
@@ -400,11 +520,14 @@ impl Game {
     /// Pushes the log entry (entries, for a placement) for a closing
     /// operation — called from `confirm`/`cancel` *before* [`Game::advance`],
     /// so they carry the turn/AR the operation actually happened in, not
-    /// the next one.
+    /// the next one. Reads `self.card` for the `Closed` entry's own card —
+    /// still `Some` at this point, since [`Game::discard_played_card`]
+    /// hasn't run yet.
     fn log_close(&mut self, op: &Operation, committed: bool) {
         let turn = self.status.turn;
         let action_round = self.status.action_round;
         let side = Some(op.side());
+        let card = self.card.expect("an open operation always has a card played first").id;
         let mut push = |event| self.log.push(LogEntry { turn, action_round, side, event });
 
         let (kind, rolls, ops_spent, ops_total) = match op {
@@ -424,12 +547,30 @@ impl Game {
             Operation::Realign(r) => (OperationKind::Realign, r.history().len() as u8, r.ops_spent(), r.ops_total()),
             Operation::Coup(c) => (OperationKind::Coup, c.result().is_some() as u8, c.ops_spent(), c.ops_total()),
         };
-        push(Event::Closed { kind, committed, rolls, ops_spent, ops_total });
+        push(Event::Closed { kind, committed, card, rolls, ops_spent, ops_total });
+    }
+
+    /// Discards whichever card was in play — called from `confirm`/`cancel`
+    /// only, the two places a played card is ever actually spent (`abandon`
+    /// leaves it in play; `return_card` puts it straight back in the hand).
+    /// The China Card is the one exception to "discard pile": instead of
+    /// leaving play, it passes face down to the opponent (a simplified
+    /// rule 6.1 — no Asia Scoring bonus modelled yet) and turns back face
+    /// up once [`Game::advance`] rolls the turn over to a new one.
+    fn discard_played_card(&mut self) {
+        let Some(card) = self.card.take() else { return };
+        if card.id == CHINA_CARD {
+            self.status.china_card = self.status.active.opponent();
+            self.status.china_card_face_up = false;
+        } else {
+            self.hands.discard(card.id);
+        }
     }
 
     /// Hands the turn to the other side: USSR to USA, or USA to USSR —
     /// which also completes an action round, so it increments
-    /// `action_round`, rolling `turn` over and resetting `action_round`
+    /// `action_round`, rolling `turn` over (and flipping the China Card
+    /// face up again, wherever it's landed) and resetting `action_round`
     /// to 1 once it passes `action_rounds_per_turn`. The only writer of
     /// `active`/`turn`/`action_round`, called from `confirm`, `cancel`,
     /// and `pass` — nowhere else.
@@ -442,6 +583,7 @@ impl Game {
                 if self.status.action_round > self.status.action_rounds_per_turn {
                     self.status.action_round = 1;
                     self.status.turn += 1;
+                    self.status.china_card_face_up = true;
                 }
             }
         }
@@ -467,20 +609,49 @@ mod tests {
         map.id_by_name(name).unwrap_or_else(|| panic!("no country named {name:?}"))
     }
 
-    /// A scenario with one country pre-seeded, so realignment/coup targets
-    /// (which need opponent presence) have something to aim at.
-    fn scenario_with(map: &WorldMap, cards: &CardCatalog, country: &str, us: u8, ussr: u8) -> Scenario {
-        let json = format!(r#"{{"influence":{{"{country}":[{us},{ussr}]}}}}"#);
+    /// Every test scenario deals the same four cards, so any test can play
+    /// a card without having to spell out a hand of its own: USSR gets
+    /// Socialist Governments (3 ops) and Fidel (2 ops); US gets Duck and
+    /// Cover (3 ops) and Five Year Plan (3 ops).
+    const HANDS_JSON: &str = r#""hands":{"us":["Duck and Cover","Five Year Plan"],"ussr":["Socialist Governments","Fidel"]}"#;
+
+    fn scenario(map: &WorldMap, cards: &CardCatalog) -> Scenario {
+        let json = format!("{{{HANDS_JSON}}}");
         Scenario::from_json(map, cards, &json).unwrap()
+    }
+
+    /// A scenario with one country pre-seeded, so realignment/coup targets
+    /// (which need opponent presence) have something to aim at — plus the
+    /// same standard hands every other scenario here deals.
+    fn scenario_with(map: &WorldMap, cards: &CardCatalog, country: &str, us: u8, ussr: u8) -> Scenario {
+        let json = format!(r#"{{"influence":{{"{country}":[{us},{ussr}]}},{HANDS_JSON}}}"#);
+        Scenario::from_json(map, cards, &json).unwrap()
+    }
+
+    /// A scenario with `status_json` (a `GameStatus`-shaped object body)
+    /// overriding the defaults, plus the same standard hands.
+    fn scenario_with_status(map: &WorldMap, cards: &CardCatalog, status_json: &str) -> Scenario {
+        let json = format!(r#"{{"status":{status_json},{HANDS_JSON}}}"#);
+        Scenario::from_json(map, cards, &json).unwrap()
+    }
+
+    /// Plays `name` (one of the cards [`scenario`]/[`scenario_with`] deal)
+    /// for the active side, returning its id — the one step every test
+    /// now needs before `begin` will open an operation.
+    fn play(game: &mut Game, cards: &CardCatalog, name: &str) -> CardId {
+        let id = cards.id_by_name(name).unwrap_or_else(|| panic!("no card named {name:?}"));
+        game.play_card(cards, id).unwrap();
+        id
     }
 
     #[test]
     fn ussr_acts_first_and_confirm_hands_over_to_us() {
         let map = map();
         let cards = cards();
-        let mut game = Game::from_scenario(&Scenario::from_json(&map, &cards, "{}").unwrap());
+        let mut game = Game::from_scenario(&scenario(&map, &cards));
         assert_eq!(game.active(), Ussr);
 
+        play(&mut game, &cards, "Socialist Governments");
         game.begin(OperationKind::Influence).unwrap();
         assert_eq!(game.operation().unwrap().side(), Ussr);
         game.confirm().unwrap();
@@ -492,13 +663,15 @@ mod tests {
     fn action_round_only_increments_after_us_acts() {
         let map = map();
         let cards = cards();
-        let mut game = Game::from_scenario(&Scenario::from_json(&map, &cards, "{}").unwrap());
+        let mut game = Game::from_scenario(&scenario(&map, &cards));
         let start_ar = game.status().action_round;
 
+        play(&mut game, &cards, "Socialist Governments");
         game.begin(OperationKind::Influence).unwrap();
         game.confirm().unwrap(); // USSR -> US
         assert_eq!(game.status().action_round, start_ar);
 
+        play(&mut game, &cards, "Duck and Cover");
         game.begin(OperationKind::Influence).unwrap();
         game.confirm().unwrap(); // US -> USSR
         assert_eq!(game.status().action_round, start_ar + 1);
@@ -508,15 +681,20 @@ mod tests {
     fn action_round_rolls_the_turn_over_when_it_passes_the_limit() {
         let map = map();
         let cards = cards();
-        let json = r#"{"status":{"turn":1,"action_round":2,"action_rounds_per_turn":2}}"#;
-        let mut game = Game::from_scenario(&Scenario::from_json(&map, &cards, json).unwrap());
+        let mut game = Game::from_scenario(&scenario_with_status(
+            &map,
+            &cards,
+            r#"{"turn":1,"action_round":2,"action_rounds_per_turn":2}"#,
+        ));
         assert_eq!(game.status().active, Ussr);
 
+        play(&mut game, &cards, "Socialist Governments");
         game.begin(OperationKind::Influence).unwrap();
         game.confirm().unwrap(); // USSR -> US, still AR 2
         assert_eq!(game.status().turn, 1);
         assert_eq!(game.status().action_round, 2);
 
+        play(&mut game, &cards, "Duck and Cover");
         game.begin(OperationKind::Influence).unwrap();
         game.confirm().unwrap(); // US -> USSR: AR 2 was the last of the turn
         assert_eq!(game.status().turn, 2);
@@ -527,28 +705,39 @@ mod tests {
     fn begin_is_refused_while_an_operation_is_open() {
         let map = map();
         let cards = cards();
-        let mut game = Game::from_scenario(&Scenario::from_json(&map, &cards, "{}").unwrap());
+        let mut game = Game::from_scenario(&scenario(&map, &cards));
+        play(&mut game, &cards, "Socialist Governments");
         game.begin(OperationKind::Influence).unwrap();
         assert!(matches!(game.begin(OperationKind::Coup), Err(GameError::OperationOpen { .. })));
     }
 
     #[test]
-    fn every_operation_opens_with_the_active_side_and_a_full_turns_ops() {
+    fn begin_is_refused_with_no_card_in_play() {
         let map = map();
         let cards = cards();
-        let mut game = Game::from_scenario(&Scenario::from_json(&map, &cards, "{}").unwrap());
+        let mut game = Game::from_scenario(&scenario(&map, &cards));
+        assert!(matches!(game.begin(OperationKind::Influence), Err(GameError::NoCard)));
+    }
+
+    #[test]
+    fn every_operation_opens_with_the_active_side_and_the_played_cards_ops() {
+        let map = map();
+        let cards = cards();
+        let mut game = Game::from_scenario(&scenario(&map, &cards));
+        play(&mut game, &cards, "Socialist Governments"); // 3 ops
         game.begin(OperationKind::Realign).unwrap();
         let op = game.operation().unwrap();
         assert_eq!(op.side(), Ussr);
-        assert_eq!(op.ops_total(), OPS_PER_ACTION_ROUND);
-        assert_eq!(game.ops_available(), OPS_PER_ACTION_ROUND);
+        assert_eq!(op.ops_total(), 3);
+        assert_eq!(game.ops_available(), 3);
     }
 
     #[test]
     fn cancel_advances_the_turn_just_like_confirm() {
         let map = map();
         let cards = cards();
-        let mut game = Game::from_scenario(&Scenario::from_json(&map, &cards, "{}").unwrap());
+        let mut game = Game::from_scenario(&scenario(&map, &cards));
+        play(&mut game, &cards, "Socialist Governments");
         game.begin(OperationKind::Influence).unwrap();
         game.cancel().unwrap();
         assert_eq!(game.active(), Us);
@@ -558,7 +747,7 @@ mod tests {
     fn pass_advances_with_no_operation_open() {
         let map = map();
         let cards = cards();
-        let mut game = Game::from_scenario(&Scenario::from_json(&map, &cards, "{}").unwrap());
+        let mut game = Game::from_scenario(&scenario(&map, &cards));
         game.pass().unwrap();
         assert_eq!(game.active(), Us);
     }
@@ -567,16 +756,26 @@ mod tests {
     fn pass_is_refused_while_an_operation_is_open() {
         let map = map();
         let cards = cards();
-        let mut game = Game::from_scenario(&Scenario::from_json(&map, &cards, "{}").unwrap());
+        let mut game = Game::from_scenario(&scenario(&map, &cards));
+        play(&mut game, &cards, "Fidel");
         game.begin(OperationKind::Coup).unwrap();
         assert!(matches!(game.pass(), Err(GameError::OperationOpen { .. })));
+    }
+
+    #[test]
+    fn pass_is_refused_with_a_card_in_play_but_no_operation_open() {
+        let map = map();
+        let cards = cards();
+        let mut game = Game::from_scenario(&scenario(&map, &cards));
+        play(&mut game, &cards, "Fidel");
+        assert!(matches!(game.pass(), Err(GameError::CardInPlay { .. })));
     }
 
     #[test]
     fn abandon_is_refused_with_no_operation_open() {
         let map = map();
         let cards = cards();
-        let mut game = Game::from_scenario(&Scenario::from_json(&map, &cards, "{}").unwrap());
+        let mut game = Game::from_scenario(&scenario(&map, &cards));
         assert!(matches!(game.abandon(), Err(GameError::NoOperation)));
     }
 
@@ -584,11 +783,13 @@ mod tests {
     fn an_untouched_operation_can_be_abandoned_without_costing_the_turn() {
         let map = map();
         let cards = cards();
-        let mut game = Game::from_scenario(&Scenario::from_json(&map, &cards, "{}").unwrap());
+        let mut game = Game::from_scenario(&scenario(&map, &cards));
+        let sg = play(&mut game, &cards, "Socialist Governments");
         game.begin(OperationKind::Influence).unwrap();
         game.abandon().unwrap();
         assert_eq!(game.active(), Ussr, "abandoning before anything's spent shouldn't hand the turn over");
         assert!(game.operation().is_none());
+        assert_eq!(game.card_in_play(), Some(sg), "the card stays in play — abandon only closes the operation");
     }
 
     #[test]
@@ -599,7 +800,8 @@ mod tests {
         let map = map();
         let cards = cards();
         let poland = id(&map, "Poland"); // borders the USSR itself
-        let mut game = Game::from_scenario(&Scenario::from_json(&map, &cards, "{}").unwrap());
+        let mut game = Game::from_scenario(&scenario(&map, &cards));
+        play(&mut game, &cards, "Socialist Governments"); // 3 ops
         game.begin(OperationKind::Influence).unwrap();
         game.place(&map, poland).unwrap();
         game.place(&map, poland).unwrap();
@@ -610,7 +812,7 @@ mod tests {
         assert_eq!(game.active(), Ussr, "abandoning a placement shouldn't hand the turn over");
         assert!(game.operation().is_none());
         assert_eq!(game.board().influence(poland, Ussr), 0, "every pending point should be discarded, not committed");
-        assert_eq!(game.ops_available(), OPS_PER_ACTION_ROUND, "every op it cost should be refunded");
+        assert_eq!(game.ops_available(), 3, "every op it cost should be refunded, since the card stays in play");
     }
 
     #[test]
@@ -618,7 +820,8 @@ mod tests {
         let map = map();
         let cards = cards();
         let poland = id(&map, "Poland");
-        let mut game = Game::from_scenario(&Scenario::from_json(&map, &cards, "{}").unwrap());
+        let mut game = Game::from_scenario(&scenario(&map, &cards));
+        play(&mut game, &cards, "Socialist Governments");
         game.begin(OperationKind::Influence).unwrap();
         game.place(&map, poland).unwrap();
         game.undo(&map).unwrap();
@@ -632,6 +835,7 @@ mod tests {
         let cards = cards();
         let poland = id(&map, "Poland");
         let mut game = Game::from_scenario(&scenario_with(&map, &cards, "Poland", 1, 0));
+        play(&mut game, &cards, "Socialist Governments");
         game.begin(OperationKind::Realign).unwrap();
         let mut dice = Dice::from_seed(0);
         game.roll(&map, poland, &mut dice).unwrap();
@@ -644,17 +848,19 @@ mod tests {
         let cards = cards();
         let poland = id(&map, "Poland");
         let mut game = Game::from_scenario(&scenario_with(&map, &cards, "Poland", 1, 0));
+        play(&mut game, &cards, "Fidel"); // 2 ops
         game.begin(OperationKind::Coup).unwrap();
         let mut dice = Dice::from_seed(0);
         game.roll(&map, poland, &mut dice).unwrap();
-        assert!(matches!(game.abandon(), Err(GameError::CannotAbandon { ops_total: 4, .. })));
+        assert!(matches!(game.abandon(), Err(GameError::CannotAbandon { ops_total: 2, .. })));
     }
 
     #[test]
     fn abandoning_leaves_no_trace_in_the_log() {
         let map = map();
         let cards = cards();
-        let mut game = Game::from_scenario(&Scenario::from_json(&map, &cards, "{}").unwrap());
+        let mut game = Game::from_scenario(&scenario(&map, &cards));
+        play(&mut game, &cards, "Fidel");
         game.begin(OperationKind::Coup).unwrap();
         game.abandon().unwrap();
         assert!(game.log().is_empty(), "an abandoned operation should leave the log exactly as it was");
@@ -665,7 +871,8 @@ mod tests {
         let map = map();
         let cards = cards();
         let poland = id(&map, "Poland");
-        let mut game = Game::from_scenario(&Scenario::from_json(&map, &cards, "{}").unwrap());
+        let mut game = Game::from_scenario(&scenario(&map, &cards));
+        play(&mut game, &cards, "Socialist Governments");
         game.begin(OperationKind::Influence).unwrap();
         game.place(&map, poland).unwrap();
         game.abandon().unwrap();
@@ -678,13 +885,15 @@ mod tests {
         let cards = cards();
         let poland = id(&map, "Poland");
 
-        let mut confirmed = Game::from_scenario(&Scenario::from_json(&map, &cards, "{}").unwrap());
+        let mut confirmed = Game::from_scenario(&scenario(&map, &cards));
+        play(&mut confirmed, &cards, "Socialist Governments");
         confirmed.begin(OperationKind::Influence).unwrap();
         confirmed.place(&map, poland).unwrap();
         confirmed.confirm().unwrap();
         assert_eq!(confirmed.board().influence(poland, Ussr), 1);
 
-        let mut cancelled = Game::from_scenario(&Scenario::from_json(&map, &cards, "{}").unwrap());
+        let mut cancelled = Game::from_scenario(&scenario(&map, &cards));
+        play(&mut cancelled, &cards, "Socialist Governments");
         cancelled.begin(OperationKind::Influence).unwrap();
         cancelled.place(&map, poland).unwrap();
         cancelled.cancel().unwrap();
@@ -696,6 +905,7 @@ mod tests {
         let map = map();
         let cards = cards();
         let mut game = Game::from_scenario(&scenario_with(&map, &cards, "Poland", 1, 0));
+        play(&mut game, &cards, "Socialist Governments");
         game.begin(OperationKind::Realign).unwrap();
         assert!(matches!(game.place(&map, id(&map, "Poland")), Err(GameError::WrongKind { .. })));
     }
@@ -707,12 +917,14 @@ mod tests {
         let poland = id(&map, "Poland");
 
         let mut realigning = Game::from_scenario(&scenario_with(&map, &cards, "Poland", 1, 0));
+        play(&mut realigning, &cards, "Socialist Governments");
         realigning.begin(OperationKind::Realign).unwrap();
         let mut dice = Dice::from_seed(0);
         realigning.roll(&map, poland, &mut dice).unwrap();
         assert!(matches!(realigning.undo(&map), Err(GameError::CannotUndo { .. })));
 
         let mut couping = Game::from_scenario(&scenario_with(&map, &cards, "Poland", 1, 0));
+        play(&mut couping, &cards, "Fidel");
         couping.begin(OperationKind::Coup).unwrap();
         couping.roll(&map, poland, &mut dice).unwrap();
         assert!(matches!(couping.undo(&map), Err(GameError::CannotUndo { .. })));
@@ -724,6 +936,7 @@ mod tests {
         let cards = cards();
         let poland = id(&map, "Poland");
         let mut game = Game::from_scenario(&scenario_with(&map, &cards, "Poland", 1, 0));
+        play(&mut game, &cards, "Fidel");
         game.begin(OperationKind::Coup).unwrap();
         let mut dice = Dice::from_seed(0);
         game.roll(&map, poland, &mut dice).unwrap();
@@ -736,16 +949,18 @@ mod tests {
     fn a_scripted_sequence_produces_the_expected_log_entries_in_order() {
         let map = map();
         let cards = cards();
-        let mut game = Game::from_scenario(&Scenario::from_json(&map, &cards, "{}").unwrap());
+        let mut game = Game::from_scenario(&scenario(&map, &cards));
         let poland = id(&map, "Poland");
 
-        game.begin(OperationKind::Influence).unwrap(); // USSR
+        play(&mut game, &cards, "Socialist Governments"); // USSR
+        game.begin(OperationKind::Influence).unwrap();
         game.place(&map, poland).unwrap();
         game.place(&map, poland).unwrap();
         game.confirm().unwrap(); // -> US
 
         let mut dice = Dice::from_seed(0);
-        game.begin(OperationKind::Realign).unwrap(); // US
+        play(&mut game, &cards, "Duck and Cover"); // US
+        game.begin(OperationKind::Realign).unwrap();
         game.roll(&map, poland, &mut dice).unwrap();
         game.cancel().unwrap(); // -> USSR
 
@@ -764,9 +979,13 @@ mod tests {
     fn a_confirm_entry_carries_the_turn_and_side_it_actually_happened_in() {
         let map = map();
         let cards = cards();
-        let json = r#"{"status":{"turn":1,"action_round":2,"action_rounds_per_turn":2}}"#;
-        let mut game = Game::from_scenario(&Scenario::from_json(&map, &cards, json).unwrap());
+        let mut game = Game::from_scenario(&scenario_with_status(
+            &map,
+            &cards,
+            r#"{"turn":1,"action_round":2,"action_rounds_per_turn":2}"#,
+        ));
 
+        play(&mut game, &cards, "Socialist Governments");
         game.begin(OperationKind::Influence).unwrap();
         game.confirm().unwrap(); // USSR -> US, rolls the turn over on the *next* US confirm
 
@@ -783,7 +1002,8 @@ mod tests {
         let map = map();
         let cards = cards();
         let poland = id(&map, "Poland");
-        let mut game = Game::from_scenario(&Scenario::from_json(&map, &cards, "{}").unwrap());
+        let mut game = Game::from_scenario(&scenario(&map, &cards));
+        let sg = play(&mut game, &cards, "Socialist Governments");
         game.begin(OperationKind::Influence).unwrap();
         game.place(&map, poland).unwrap();
         game.cancel().unwrap();
@@ -794,10 +1014,10 @@ mod tests {
             Event::Placed { countries } => assert_eq!(countries, &vec![(poland, 1)]),
             other => panic!("expected a Placed event, got {other:?}"),
         }
-        assert!(matches!(
-            entries[1].event,
-            Event::Closed { kind: OperationKind::Influence, committed: false, .. }
-        ));
+        match &entries[1].event {
+            Event::Closed { kind: OperationKind::Influence, committed: false, card, .. } => assert_eq!(*card, sg),
+            other => panic!("expected a Closed(Influence) event naming the played card, got {other:?}"),
+        }
         assert_eq!(game.board().influence(poland, Ussr), 0);
     }
 
@@ -805,7 +1025,8 @@ mod tests {
     fn an_immediately_cancelled_placement_with_nothing_placed_has_no_placed_line() {
         let map = map();
         let cards = cards();
-        let mut game = Game::from_scenario(&Scenario::from_json(&map, &cards, "{}").unwrap());
+        let mut game = Game::from_scenario(&scenario(&map, &cards));
+        play(&mut game, &cards, "Socialist Governments");
         game.begin(OperationKind::Influence).unwrap();
         game.cancel().unwrap();
 
@@ -823,6 +1044,7 @@ mod tests {
         let cards = cards();
         let poland = id(&map, "Poland");
         let mut game = Game::from_scenario(&scenario_with(&map, &cards, "Poland", 1, 0));
+        play(&mut game, &cards, "Socialist Governments");
         let mut dice = Dice::from_seed(0);
         game.begin(OperationKind::Realign).unwrap();
         game.roll(&map, poland, &mut dice).unwrap();
@@ -838,7 +1060,7 @@ mod tests {
     fn lookahead_clones_state_but_starts_with_an_empty_log() {
         let map = map();
         let cards = cards();
-        let mut game = Game::from_scenario(&Scenario::from_json(&map, &cards, "{}").unwrap());
+        let mut game = Game::from_scenario(&scenario(&map, &cards));
         game.pass().unwrap();
         assert_eq!(game.log().len(), 1);
 
@@ -846,5 +1068,141 @@ mod tests {
         assert!(ahead.log().is_empty());
         assert_eq!(ahead.status(), game.status());
         assert_eq!(ahead.active(), game.active());
+    }
+
+    #[test]
+    fn lookahead_preserves_the_card_in_play() {
+        let map = map();
+        let cards = cards();
+        let mut game = Game::from_scenario(&scenario(&map, &cards));
+        play(&mut game, &cards, "Socialist Governments");
+        let ahead = game.lookahead();
+        assert_eq!(ahead.card_in_play(), game.card_in_play());
+    }
+
+    #[test]
+    fn playing_a_card_removes_it_from_hand_and_confirm_discards_it() {
+        let map = map();
+        let cards = cards();
+        let mut game = Game::from_scenario(&scenario(&map, &cards));
+        let sg = cards.id_by_name("Socialist Governments").unwrap();
+        assert!(game.hand(Ussr).contains(&sg));
+
+        game.play_card(&cards, sg).unwrap();
+        assert!(!game.hand(Ussr).contains(&sg), "playing a card should remove it from the hand");
+        assert_eq!(game.card_in_play(), Some(sg));
+
+        game.begin(OperationKind::Influence).unwrap();
+        game.confirm().unwrap();
+        assert_eq!(game.card_in_play(), None, "confirm should discard the played card");
+        assert!(!game.hand(Ussr).contains(&sg), "a discarded card shouldn't return to the hand");
+    }
+
+    #[test]
+    fn play_card_is_refused_while_a_card_is_already_in_play() {
+        let map = map();
+        let cards = cards();
+        let mut game = Game::from_scenario(&scenario(&map, &cards));
+        play(&mut game, &cards, "Socialist Governments");
+        let fidel = cards.id_by_name("Fidel").unwrap();
+        assert!(matches!(game.play_card(&cards, fidel), Err(GameError::CardInPlay { .. })));
+    }
+
+    #[test]
+    fn a_scoring_card_cannot_be_played() {
+        let map = map();
+        let cards = cards();
+        let mut game = Game::from_scenario(&scenario(&map, &cards));
+        let scoring = cards.id_by_name("Europe Scoring").unwrap();
+        assert!(matches!(game.play_card(&cards, scoring), Err(GameError::ScoringCard)));
+    }
+
+    #[test]
+    fn a_card_not_in_hand_cannot_be_played() {
+        let map = map();
+        let cards = cards();
+        let mut game = Game::from_scenario(&scenario(&map, &cards));
+        let not_dealt = cards.id_by_name("Blockade").unwrap();
+        assert!(matches!(game.play_card(&cards, not_dealt), Err(GameError::NotInHand)));
+    }
+
+    #[test]
+    fn return_card_puts_it_back_in_the_hand_at_its_original_index() {
+        let map = map();
+        let cards = cards();
+        let mut game = Game::from_scenario(&scenario(&map, &cards));
+        let fidel = cards.id_by_name("Fidel").unwrap();
+        let before = game.hand(Ussr).to_vec();
+        let fidel_index = before.iter().position(|&c| c == fidel).unwrap();
+
+        game.play_card(&cards, fidel).unwrap();
+        let returned = game.return_card().unwrap();
+
+        assert_eq!(returned, fidel);
+        assert_eq!(game.hand(Ussr), before.as_slice());
+        assert_eq!(game.hand(Ussr).iter().position(|&c| c == fidel), Some(fidel_index));
+    }
+
+    #[test]
+    fn return_card_is_refused_while_an_operation_is_open() {
+        let map = map();
+        let cards = cards();
+        let mut game = Game::from_scenario(&scenario(&map, &cards));
+        play(&mut game, &cards, "Socialist Governments");
+        game.begin(OperationKind::Influence).unwrap();
+        assert!(matches!(game.return_card(), Err(GameError::OperationOpen { .. })));
+    }
+
+    #[test]
+    fn return_card_is_refused_with_no_card_in_play() {
+        let map = map();
+        let cards = cards();
+        let mut game = Game::from_scenario(&scenario(&map, &cards));
+        assert!(matches!(game.return_card(), Err(GameError::NoCard)));
+    }
+
+    #[test]
+    fn the_china_card_can_be_played_for_its_ops_and_passes_face_down_after_confirm() {
+        let map = map();
+        let cards = cards();
+        let mut game = Game::from_scenario(&scenario(&map, &cards));
+        assert_eq!(game.status().china_card, Ussr);
+        assert!(game.status().china_card_face_up);
+
+        game.play_card(&cards, CHINA_CARD).unwrap();
+        assert_eq!(game.card_in_play(), Some(CHINA_CARD));
+        game.begin(OperationKind::Influence).unwrap();
+        assert_eq!(game.operation().unwrap().ops_total(), cards.card(CHINA_CARD).ops);
+        game.confirm().unwrap();
+
+        assert_eq!(game.status().china_card, Us, "the China Card should pass to the opponent");
+        assert!(!game.status().china_card_face_up, "it should land face down");
+    }
+
+    #[test]
+    fn a_face_down_china_card_cannot_be_played() {
+        let map = map();
+        let cards = cards();
+        let mut game = Game::from_scenario(&scenario(&map, &cards));
+        game.play_card(&cards, CHINA_CARD).unwrap();
+        game.begin(OperationKind::Influence).unwrap();
+        game.confirm().unwrap(); // China Card -> US, face down
+        assert_eq!(game.active(), Us);
+        assert!(matches!(game.play_card(&cards, CHINA_CARD), Err(GameError::ChinaCardFaceDown)));
+    }
+
+    #[test]
+    fn the_china_card_turns_face_up_again_once_the_turn_rolls_over() {
+        let map = map();
+        let cards = cards();
+        let json = format!(
+            r#"{{"status":{{"turn":1,"action_round":2,"action_rounds_per_turn":2,"active":"Us","china_card":"Us","china_card_face_up":false}},{HANDS_JSON}}}"#
+        );
+        let mut game = Game::from_scenario(&Scenario::from_json(&map, &cards, &json).unwrap());
+        assert!(!game.status().china_card_face_up);
+
+        game.pass().unwrap(); // Us -> Ussr, rolls the turn over
+        assert_eq!(game.status().turn, 2);
+        assert!(game.status().china_card_face_up, "the turn rollover should flip it back up");
     }
 }

@@ -10,6 +10,7 @@
 //! sum — a `4+4=8` reads as ambiguous once both the die and the ops value
 //! can be 4.
 
+use crate::cards::{CardCatalog, CardId};
 use crate::country::{CountryId, Superpower};
 use crate::game::OperationKind;
 use crate::log::{Event, GameLog, LogEntry};
@@ -26,8 +27,8 @@ const ACTION_WIDTH: usize = 11;
 /// The canonical text of one entry, with no trailing whitespace — matching
 /// what [`Canvas::render`] would emit for the same row, since both trim
 /// trailing spaces the same way.
-pub fn log_entry_line(map: &WorldMap, entry: &LogEntry) -> String {
-    let (action, detail) = action_and_detail(map, entry);
+pub fn log_entry_line(map: &WorldMap, cards: &CardCatalog, entry: &LogEntry) -> String {
+    let (action, detail) = action_and_detail(map, cards, entry);
     let line = format!(
         "{:<STAMP_WIDTH$}{:<AR_WIDTH$}{:<SIDE_WIDTH$}{:<ACTION_WIDTH$}{detail}",
         format!("T{}", entry.turn),
@@ -41,10 +42,10 @@ pub fn log_entry_line(map: &WorldMap, entry: &LogEntry) -> String {
 /// The whole log as plain text: two `#`-prefixed header lines (so a parser
 /// can skip them, and a reader gets a legend), then one [`log_entry_line`]
 /// per entry. What `export` writes.
-pub fn log_text(map: &WorldMap, log: &GameLog) -> String {
+pub fn log_text(map: &WorldMap, cards: &CardCatalog, log: &GameLog) -> String {
     header_lines()
         .into_iter()
-        .chain(log.entries().iter().map(|e| log_entry_line(map, e)))
+        .chain(log.entries().iter().map(|e| log_entry_line(map, cards, e)))
         .collect::<Vec<_>>()
         .join("\n")
 }
@@ -57,13 +58,13 @@ pub fn log_text(map: &WorldMap, log: &GameLog) -> String {
 /// `render_log(..).render(ColorMode::Never)` is guaranteed to equal
 /// [`log_text`] for the same log and the same `tail` — colour never
 /// changes what character ends up in a cell, only how it's painted.
-pub fn render_log(map: &WorldMap, log: &GameLog, tail: Option<usize>) -> Canvas {
+pub fn render_log(map: &WorldMap, cards: &CardCatalog, log: &GameLog, tail: Option<usize>) -> Canvas {
     let entries = match tail {
         Some(n) => log.tail(n),
         None => log.entries(),
     };
     let header = header_lines();
-    let lines: Vec<String> = header.iter().cloned().chain(entries.iter().map(|e| log_entry_line(map, e))).collect();
+    let lines: Vec<String> = header.iter().cloned().chain(entries.iter().map(|e| log_entry_line(map, cards, e))).collect();
     let width = lines.iter().map(|l| l.chars().count()).max().unwrap_or(1).max(1);
     let mut canvas = Canvas::new(width, lines.len());
 
@@ -77,7 +78,7 @@ pub fn render_log(map: &WorldMap, log: &GameLog, tail: Option<usize>) -> Canvas 
             Some(Superpower::Ussr) => Color::Ussr,
             None => Color::Muted,
         };
-        let (action, detail) = action_and_detail(map, entry);
+        let (action, detail) = action_and_detail(map, cards, entry);
         let prefix = format!(
             "{:<STAMP_WIDTH$}{:<AR_WIDTH$}{:<SIDE_WIDTH$}{:<ACTION_WIDTH$}",
             format!("T{}", entry.turn),
@@ -103,7 +104,7 @@ fn side_label(side: Option<Superpower>) -> String {
 /// The action keyword and the detail text for one entry. Split out from
 /// [`log_entry_line`] so [`render_log`] can style the two parts
 /// differently without duplicating the match.
-fn action_and_detail(map: &WorldMap, entry: &LogEntry) -> (&'static str, String) {
+fn action_and_detail(map: &WorldMap, cards: &CardCatalog, entry: &LogEntry) -> (&'static str, String) {
     match &entry.event {
         // The placement analogue of a resolved roll: its own "influence"
         // line, pushed just before the `Closed` entry that reports whether
@@ -117,9 +118,9 @@ fn action_and_detail(map: &WorldMap, entry: &LogEntry) -> (&'static str, String)
             let side = entry.side.expect("a coup attempt is always stamped with the acting side");
             ("coup", coup_detail(map, side, result))
         }
-        Event::Closed { kind, committed, rolls, ops_spent, ops_total } => {
+        Event::Closed { kind, committed, card, rolls, ops_spent, ops_total } => {
             let action = if *committed { "confirm" } else { "cancel" };
-            (action, closed_detail(*kind, *rolls, *ops_spent, *ops_total))
+            (action, closed_detail(cards, *kind, *card, *rolls, *ops_spent, *ops_total))
         }
         Event::Pass => ("pass", String::new()),
         Event::Edit { country, side, before, after } => ("edit", edit_detail(map, *country, *side, *before, *after)),
@@ -141,15 +142,16 @@ fn placed_detail(map: &WorldMap, countries: &[(CountryId, u8)]) -> String {
     countries.iter().map(|&(id, n)| format!("{} +{n}", map.country(id).name)).collect::<Vec<_>>().join(", ")
 }
 
-fn closed_detail(kind: OperationKind, rolls: u8, spent: u8, total: u8) -> String {
+fn closed_detail(cards: &CardCatalog, kind: OperationKind, card: CardId, rolls: u8, spent: u8, total: u8) -> String {
+    let name = &cards.card(card).name;
     let ops = ops_str(spent, total);
     match kind {
         OperationKind::Realign => {
             let noun = if rolls == 1 { "roll" } else { "rolls" };
-            format!("realign, {rolls} {noun}, {ops}")
+            format!("{name}: realign, {rolls} {noun}, {ops}")
         }
-        OperationKind::Coup => format!("coup, {ops}"),
-        OperationKind::Influence => format!("influence, {ops}"),
+        OperationKind::Coup => format!("{name}: coup, {ops}"),
+        OperationKind::Influence => format!("{name}: influence, {ops}"),
     }
 }
 

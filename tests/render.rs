@@ -172,12 +172,12 @@ fn the_selection_hints_offer_the_operation_keys() {
     let italy = map.id_by_name("Italy").unwrap();
 
     let region_text = render_region(&map, &layout, &board, Region::Europe, Some(italy), None).render(ColorMode::Never);
-    for key in ["i influence", "a realign", "o coup", "p pass"] {
+    for key in ["space play card", "i/a/o influence/realign/coup", "p pass"] {
         assert!(region_text.contains(key), "region hint missing {key:?}:\n{region_text}");
     }
 
     let country_text = render_country(&map, &layout, &board, italy, None, ViewMode::Interactive).render(ColorMode::Never);
-    for key in ["i influence", "a realign", "o coup", "p pass"] {
+    for key in ["space play card", "i/a/o influence/realign/coup", "p pass"] {
         assert!(country_text.contains(key), "country hint missing {key:?}:\n{country_text}");
     }
 }
@@ -191,11 +191,11 @@ fn an_open_operation_hides_the_operation_keys() {
     let op = Operation::Influence(placement);
 
     let region_text = render_region(&map, &layout, &board, Region::Europe, Some(italy), Some(&op)).render(ColorMode::Never);
-    assert!(!region_text.contains("i influence"), "an open operation shouldn't advertise starting another:\n{region_text}");
+    assert!(!region_text.contains("space play card"), "an open operation shouldn't advertise starting another:\n{region_text}");
     assert!(!region_text.contains("p pass"), "an open operation shouldn't advertise passing:\n{region_text}");
 
     let country_text = render_country(&map, &layout, &board, italy, Some(&op), ViewMode::Interactive).render(ColorMode::Never);
-    assert!(!country_text.contains("i influence"), "an open operation shouldn't advertise starting another:\n{country_text}");
+    assert!(!country_text.contains("space play card"), "an open operation shouldn't advertise starting another:\n{country_text}");
     assert!(!country_text.contains("p pass"), "an open operation shouldn't advertise passing:\n{country_text}");
 }
 
@@ -349,7 +349,7 @@ fn operation_abandoned_line_names_the_side_the_verb_and_that_the_turn_did_not_ch
     assert!(text.contains("realigning"), "should name what was abandoned:\n{text}");
     assert!(text.contains("abandoned"), "should say it was abandoned:\n{text}");
     assert!(text.contains("nothing spent"), "should reassure that nothing was spent:\n{text}");
-    assert!(text.contains("USSR still to act"), "should say the turn didn't pass:\n{text}");
+    assert!(text.contains("card still in play"), "should say the card wasn't discarded:\n{text}");
 }
 
 #[test]
@@ -365,7 +365,7 @@ fn operation_abandoned_line_names_what_was_undone_when_a_placement_had_points_pe
     let text = operation_abandoned_line(&op);
     assert!(text.contains("2 of 4 ops undone"), "should name how many ops were undone:\n{text}");
     assert!(!text.contains("nothing spent"), "shouldn't claim nothing happened when points were pending:\n{text}");
-    assert!(text.contains("USSR still to act"), "should say the turn didn't pass:\n{text}");
+    assert!(text.contains("card still in play"), "should say the card wasn't discarded:\n{text}");
 }
 
 #[test]

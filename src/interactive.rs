@@ -17,8 +17,8 @@ use twilight_struggle::render::{
     render_region, render_status_bar, render_world_map, roll_result_line, Canvas, HAND_ROWS,
 };
 use twilight_struggle::{
-    CardCatalog, ColorMode, CountryId, Dice, Direction, Game, GameError, MapLayout, OperationKind, Region, RollOutcome, Superpower, ViewMode,
-    WorldMap, CHINA_CARD,
+    CardCatalog, CardId, ColorMode, CountryId, Dice, Direction, Game, GameError, MapLayout, OperationKind, Region, RollOutcome, Superpower,
+    ViewMode, WorldMap, CHINA_CARD,
 };
 
 /// Which screen is currently showing.
@@ -73,27 +73,36 @@ impl Drop for TerminalGuard {
 /// balance — or, with none open, the keys that start one — since a
 /// keypress alone carries no "USSR" the way the REPL prompt does.
 ///
-/// `i`/`a`/`o` open an influence placement, realignment, or coup for the
-/// active side with a full turn's ops, from any of the three screens —
-/// [`Game::begin`] always acts for [`Game::active`], so there's no side to
-/// infer from the key itself. `p` passes the active side's turn
-/// ([`Game::pass`]); both `begin` and `pass` are refused while an
-/// operation is already open, reported in the message row via
-/// [`GameError`]'s own text. `c` confirms/closes the open operation via
-/// [`Game::confirm`] and `X` cancels/closes it via [`Game::cancel`] —
-/// either way handing the turn to the other side *without leaving the
-/// map*, so the newly active side can immediately press `i`/`a`/`o` on the
-/// same screen. Backspace abandons the open operation via
-/// [`Game::abandon`] instead — the free, no-turn-cost undo for opening the
-/// wrong kind by mistake, as long as nothing irreversible has happened: an
-/// [`InfluencePlacement`](twilight_struggle::InfluencePlacement) can
-/// always be abandoned this way, however many points are already pending
-/// (they're simply discarded, like `X` would, minus the turn cost), since
-/// placement never rolls a die and so never reveals anything that can't be
-/// taken back; a [`Realignment`](twilight_struggle::Realignment) or
-/// [`Coup`](twilight_struggle::Coup) can only be abandoned *before* its
+/// A turn now starts by playing a card: `Space` plays the selected hand
+/// card via [`Game::play_card`], and only then do `i`/`a`/`o` open an
+/// influence placement, realignment, or coup — spending that card's own
+/// ops — for the active side, from any of the three screens
+/// ([`Game::begin`] always acts for [`Game::active`], so there's no side
+/// to infer from the key itself; it's refused with no card in play). `p`
+/// passes the active side's turn ([`Game::pass`]), refused the same way
+/// while an operation is open or a card is in play, reported in the
+/// message row via [`GameError`]'s own text. `c` confirms/closes the open
+/// operation via [`Game::confirm`] and `X` cancels/closes it via
+/// [`Game::cancel`] — either way discarding the card that funded it (or,
+/// for the China Card, passing it face down to the opponent) and handing
+/// the turn to the other side *without leaving the map*, so the newly
+/// active side can immediately play its own card from the same screen.
+///
+/// Backspace steps back exactly one level, via whichever of
+/// [`Game::abandon`] or [`Game::return_card`] applies: with an operation
+/// open, it closes *that* (as long as nothing irreversible has happened —
+/// see below), leaving the card in play so a different kind can be tried
+/// without playing the card again; with no operation open but a card in
+/// play, it puts the card back in the hand instead. Neither costs the
+/// turn. An [`InfluencePlacement`](twilight_struggle::InfluencePlacement)
+/// can always be abandoned this way, however many points are already
+/// pending (they're simply discarded, like `X` would, minus the turn
+/// cost), since placement never rolls a die and so never reveals anything
+/// that can't be taken back; a [`Realignment`](twilight_struggle::Realignment)
+/// or [`Coup`](twilight_struggle::Coup) can only be abandoned *before* its
 /// first roll or attempt — the instant one's been made, `X`/`cancel` is
-/// the only way out. For an
+/// the only way out, and Backspace instead falls through to
+/// [`GameError::CannotAbandon`]'s own text. For an
 /// [`InfluencePlacement`](twilight_struggle::InfluencePlacement), `+`/`=`
 /// places one point in the selected country (region or country screen) and
 /// `u` undoes the last one — placement is undoable, so it never needs the
@@ -108,15 +117,16 @@ impl Drop for TerminalGuard {
 /// resumed from the REPL or by reopening the map.
 ///
 /// The active side's hand is drawn as a strip below every screen
-/// (`render::render_hand`), global like `i`/`a`/`o`/`p`: `[`/`]` cycle its
-/// selection and `z` toggles a zoomed detail overlay
+/// (`render::render_hand`), global like `i`/`a`/`o`/`p`/`Space`: `[`/`]`
+/// cycle its selection and `z` toggles a zoomed detail overlay
 /// (`render::render_card`, blitted onto the current screen's own canvas)
-/// for the selected card — all three no-ops on an empty hand. `Esc` closes
-/// an open zoom first, before whatever it would otherwise do; `c`/`X`/`p`
-/// actually handing the turn over close it too, since the newly active
-/// side's own hand takes its place. Neither the strip nor the zoom is tied
-/// to card *behaviour* — nothing here plays, draws, or discards a card,
-/// only browses what [`Game::hand`] already holds.
+/// for the selected card — both no-ops on an empty hand, and `Space` is
+/// too once a card is already in play (nothing left to select there to
+/// play again). `Esc` closes an open zoom first, before whatever it would
+/// otherwise do; `c`/`X`/`p` actually handing the turn over close it too,
+/// since the newly active side's own hand takes its place. This still
+/// isn't card *event* behaviour — nothing here reads a card's text or
+/// triggers it, only its ops value, via [`Game::play_card`].
 pub fn run(map: &WorldMap, layout: &MapLayout, cards: &CardCatalog, game: &mut Game, dice: &mut Dice, color: ColorMode) -> io::Result<()> {
     let _guard = TerminalGuard::enter()?;
     let mut screen = Screen::World { selected: Region::Europe };
@@ -167,6 +177,18 @@ pub fn run(map: &WorldMap, layout: &MapLayout, cards: &CardCatalog, game: &mut G
                             zoomed = !zoomed;
                         }
                     }
+                    KeyCode::Char(' ') => {
+                        if let Some(id) = selected_hand_card(game, &hand_selected) {
+                            let side = game.active();
+                            message = Some(match game.play_card(cards, id) {
+                                Ok(()) => {
+                                    zoomed = false;
+                                    format!("{side} plays {} ({} ops) — i/a/o to use them", cards.card(id).name, cards.card(id).ops)
+                                }
+                                Err(e) => e.to_string(),
+                            });
+                        }
+                    }
                     KeyCode::Char('i') => message = begin(game, OperationKind::Influence),
                     KeyCode::Char('a') => message = begin(game, OperationKind::Realign),
                     KeyCode::Char('o') => message = begin(game, OperationKind::Coup),
@@ -199,9 +221,20 @@ pub fn run(map: &WorldMap, layout: &MapLayout, cards: &CardCatalog, game: &mut G
                         });
                     }
                     KeyCode::Backspace => {
-                        message = Some(match game.abandon() {
-                            Ok(op) => operation_abandoned_line(&op),
-                            Err(e) => e.to_string(),
+                        // Steps back exactly one level: an open operation
+                        // closes first (leaving the card in play), and
+                        // only once none is open does the card itself go
+                        // back to the hand.
+                        message = Some(if game.operation().is_some() {
+                            match game.abandon() {
+                                Ok(op) => operation_abandoned_line(&op),
+                                Err(e) => e.to_string(),
+                            }
+                        } else {
+                            match game.return_card() {
+                                Ok(id) => format!("{} returned to hand", cards.card(id).name),
+                                Err(e) => e.to_string(),
+                            }
                         });
                     }
                     KeyCode::Char('u') => match game.undo(map) {
@@ -315,6 +348,22 @@ fn hand_item_count(game: &Game, side: Superpower) -> usize {
     game.hand(side).len() + china as usize
 }
 
+/// The `CardId` the active side's current hand-strip selection refers to —
+/// `hand[idx]` for an ordinary card, or the China Card once the selection
+/// index runs past the held hand (`render_hand`'s own doc: the China Card
+/// is always the strip's final slot). `None` on an empty hand, the one
+/// case `Space`/`z` both already treat as a no-op.
+fn selected_hand_card(game: &Game, hand_selected: &[usize; 2]) -> Option<CardId> {
+    let side = game.active();
+    let hand = game.hand(side);
+    let count = hand_item_count(game, side);
+    if count == 0 {
+        return None;
+    }
+    let idx = hand_selected[side_index(side)].min(count - 1);
+    Some(if idx < hand.len() { hand[idx] } else { CHINA_CARD })
+}
+
 /// `[`/`]`: moves the active side's own hand selection by `delta` (`-1` or
 /// `1`), wrapping around either end. A no-op when that side's hand (plus a
 /// possible China Card) is empty — there's nothing to select.
@@ -385,8 +434,7 @@ fn draw(
     let selected_idx = (item_count > 0).then(|| hand_selected[side_index(side)].min(item_count - 1));
     let hand_canvas = render_hand(cards, hand, china, side, selected_idx);
 
-    if zoomed && let Some(idx) = selected_idx {
-        let id = if idx < hand.len() { hand[idx] } else { CHINA_CARD };
+    if zoomed && let Some(id) = selected_hand_card(game, hand_selected) {
         let china_face_up = (id == CHINA_CARD).then_some(status.china_card_face_up);
         let card_canvas = render_card(cards, id, china_face_up);
         // The overlay should never be clipped by a view too small for
@@ -402,7 +450,8 @@ fn draw(
         canvas.blit(&card_canvas, row, col);
     }
 
-    let bar = render_status_bar(layout, board, game.status(), op, canvas.width());
+    let card_in_play = game.card_in_play().map(|id| cards.card(id));
+    let bar = render_status_bar(layout, board, game.status(), card_in_play, op, canvas.width());
 
     let rows = terminal::size().map(|(_, h)| h as usize).unwrap_or(bar.height() + canvas.height() + HAND_ROWS);
     let view_budget = rows.saturating_sub(bar.height() + message.is_some() as usize + HAND_ROWS);
