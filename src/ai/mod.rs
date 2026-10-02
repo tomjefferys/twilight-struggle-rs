@@ -43,9 +43,13 @@ const MAX_ACTIONS_PER_TURN: usize = 1000;
 
 /// Plays `ai`'s side's turn to completion: repeatedly lists
 /// [`Game::legal_actions`], asks `ai` to [`Ai::choose`] one, and
-/// [`Game::apply`]s it, stopping the moment [`Game::active`] changes.
-/// Works from any point mid-turn (a card already played, an operation
-/// already open), not just the very start of one.
+/// [`Game::apply`]s it, stopping the moment [`Game::active`] changes —
+/// or, now that a scoring event can end the game mid-turn without ever
+/// changing whose turn it technically is, the moment [`Game::winner`] is
+/// set, since `legal_actions` would otherwise come back empty and
+/// `choose` is documented to never see that. Works from any point
+/// mid-turn (a card already played, an operation already open), not
+/// just the very start of one.
 ///
 /// Returns whatever [`Game::apply`] returned on its one failing call, if
 /// any — `choose` returning something other than one of `legal`'s own
@@ -54,7 +58,7 @@ const MAX_ACTIONS_PER_TURN: usize = 1000;
 pub fn play_turn(ai: &mut dyn Ai, game: &mut Game, map: &WorldMap, cards: &CardCatalog, dice: &mut Dice) -> Result<(), GameError> {
     let side = game.active();
     for _ in 0..MAX_ACTIONS_PER_TURN {
-        if game.active() != side {
+        if game.active() != side || game.winner().is_some() {
             return Ok(());
         }
         let legal = game.legal_actions(map, cards);

@@ -48,6 +48,9 @@ fn assert_legal_actions_are_exact(game: &Game, map: &WorldMap, cards: &CardCatal
         assert_eq!(actual, expected, "Begin({kind:?}) disagreement");
     }
 
+    let expected_event = game.lookahead().play_event(map, cards).is_ok();
+    assert_eq!(legal.contains(&Action::Event), expected_event, "Event disagreement");
+
     for (id, _) in map.iter() {
         let expected_place = game.lookahead().place(map, id).is_ok();
         let actual_place = legal.contains(&Action::Place(id));
@@ -181,4 +184,66 @@ fn same_seeds_produce_an_identical_log() {
     }
 
     assert_eq!(run(99), run(99));
+}
+
+/// A scenario where the USSR controls every Europe battleground plus the
+/// UK — Europe Scoring's Control tier — with "Europe Scoring" in its
+/// hand, matching `Game`'s own test fixture of the same name.
+fn europe_control_scenario(map: &WorldMap, cards: &CardCatalog) -> Scenario {
+    let json = r#"{
+        "hands":{"us":["Duck and Cover","Five Year Plan"],"ussr":["Europe Scoring","Fidel"]},
+        "influence":{
+            "France":[0,10],"West Germany":[0,10],"East Germany":[0,10],
+            "Poland":[0,10],"Italy":[0,10],"UK":[0,10]
+        }
+    }"#;
+    Scenario::from_json(map, cards, json).unwrap()
+}
+
+#[test]
+fn a_scoring_card_in_play_offers_only_event() {
+    let map = WorldMap::standard().unwrap();
+    let cards = CardCatalog::standard().unwrap();
+    let scenario = europe_control_scenario(&map, &cards);
+    let mut game = Game::from_scenario(&scenario);
+    let scoring = cards.id_by_name("Europe Scoring").unwrap();
+
+    game.play_card(&cards, scoring).unwrap();
+    let legal = game.legal_actions(&map, &cards);
+    assert_eq!(legal, vec![Action::Event], "a scoring card has no ops, so Begin should not be offered");
+}
+
+#[test]
+fn a_finished_game_lists_no_legal_actions() {
+    let map = WorldMap::standard().unwrap();
+    let cards = CardCatalog::standard().unwrap();
+    let scenario = europe_control_scenario(&map, &cards);
+    let mut game = Game::from_scenario(&scenario);
+    let scoring = cards.id_by_name("Europe Scoring").unwrap();
+
+    game.play_card(&cards, scoring).unwrap();
+    game.play_event(&map, &cards).unwrap();
+    assert!(game.winner().is_some());
+    assert!(game.legal_actions(&map, &cards).is_empty());
+}
+
+/// From mid-turn (the card already played), `Event` is the only legal
+/// action, so `play_turn` must apply it regardless of which `RandomAi`
+/// seed is driving — and then stop cleanly rather than looping on an
+/// empty `legal_actions` once the win ends the game.
+#[test]
+fn a_random_walk_ends_cleanly_at_game_over() {
+    let map = WorldMap::standard().unwrap();
+    let cards = CardCatalog::standard().unwrap();
+    let scenario = europe_control_scenario(&map, &cards);
+    let mut game = Game::from_scenario(&scenario);
+    let scoring = cards.id_by_name("Europe Scoring").unwrap();
+    game.play_card(&cards, scoring).unwrap();
+
+    let mut dice = Dice::from_seed(7);
+    let mut ai = RandomAi::from_seed(7);
+    play_turn(&mut ai, &mut game, &map, &cards, &mut dice).unwrap();
+
+    assert!(game.winner().is_some());
+    assert!(game.legal_actions(&map, &cards).is_empty());
 }
