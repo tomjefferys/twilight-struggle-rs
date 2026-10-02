@@ -96,11 +96,67 @@ uniformly random legal moves.
   — a named starting state (currently just `data/demo_state.json`): a
   `Board` snapshot, starting `Hands` (`Scenario::from_json` resolves each
   hand's card names against a `CardCatalog`, rejecting an unknown name, a
-  card dealt to both hands, or the China Card — `ScenarioError::{
-  UnknownCard, DuplicateCard, ChinaCardInHand}`), plus turn/active-side/
-  DEFCON/VP/space-race/China-card status. `GameStatus` itself is plain
-  data with no rules attached — the `Game` type below is the only thing
-  that ever mutates `active`, `turn`, or `action_round`.
+  card dealt to more than one hand/discard/removed pile, the China Card
+  anywhere but `GameStatus::china_card`, a hand bigger than
+  `cards::MAX_HAND_SIZE` (9 — see that constant's own doc), or a status
+  `GameStatus::validate` rejects (VP outside ±20, DEFCON outside 1-5, turn
+  outside 1-10, or `action_round` outside `1..=action_rounds_per_turn` —
+  `StatusError`'s own four variants) — `ScenarioError::{UnknownCard,
+  DuplicateCard, ChinaCardInHand, HandTooLarge, InvalidStatus}`), plus
+  turn/active-side/DEFCON/VP/space-race/China-card status. `GameStatus`
+  itself is plain data with no rules attached — the `Game` type below is
+  the only thing that ever mutates `active`, `turn`, or `action_round`
+  during real play; debug mode, below, is the one deliberate exception,
+  and `GameStatus::validate` is what keeps *that* from landing on a
+  nonsensical status, the same check a loaded `Scenario`/test state goes
+  through. The on-disk shape
+  (`RawScenario`, `pub(crate)`) is split out from name resolution
+  (`Scenario::from_raw`) so `states.rs` below can reuse it directly rather
+  than re-deriving the same JSON shape; `Scenario::to_raw` is the reverse
+  direction, writing a live `Board`/`Hands` back out by name (only a
+  country with any influence at all, in `WorldMap`'s own load order) for
+  `states.rs`'s `save` to embed. `Scenario::blank` — an empty board,
+  default status, empty hands/piles — needs no `CardCatalog`, unlike every
+  other constructor here, since there's nothing in it yet to resolve a
+  card name against; it's `main.rs`'s debug-mode `blank` command.
+- **`states`** (`src/states.rs`) — the named *test*-state library,
+  `data/states/<topic>.json`: small hand- or debug-mode-authored
+  `Scenario` snapshots (status/board/hands/discard/removed, **no log** —
+  see this bullet's own closing paragraph for why that's a deliberate
+  difference from an in-progress game's save, not built yet) used to
+  exercise a card's event or an ops action without re-creating the board
+  by hand every time. A state is referred to as `"<file>/<name>"` (e.g.
+  `"scoring/europe-ussr-control-wins"`); `file` names one JSON document
+  under the library's directory holding a `{"states": [...]}` array (so
+  several related states share one file), `name` one entry in it, found
+  via `StateLibrary::load`/`save` (resolving/writing country and card
+  *names* through `Scenario::from_raw`/`to_raw`, exactly like
+  `Scenario::from_json`'s own lookup) and listed (across every file, read
+  fresh every call) via `StateLibrary::list`. **The one file-format
+  exception to this crate's `include_str!` convention** (see "Data files"
+  below): `StateLibrary::standard()` resolves `data/states/` as a path at
+  compile time (`CARGO_MANIFEST_DIR`) but reads its contents at runtime,
+  so a state just `save`d from the REPL is loadable by name immediately,
+  with no rebuild; `StateLibrary::new` points at any directory instead,
+  which is what lets `tests/states.rs` exercise `save`/`load` against a
+  throwaway temp directory. `save`'s own JSON writer (`render_state_file`)
+  is `serde_json::to_value` plus one small hand-written pretty-printer
+  (`render_value`) — needed only because `serde_json`'s own pretty
+  formatter puts every array element on its own line, which is right for
+  a hand's card list but turns every country's `[us, ussr]` influence
+  pair into three lines apiece; `render_value` special-cases exactly that
+  shape (a 2-element all-numeric array) back onto one line, matching
+  `demo_state.json`'s own hand-authored style. **Convention:** a new card
+  implementation adds its own named states here (`data/states/<topic>.json`,
+  topic matching the card group, e.g. `scoring.json`) and matching cases
+  in `tests/states.rs`, the same way it's expected to add a snapshot
+  test — `data/states/scoring.json`'s ten states (one per tier/bonus
+  nuance the scoring-event rules actually branch on, plus both VP-cap
+  directions) are the first example. A saved test state is a bare
+  position to jump *to*, never a sequence of moves to *resume* — that
+  second thing (an in-progress game's own save, log included) doesn't
+  exist yet, and is deliberately a different type when it does, rather
+  than this one growing an optional log.
 - **`ops`** (`src/ops/`) — the game's ops-spending operations. Three kinds
   so far, sharing the `Operation` enum (`src/ops/mod.rs`) as the seam the
   rest of the crate reads through:
@@ -665,7 +721,74 @@ uniformly random legal moves.
   session (`Game::operation()`) is open, since they'd shift the board an
   operation was judged legal against; when they do run, they call
   `Game::record_edit`/`record_note` themselves, since `Game::board_mut`
-  can't observe what a caller does with it. `log [n]` (or `history`)
+  can't observe what a caller does with it.
+
+  **Debug mode** (`Session.debug`, shown as `[debug] ` in the prompt,
+  toggled by `debug [on|off]`) gates every other way of editing state
+  directly rather than playing to it: `set`/`add`/`remove` (as above) and
+  `clear <country>|all` touch the board the same way `Game::board_mut`
+  always did; `vp`/`defcon`/`turn`/`ar`/`active`/`china us|ussr [up|down]`
+  touch the status via `Game::status_mut`, but — unlike `board_mut`'s own
+  callers — never land a nonsensical value: each goes through
+  `debug_apply_status`, which mutates a *copy* of the live status,
+  checks it with `GameStatus::validate`, and only commits (via
+  `status_mut`) if that passes, printing the `StatusError` and changing
+  nothing otherwise (`vp 30`, `defcon 100`, `turn 0`, and `ar` past the
+  current `action_rounds_per_turn` are all refused this way). `give
+  us|ussr <card>`/`discard <card>`/`exile <card>` move a card between a
+  hand and the discard/removed piles via `Game::hands_mut` and
+  `Hands::take` (picks a card up from wherever it currently is) paired
+  with `push_to_hand`/`discard`/`remove_from_game` — all three refuse the
+  China Card, which `Hands` never carries (`china us|ussr` is the way to
+  move *that*), and `give` additionally refuses once the destination hand
+  is already at `cards::MAX_HAND_SIZE` (unless the card's already there,
+  in which case the move is a no-op `take`-then-`push_to_hand` right back
+  into the same hand, so it can never be what pushes it over); and
+  `blank` resets to `Scenario::blank`. Every one of these is refused
+  outright with debug mode off, refused the same way `set` already was
+  while an operation is open, and (every one except `set`/`add`/`remove`/
+  `clear`, which only ever touched the board) also refused with a card in
+  play, since rewriting a hand or the status out from under a played card
+  could leave it pointing nowhere sane — see `debug_guard`/
+  `debug_guard_strict`. Every edit calls `Game::record_edit`/
+  `record_note` itself, the same obligation `set`/`add`/`remove` already
+  had, so none of this is invisible in `log`/`export`. Still deliberately
+  no range check on `set`/`add`/`remove` themselves — an over-stacked
+  country was already possible before debug mode existed, and influence
+  has no fixed cap to check against the way VP/DEFCON/hand size do.
+
+  **Named test states** (`src/states.rs`, `data/states/`) are reached
+  through `Session.states: StateLibrary`: `states [file]` lists them with
+  their own descriptions; `save <file>/<name> [description...]` snapshots
+  the live game (`Game::snapshot`, refused with an operation open or a
+  card in play — a `Scenario` has no room for either) and writes it,
+  creating the file if needed; `load <file>/<name>` (alongside the
+  existing `load demo`) resolves one back into a real `Scenario` and
+  — unlike `load demo` — turns debug mode on automatically, since that's
+  exactly what a named test state is for. `--state <file>/<name>` loads
+  one at launch, before one-shot mode's single command runs (if any),
+  composing with `--ai`.
+
+  The REPL's own line editor is `rustyline` (the crate's one dependency
+  besides `crossterm`/`serde`), not bare `stdin().read_line`, so Tab
+  completion is available: `completion::TsHelper` (`src/completion.rs`)
+  owns the fixed candidate lists (command names from the `COMMANDS` const,
+  every card name, every country name — built once at startup, before
+  `map`/`cards` move into `Session`) plus the `StateLibrary` itself,
+  re-read fresh on every keystroke so a state `save`d moments ago
+  completes right away. The actual matching (which command's argument
+  completes against which list, and from what position — a card or
+  country name is routinely several words, so completion has to replace
+  the *whole* typed-so-far argument, not just the last word) is the pure,
+  separately-unit-tested `completion::candidates`, kept apart from
+  `TsHelper`'s `rustyline::completion::Completer` impl so it needs no
+  terminal, catalog, or file I/O to test. `COMMANDS` is checked against
+  `print_help`'s own `HELP_TEXT` by
+  `tests::every_command_is_mentioned_in_help`, rather than generating one
+  from the other, so a command added to one and forgotten in the other
+  fails the build instead of quietly drifting.
+
+  `log [n]` (or `history`)
   prints the game's history so far, or just the last `n` entries, via
   `render::render_log`; `export <path>` writes it to a file as plain text
   via `render::log_text` — the same bytes `log` shows, minus colour — and
@@ -831,13 +954,15 @@ uniformly random legal moves.
   everything it draws still comes from `render::render_world_map`/
   `render_region`/`render_country`/`render_status_bar`/`render_hand`/
   `render_card`, which stay pure `Canvas` producers.
-  Uses `crossterm`, the one non-serde dependency.
+  Uses `crossterm` — one of two non-serde dependencies, alongside
+  `rustyline` (`main.rs`'s own line editor, not this module's).
 
 ## Data files (`data/`)
 
 All game/display data is JSON or plain text, embedded into the binary via
 `include_str!` rather than read at runtime — the data is part of the
-build, not a runtime dependency.
+build, not a runtime dependency. `data/states/` (below) is the one
+deliberate exception, for debug-mode test states specifically.
 
 - `standard_map.json` — the 84 countries and their adjacency (game rules
   data). Audited once against the real board (two independent open-source
@@ -871,18 +996,28 @@ build, not a runtime dependency.
   `removed_after_event` flag, and `scoring` derived as `ops == 0`.
 - `backup/` — earlier full snapshots of the world map, kept in case a
   future change needs to compare against or revert to an earlier version.
+- `states/` — named test states (`src/states.rs`'s own `StateLibrary`),
+  one JSON file per topic (`scoring.json` is the first), each holding a
+  `{"states": [...]}` array of several named `Scenario` snapshots. Read
+  from disk at runtime, not `include_str!`-embedded — see `states.rs`'s
+  own doc above for why.
 
 ## Conventions
 
 - Fail loud at load time: JSON loaders validate everything they can (see
-  `MapError`/`LayoutError`/`ScenarioError`/`CardError`) rather than
-  silently tolerating bad data.
+  `MapError`/`LayoutError`/`ScenarioError`/`CardError`/`StateError`)
+  rather than silently tolerating bad data.
 - No `thiserror`/`anyhow` — plain enums implementing `Display` + `Error`.
 - Views are pure functions returning a `Canvas`; never print/touch the
   terminal from inside `render/`.
 - Snapshot tests live in `tests/snapshots/`; regenerate by running the
   relevant `cargo run -- --color never <command>` and diffing/replacing
   the snapshot file, not by hand-editing it.
+- A new card implementation adds its own named test states
+  (`data/states/<topic>.json`, via `src/states.rs`'s `StateLibrary`) and
+  matching cases in `tests/states.rs`, the same way it's expected to add
+  a snapshot test — see `states.rs`'s own doc above for the shape and
+  `data/states/scoring.json`/`tests/states.rs` for the first example.
 
 ## Useful commands
 
@@ -890,6 +1025,8 @@ build, not a runtime dependency.
 cargo run                          # interactive REPL
 cargo run -- worldmap              # one-shot: the whole-world map
 cargo run -- region europe         # one-shot: zoom into a region
+cargo run -- --state scoring/europe-ussr-control-wins
+                                    # jump straight into a named test state
 cargo test                         # all tests (unit + snapshot)
 cargo clippy --all-targets         # lint; expected clean
 ```

@@ -1,16 +1,40 @@
 use std::fs;
-use std::io::{self, IsTerminal, Write};
+use std::io::{self, IsTerminal};
+
+use rustyline::error::ReadlineError;
+use rustyline::history::DefaultHistory;
+use rustyline::Editor;
 
 use twilight_struggle::render::{
     coup_result_line, game_over_line, log_entry_line, log_text, operation_abandoned_line, operation_balance_line, render_card,
     render_country, render_hand, render_log, render_region, render_scoring_result, render_world, render_world_map, roll_result_line,
 };
 use twilight_struggle::{
-    ai, CardCatalog, CardFound, ColorMode, Dice, EventOutcome, Found, Game, GameError, MapLayout, Operation, OperationKind, RandomAi,
-    Region, RollOutcome, Scenario, Superpower, ViewMode, WorldMap, CHINA_CARD,
+    ai, CardCatalog, CardFound, CardId, ColorMode, Dice, EventOutcome, Found, Game, GameError, GameStatus, MapLayout, Operation,
+    OperationKind, RandomAi, Region, RollOutcome, Scenario, StateLibrary, Superpower, ViewMode, WorldMap, CHINA_CARD, DEFCON_RANGE,
+    MAX_HAND_SIZE, TURN_RANGE,
 };
 
+use completion::TsHelper;
+
+mod completion;
 mod interactive;
+
+/// Every first-word command the REPL recognises, for the line editor's
+/// completion ([`completion::candidates`]) — kept in step with
+/// [`print_help`]'s own text by
+/// `tests::every_command_is_mentioned_in_help`, rather than generating
+/// one from the other (the help text's prose doesn't reduce to a flat
+/// list, and a const doesn't carry the per-command explanation).
+/// Deliberately excludes the single-letter/numeric shortcuts (`q`,
+/// `1`-`6`, `?`) and `quit`/`exit`, which the REPL loop handles before
+/// `run_command` ever sees them.
+const COMMANDS: &[&str] = &[
+    "map", "world", "worldmap", "wm", "region", "country", "set", "add", "remove", "clear", "blank", "load", "save", "states", "play",
+    "influence", "realign", "coup", "event", "place", "roll", "undo", "confirm", "cancel", "abandon", "status", "pass", "ai", "hand",
+    "card", "log", "history", "export", "seed", "width", "color", "debug", "vp", "defcon", "turn", "ar", "active", "china", "give",
+    "discard", "exile", "help",
+];
 
 struct Session {
     map: WorldMap,
@@ -43,6 +67,18 @@ struct Session {
     /// so the REPL loop can never drive both sides without a human typing
     /// anything. `None` means every turn is typed at the prompt as usual.
     ai_side: Option<Superpower>,
+    /// Whether debug-mode state editing (`set`/`add`/`remove`/`clear`/
+    /// `vp`/`defcon`/`turn`/`ar`/`active`/`china`/`give`/`discard`/
+    /// `exile`/`blank`) is unlocked — off by default, so a normal game
+    /// can't be nudged out of true by a stray command, and shown in the
+    /// prompt (`[debug]`) so it's never silently on. Loading a named test
+    /// state (`load <file>/<name>`, as opposed to `load demo`) turns this
+    /// on automatically, since that's exactly what a test state is for.
+    debug: bool,
+    /// The named test-state library (`data/states/`) `load`/`save`/
+    /// `states` read and write — see [`StateLibrary`]'s own doc for the
+    /// file format and why it's read from disk rather than embedded.
+    states: StateLibrary,
 }
 
 fn main() {
@@ -61,6 +97,7 @@ fn main() {
     };
     let mut seed: Option<u64> = None;
     let mut ai_side: Option<Superpower> = None;
+    let mut state_ref: Option<String> = None;
     let mut command_words = Vec::new();
 
     while let Some(arg) = args.next() {
@@ -85,6 +122,9 @@ fn main() {
                 if let Some(side) = args.next().as_deref().and_then(parse_superpower) {
                     ai_side = Some(side);
                 }
+            }
+            "--state" => {
+                state_ref = args.next();
             }
             other => command_words.push(other.to_string()),
         }
@@ -111,6 +151,11 @@ fn main() {
         None => RandomAi::from_entropy(),
     };
 
+    // Built before `map`/`cards` move into `session`, for the line
+    // editor's completer (`completion::TsHelper`) below.
+    let country_names: Vec<String> = map.iter().map(|(_, c)| c.name.clone()).collect();
+    let card_names: Vec<String> = cards.iter().map(|c| c.name.clone()).collect();
+
     let mut session = Session {
         map,
         layout,
@@ -122,7 +167,13 @@ fn main() {
         dice,
         ai,
         ai_side,
+        debug: false,
+        states: StateLibrary::standard(),
     };
+
+    if let Some(reference) = &state_ref {
+        run_load_state_command(&mut session, reference);
+    }
 
     if one_shot {
         // One-shot mode: run a single command and exit, so scripts and
@@ -133,23 +184,43 @@ fn main() {
 
     println!("Twilight Struggle — terminal map. Type `help` for commands, `quit` to exit.");
     maybe_run_ai_turn(&mut session);
-    let stdin = io::stdin();
+
+    let mut rl = Editor::<TsHelper, DefaultHistory>::new().expect("rustyline editor should initialize");
+    rl.set_helper(Some(TsHelper {
+        commands: COMMANDS.iter().map(|s| s.to_string()).collect(),
+        cards: card_names,
+        countries: country_names,
+        states: StateLibrary::standard(),
+    }));
+
     loop {
-        print!("{}", prompt(&session));
-        io::stdout().flush().ok();
-        let mut line = String::new();
-        if stdin.read_line(&mut line).unwrap_or(0) == 0 {
-            break;
+        match rl.readline(&prompt(&session)) {
+            Ok(line) => {
+                let line = line.trim();
+                if line.is_empty() {
+                    continue;
+                }
+                rl.add_history_entry(line).ok();
+                if matches!(line, "quit" | "exit" | "q") {
+                    break;
+                }
+                run_command(&mut session, line);
+                maybe_run_ai_turn(&mut session);
+            }
+            // Before rustyline, Ctrl-C had no handler at all and fell
+            // through to the terminal's own default SIGINT behaviour,
+            // which killed the process outright — rustyline instead
+            // catches it and hands it back as this error, so matching
+            // bash's "clear the line" convention here would silently
+            // take away the exit keystroke everyone's muscle memory
+            // already relies on. Keep it an exit.
+            Err(ReadlineError::Interrupted) => break,
+            Err(ReadlineError::Eof) => break,
+            Err(e) => {
+                println!("readline error: {e}");
+                break;
+            }
         }
-        let line = line.trim();
-        if line.is_empty() {
-            continue;
-        }
-        if matches!(line, "quit" | "exit" | "q") {
-            break;
-        }
-        run_command(&mut session, line);
-        maybe_run_ai_turn(&mut session);
     }
 }
 
@@ -209,7 +280,8 @@ fn prompt(session: &Session) -> String {
         Some(id) => format!("[{}] ", session.cards.card(id).name),
         None => String::new(),
     };
-    format!("{} AR {}/{} {card}> ", session.game.active(), status.action_round, status.action_rounds_per_turn)
+    let debug = if session.debug { "[debug] " } else { "" };
+    format!("{debug}{} AR {}/{} {card}> ", session.game.active(), status.action_round, status.action_rounds_per_turn)
 }
 
 fn detect_width() -> usize {
@@ -283,8 +355,7 @@ fn run_command(session: &mut Session, line: &str) {
             print_country(session, &query);
         }
         "set" | "add" | "remove" => {
-            if let Some(op) = session.game.operation() {
-                println!("finish or cancel the {} first ({} of {} ops left)", op.verb(), op.remaining(), op.ops_total());
+            if !debug_guard(session) {
                 return;
             }
             if words.len() < 4 {
@@ -322,20 +393,237 @@ fn run_command(session: &mut Session, line: &str) {
                 Found::Ambiguous(ids) => print_ambiguous(session, &ids),
             }
         }
-        "load" => {
-            if let Some(op) = session.game.operation() {
-                println!("finish or cancel the {} first ({} of {} ops left)", op.verb(), op.remaining(), op.ops_total());
+        "clear" => {
+            if !debug_guard(session) {
                 return;
             }
-            if words.get(1) == Some(&"demo") {
+            match words.get(1) {
+                Some(&"all") => {
+                    let ids: Vec<_> = session.map.iter().map(|(id, _)| id).collect();
+                    for id in ids {
+                        debug_clear_country(session, id);
+                    }
+                    println!("cleared the whole board");
+                }
+                Some(_) => {
+                    let query = words[1..].join(" ");
+                    match session.map.find(&query) {
+                        Found::One(id) => {
+                            debug_clear_country(session, id);
+                            println!("cleared {}", session.map.country(id).name);
+                        }
+                        Found::None => println!("no country matches {query:?}"),
+                        Found::Ambiguous(ids) => print_ambiguous(session, &ids),
+                    }
+                }
+                None => println!("usage: clear <country>|all"),
+            }
+        }
+        "blank" => {
+            if !debug_guard_strict(session) {
+                return;
+            }
+            session.game = Game::from_scenario(&Scenario::blank(&session.map));
+            session.game.record_note("blanked the board, status, and hands");
+            println!("blanked board, status, and hands");
+        }
+        "vp" => {
+            let Some(n) = words.get(1).and_then(|s| s.parse::<i8>().ok()) else {
+                println!("usage: vp <n> (-20..=20)");
+                return;
+            };
+            if !debug_guard_strict(session) {
+                return;
+            }
+            let Some(before) = debug_apply_status(session, |s| s.vp = n) else { return };
+            session.game.record_note(format!("debug: vp {} -> {n}", before.vp));
+            println!("vp set to {n}");
+        }
+        "defcon" => {
+            let Some(n) = words.get(1).and_then(|s| s.parse::<u8>().ok()) else {
+                println!("usage: defcon <n> ({}..={})", DEFCON_RANGE.start(), DEFCON_RANGE.end());
+                return;
+            };
+            if !debug_guard_strict(session) {
+                return;
+            }
+            let Some(before) = debug_apply_status(session, |s| s.defcon = n) else { return };
+            session.game.record_note(format!("debug: defcon {} -> {n}", before.defcon));
+            println!("defcon set to {n}");
+        }
+        "turn" => {
+            let Some(n) = words.get(1).and_then(|s| s.parse::<u8>().ok()) else {
+                println!("usage: turn <n> ({}..={})", TURN_RANGE.start(), TURN_RANGE.end());
+                return;
+            };
+            if !debug_guard_strict(session) {
+                return;
+            }
+            let Some(before) = debug_apply_status(session, |s| s.turn = n) else { return };
+            session.game.record_note(format!("debug: turn {} -> {n}", before.turn));
+            println!("turn set to {n}");
+        }
+        "ar" => {
+            let Some(n) = words.get(1).and_then(|s| s.parse::<u8>().ok()) else {
+                println!("usage: ar <n> (1..=this turn's own action_rounds_per_turn)");
+                return;
+            };
+            if !debug_guard_strict(session) {
+                return;
+            }
+            let Some(before) = debug_apply_status(session, |s| s.action_round = n) else { return };
+            session.game.record_note(format!("debug: action round {} -> {n}", before.action_round));
+            println!("action round set to {n}");
+        }
+        "active" => {
+            let Some(side) = words.get(1).and_then(|s| parse_superpower(s)) else {
+                println!("usage: active us|ussr");
+                return;
+            };
+            if !debug_guard_strict(session) {
+                return;
+            }
+            let Some(before) = debug_apply_status(session, |s| s.active = side) else { return };
+            session.game.record_note(format!("debug: active side {} -> {side}", before.active));
+            println!("{side} is now active");
+        }
+        "china" => {
+            let Some(side) = words.get(1).and_then(|s| parse_superpower(s)) else {
+                println!("usage: china us|ussr [up|down]");
+                return;
+            };
+            let face_up = match words.get(2) {
+                Some(&"up") | None => true,
+                Some(&"down") => false,
+                Some(other) => {
+                    println!("expected 'up' or 'down', got {other:?}");
+                    return;
+                }
+            };
+            if !debug_guard_strict(session) {
+                return;
+            }
+            let Some(_before) = debug_apply_status(session, |s| {
+                s.china_card = side;
+                s.china_card_face_up = face_up;
+            }) else {
+                return;
+            };
+            session.game.record_note(format!("debug: china card -> {side} ({})", if face_up { "up" } else { "down" }));
+            println!("China Card now held by {side}, face {}", if face_up { "up" } else { "down" });
+        }
+        "give" => {
+            if words.len() < 3 {
+                println!("usage: give us|ussr <card>");
+                return;
+            }
+            let Some(side) = parse_superpower(words[1]) else {
+                println!("expected 'us' or 'ussr', got {:?}", words[1]);
+                return;
+            };
+            let query = words[2..].join(" ");
+            let Some(id) = find_card_or_report(session, &query) else { return };
+            if id == CHINA_CARD {
+                println!("the China Card isn't tracked in a hand — use `china us|ussr` instead");
+                return;
+            }
+            if !debug_guard_strict(session) {
+                return;
+            }
+            // A card already in `side`'s hand doesn't grow it — `take`
+            // removes it from there before `push_to_hand` puts it right
+            // back — so only a genuine addition needs the room check.
+            if !session.game.hand(side).contains(&id) && session.game.hand(side).len() >= MAX_HAND_SIZE {
+                println!("{side}'s hand already has {MAX_HAND_SIZE} cards — discard or exile one first");
+                return;
+            }
+            session.game.hands_mut().take(id);
+            session.game.hands_mut().push_to_hand(side, id);
+            session.game.record_note(format!("debug: gave {} to {side}", session.cards.card(id).name));
+            println!("{} is now in {side}'s hand", session.cards.card(id).name);
+        }
+        "discard" => {
+            let Some(query) = words.get(1..).map(|w| w.join(" ")).filter(|q| !q.is_empty()) else {
+                println!("usage: discard <card>");
+                return;
+            };
+            let Some(id) = find_card_or_report(session, &query) else { return };
+            if id == CHINA_CARD {
+                println!("the China Card isn't tracked in a hand — use `china us|ussr` instead");
+                return;
+            }
+            if !debug_guard_strict(session) {
+                return;
+            }
+            session.game.hands_mut().take(id);
+            session.game.hands_mut().discard(id);
+            session.game.record_note(format!("debug: discarded {}", session.cards.card(id).name));
+            println!("{} is now in the discard pile", session.cards.card(id).name);
+        }
+        "exile" => {
+            let Some(query) = words.get(1..).map(|w| w.join(" ")).filter(|q| !q.is_empty()) else {
+                println!("usage: exile <card>");
+                return;
+            };
+            let Some(id) = find_card_or_report(session, &query) else { return };
+            if id == CHINA_CARD {
+                println!("the China Card isn't tracked in a hand — use `china us|ussr` instead");
+                return;
+            }
+            if !debug_guard_strict(session) {
+                return;
+            }
+            session.game.hands_mut().take(id);
+            session.game.hands_mut().remove_from_game(id);
+            session.game.record_note(format!("debug: removed {} from the game", session.cards.card(id).name));
+            println!("{} is now removed from the game", session.cards.card(id).name);
+        }
+        "debug" => match words.get(1) {
+            Some(&"on") => {
+                session.debug = true;
+                println!("debug mode on");
+            }
+            Some(&"off") => {
+                session.debug = false;
+                println!("debug mode off");
+            }
+            None => println!("debug mode is {}", if session.debug { "on" } else { "off" }),
+            Some(other) => println!("usage: debug [on|off], got {other:?}"),
+        },
+        "states" => match session.states.list() {
+            Ok(entries) => {
+                let filter = words.get(1);
+                let mut shown = 0;
+                for entry in &entries {
+                    if filter.is_some_and(|&f| f != entry.file) {
+                        continue;
+                    }
+                    println!("{:<40} {}", entry.reference(), entry.description);
+                    shown += 1;
+                }
+                if shown == 0 {
+                    println!("no states found{}", filter.map(|f| format!(" in {f:?}")).unwrap_or_default());
+                }
+            }
+            Err(e) => println!("{e}"),
+        },
+        "save" => run_save_command(session, &words),
+        "load" => match words.get(1) {
+            Some(&"demo") => {
                 let scenario = Scenario::demo(&session.map, &session.cards).expect("demo scenario should be valid");
                 session.game = Game::from_scenario(&scenario);
                 session.game.record_note("loaded the demo scenario");
                 println!("loaded demo scenario");
-            } else {
-                println!("usage: load demo");
             }
-        }
+            Some(reference) => {
+                if let Some(op) = session.game.operation() {
+                    println!("finish or cancel the {} first ({} of {} ops left)", op.verb(), op.remaining(), op.ops_total());
+                    return;
+                }
+                run_load_state_command(session, reference);
+            }
+            None => println!("usage: load demo | <file>/<name>"),
+        },
         "play" => run_play_command(session, &words),
         "influence" => run_begin_command(session, OperationKind::Influence, &words),
         "realign" => run_begin_command(session, OperationKind::Realign, &words),
@@ -413,6 +701,137 @@ fn print_operation_banner(session: &Session) {
 fn print_ambiguous(session: &Session, ids: &[twilight_struggle::CountryId]) {
     let names: Vec<&str> = ids.iter().map(|&id| session.map.country(id).name.as_str()).collect();
     println!("ambiguous: {}", names.join(", "));
+}
+
+/// Resolves `query` via [`CardCatalog::find`], printing the usual "no
+/// card matches"/"ambiguous" message and returning `None` if it didn't
+/// resolve to exactly one card — the shared lookup `give`/`discard`/
+/// `exile` need, so each only has to handle the one-match case.
+fn find_card_or_report(session: &Session, query: &str) -> Option<CardId> {
+    match session.cards.find(query) {
+        CardFound::One(id) => Some(id),
+        CardFound::None => {
+            println!("no card matches {query:?}");
+            None
+        }
+        CardFound::Ambiguous(ids) => {
+            let names: Vec<&str> = ids.iter().map(|&id| session.cards.card(id).name.as_str()).collect();
+            println!("ambiguous: {}", names.join(", "));
+            None
+        }
+    }
+}
+
+/// Refuses `set`/`add`/`remove`/`clear` unless debug mode is on and no
+/// operation is open — the same guard those three already had before
+/// debug mode existed, just with debug added to it. Doesn't also check
+/// for a card in play: these four only ever touch the board, which a
+/// card mid-play has no stake in.
+fn debug_guard(session: &Session) -> bool {
+    if !session.debug {
+        println!("debug mode is off — `debug on` first");
+        return false;
+    }
+    if let Some(op) = session.game.operation() {
+        println!("finish or cancel the {} first ({} of {} ops left)", op.verb(), op.remaining(), op.ops_total());
+        return false;
+    }
+    true
+}
+
+/// [`debug_guard`], plus refusing while a card is in play — for every
+/// debug edit that touches the status or the hands/piles themselves
+/// (`vp`/`defcon`/`turn`/`ar`/`active`/`china`/`give`/`discard`/`exile`/
+/// `blank`), where a card mid-play could otherwise end up pointing at a
+/// hand that's just been rewritten out from under it.
+fn debug_guard_strict(session: &Session) -> bool {
+    if !debug_guard(session) {
+        return false;
+    }
+    if let Some(card) = session.game.card_in_play() {
+        println!("card #{card} is in play — play an operation with it, or return it, first");
+        return false;
+    }
+    true
+}
+
+/// Applies `mutate` to a *copy* of the live status, validates the result
+/// ([`GameStatus::validate`]) before committing anything, and returns the
+/// status as it was before the change on success — so `vp`/`defcon`/
+/// `turn`/`ar`/`active`/`china` all go through the same one range check
+/// (rather than each duplicating it) and report what actually changed.
+/// On failure, prints the validation error and leaves the real status
+/// untouched; the caller's own `return` on `None` is what makes this a
+/// no-op from there.
+fn debug_apply_status(session: &mut Session, mutate: impl FnOnce(&mut GameStatus)) -> Option<GameStatus> {
+    let before = *session.game.status();
+    let mut status = before;
+    mutate(&mut status);
+    if let Err(e) = status.validate() {
+        println!("{e}");
+        return None;
+    }
+    *session.game.status_mut() = status;
+    Some(before)
+}
+
+/// Zeroes both sides' influence in `id`, logging a [`crate::Event::Edit`]
+/// for each side that actually changed — the shared body of `clear
+/// <country>` and `clear all`.
+fn debug_clear_country(session: &mut Session, id: twilight_struggle::CountryId) {
+    for side in [Superpower::Us, Superpower::Ussr] {
+        let before = session.game.board().influence(id, side);
+        if before != 0 {
+            session.game.board_mut().set_influence(id, side, 0);
+            session.game.record_edit(id, side, before, 0);
+        }
+    }
+}
+
+/// `save <file>/<name> [description...]`: snapshots the live game
+/// ([`Game::snapshot`]) and writes it to the named test state, creating
+/// the file if needed. Refused with an operation open or a card in play
+/// — a [`Scenario`] has no room for either, so saving over one would
+/// silently drop it.
+fn run_save_command(session: &mut Session, words: &[&str]) {
+    if let Some(op) = session.game.operation() {
+        println!("finish or cancel the {} first ({} of {} ops left)", op.verb(), op.remaining(), op.ops_total());
+        return;
+    }
+    if let Some(card) = session.game.card_in_play() {
+        println!("card #{card} is in play — a saved state has no room for an in-progress operation; return it first");
+        return;
+    }
+    let Some(&reference) = words.get(1) else {
+        println!("usage: save <file>/<name> [description...]");
+        return;
+    };
+    let description = words.get(2..).map(|w| w.join(" ")).unwrap_or_default();
+    let snapshot = session.game.snapshot();
+    match session.states.save(&session.map, &session.cards, reference, &description, &snapshot) {
+        Ok(()) => println!("saved {reference}"),
+        Err(e) => println!("{e}"),
+    }
+}
+
+/// `load <file>/<name>`: the shared body behind the REPL's `load`
+/// command and `--state` at launch. Turns debug mode on automatically —
+/// unlike `load demo`, a named test state exists specifically to be
+/// edited and re-examined.
+fn run_load_state_command(session: &mut Session, reference: &str) {
+    match session.states.load(&session.map, &session.cards, reference) {
+        Ok((scenario, description)) => {
+            session.game = Game::from_scenario(&scenario);
+            session.debug = true;
+            session.game.record_note(format!("loaded test state {reference}"));
+            if description.is_empty() {
+                println!("loaded {reference} (debug mode on)");
+            } else {
+                println!("loaded {reference} (debug mode on): {description}");
+            }
+        }
+        Err(e) => println!("{e}"),
+    }
 }
 
 /// `play <id|name>` takes a card from the active side's hand (or, for the
@@ -864,9 +1283,12 @@ fn region_by_index(n: u8) -> Option<Region> {
     }
 }
 
-fn print_help() {
-    println!(
-        "\
+/// Kept as a `const` string, rather than inline in [`print_help`], so
+/// `tests::every_command_is_mentioned_in_help` can scan it for every
+/// name in [`COMMANDS`] — the "stays in step with" link that module doc
+/// promises, checked rather than codegen'd (the prose here doesn't
+/// reduce to a flat list the way `COMMANDS` does).
+const HELP_TEXT: &str = "\
 Commands:
   map, world              the six-region dashboard
   worldmap, wm            the whole world as one geographic map (codes, no names);
@@ -885,10 +1307,10 @@ Commands:
                           overlay, space plays it
   region <name>, 1-6      zoom into one region (europe/asia/middleeast/africa/centralamerica/southamerica)
   country <name>, /<name> a single country's detail, with all its neighbours (name or code)
-  set <c> <us|ussr> <n>   set a country's influence
-  add <c> <us|ussr> <n>   add influence (saturates)
-  remove <c> <us|ussr> <n> remove influence (saturates at 0)
   load demo               reload the bundled demo scenario
+  load <file>/<name>      load a named test state from data/states/ (Tab-
+                          completes) — turns debug mode on automatically;
+                          `--state <file>/<name>` loads one at launch
 
   status                  whose turn it is, the turn/AR counters, whichever
                           card is in play, and the open operation's
@@ -1001,6 +1423,34 @@ Commands:
                           exact name) — or press z to zoom the selected
                           card inside the interactive map
 
+  Debug mode — direct state editing, for setting up a position to
+  exercise a card against rather than playing to it. Every command below
+  is refused unless `debug on` (and, except for set/add/remove/clear,
+  with no card in play) — and refused, like set/add/remove already were,
+  while an operation is open.
+  debug [on|off]          show, or set, whether debug mode is on
+  set <c> <us|ussr> <n>   set a country's influence
+  add <c> <us|ussr> <n>   add influence (saturates)
+  remove <c> <us|ussr> <n> remove influence (saturates at 0)
+  clear <c>|all           zero a country's influence, or the whole board
+  vp <n>                  set the VP track (-20..20)
+  defcon <n>               set DEFCON
+  turn <n>, ar <n>         set the turn counter / action round
+  active us|ussr           set whose turn it is to act
+  china us|ussr [up|down]  set who holds the China Card, and face up/down
+  give us|ussr <card>      move a card into a hand, from wherever it is
+  discard <card>           move a card to the discard pile
+  exile <card>             move a card to the removed-from-game pile
+  blank                    reset to an empty board, default status, and
+                          empty hands — a base to build a state from
+  states [file]            list named test states (data/states/), with
+                          their own descriptions
+  save <file>/<name> [description...]
+                          save the live game as a named test state
+                          (refused with a card in play — a test state has
+                          no room for an in-progress operation); Tab-
+                          completes the file half of an existing name
+
   log [n], history        the game's history so far (or just the last n
                           entries), colour-banded by side; a realignment
                           or coup roll appears the instant it resolves, a
@@ -1013,6 +1463,24 @@ Commands:
   width <n>               set the render width
   color on|off            toggle ANSI colour
   help, ?                 this text
-  quit, exit, q           leave"
-    );
+  quit, exit, q           leave";
+
+fn print_help() {
+    println!("{HELP_TEXT}");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The link [`COMMANDS`]'s own doc promises: every command name it
+    /// lists for completion is actually documented somewhere in
+    /// [`HELP_TEXT`] — so a command added to one and forgotten in the
+    /// other fails the build instead of just quietly drifting.
+    #[test]
+    fn every_command_is_mentioned_in_help() {
+        for &cmd in COMMANDS {
+            assert!(HELP_TEXT.contains(cmd), "{cmd:?} is in COMMANDS but not mentioned in HELP_TEXT");
+        }
+    }
 }

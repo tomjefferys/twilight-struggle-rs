@@ -12,12 +12,13 @@ pub mod map;
 pub mod ops;
 pub mod render;
 pub mod scenario;
+pub mod states;
 pub mod status;
 
 pub use action::Action;
 pub use ai::{play_turn, Ai, RandomAi};
 pub use board::{Board, Influence};
-pub use cards::{Card, CardCatalog, CardError, CardFound, CardId, CardPhase, CardSide, Hands, CHINA_CARD};
+pub use cards::{Card, CardCatalog, CardError, CardFound, CardId, CardPhase, CardSide, Hands, CHINA_CARD, MAX_HAND_SIZE};
 pub use country::{Country, CountryId, Direction, Region, SubRegion, Superpower};
 pub use dice::Dice;
 pub use events::{scoring, EventOutcome};
@@ -31,4 +32,5 @@ pub use ops::{
 };
 pub use render::{ColorMode, ViewMode};
 pub use scenario::{Scenario, ScenarioError};
-pub use status::GameStatus;
+pub use states::{StateEntry, StateError, StateLibrary};
+pub use status::{GameStatus, StatusError, ACTION_ROUNDS_PER_TURN_RANGE, DEFCON_RANGE, TURN_RANGE, VP_RANGE};

@@ -1,0 +1,142 @@
+{
+  "states": [
+    {
+      "name": "europe-ussr-control-wins",
+      "description": "USSR holds all five Europe battlegrounds (US holds none). USSR to act with Europe Scoring in hand: event should give USSR an automatic victory (Control tier).",
+      "status": { "active": "Ussr" },
+      "influence": {
+        "France": [0, 3],
+        "West Germany": [0, 4],
+        "East Germany": [0, 3],
+        "Poland": [0, 3],
+        "Italy": [0, 2]
+      },
+      "hands": { "us": ["NATO"], "ussr": ["Europe Scoring"] }
+    },
+    {
+      "name": "europe-us-domination",
+      "description": "US controls France, West Germany, and Spain/Portugal (2 of 4 battlegrounds plus a non-battleground) — Domination, not Control. USSR controls East Germany and Finland — Presence only, since it has fewer countries than the US. US to act with Europe Scoring in hand.",
+      "status": { "active": "Us" },
+      "influence": {
+        "France": [3, 0],
+        "West Germany": [4, 0],
+        "Spain/Portugal": [2, 0],
+        "East Germany": [0, 3],
+        "Finland": [0, 1]
+      },
+      "hands": { "us": ["Europe Scoring"], "ussr": ["NATO"] }
+    },
+    {
+      "name": "asia-us-control",
+      "description": "US controls every country in Asia (USSR holds none) — Control (9 VP), all six battlegrounds (+6), plus adjacency to the USSR via Afghanistan and North Korea (+2), for +17 total. US to act with Asia Scoring in hand.",
+      "status": { "active": "Us" },
+      "influence": {
+        "Afghanistan": [2, 0],
+        "Pakistan": [2, 0],
+        "India": [3, 0],
+        "Burma": [2, 0],
+        "Laos/Cambodia": [1, 0],
+        "Thailand": [2, 0],
+        "Vietnam": [1, 0],
+        "Malaysia": [2, 0],
+        "Indonesia": [1, 0],
+        "Philippines": [2, 0],
+        "Australia": [4, 0],
+        "North Korea": [3, 0],
+        "South Korea": [3, 0],
+        "Japan": [4, 0],
+        "Taiwan": [3, 0]
+      },
+      "hands": { "us": ["Asia Scoring"], "ussr": ["NATO"] }
+    },
+    {
+      "name": "middle-east-tie",
+      "description": "US controls Jordan, USSR controls Lebanon — both non-battlegrounds, so both sides reach Presence only, with no battleground or adjacency bonus (no Middle East country borders a superpower). The two Presence values cancel out: net VP change should be 0. USSR to act with Middle East Scoring in hand.",
+      "status": { "active": "Ussr" },
+      "influence": {
+        "Jordan": [2, 0],
+        "Lebanon": [0, 1]
+      },
+      "hands": { "us": ["NATO"], "ussr": ["Middle East Scoring"] }
+    },
+    {
+      "name": "domination-needs-non-battleground",
+      "description": "US controls Mexico and Panama — two of Central America's three battlegrounds, more countries and more battlegrounds than the USSR (which holds none) — but no non-battleground country, so Domination's own requirement fails and it scores Presence only. US to act with Central America Scoring in hand.",
+      "status": { "active": "Us" },
+      "influence": {
+        "Mexico": [2, 0],
+        "Panama": [2, 0]
+      },
+      "hands": { "us": ["Central America Scoring"], "ussr": ["NATO"] }
+    },
+    {
+      "name": "africa-us-domination",
+      "description": "US controls Zaire and Angola (2 of Africa's 4 battlegrounds) plus Botswana (a non-battleground) — more countries and battlegrounds than the USSR (which holds none), and a non-battleground, so Domination applies properly (contrast with domination-needs-non-battleground). US to act with Africa Scoring in hand.",
+      "status": { "active": "Us" },
+      "influence": {
+        "Zaire": [1, 0],
+        "Angola": [1, 0],
+        "Botswana": [2, 0]
+      },
+      "hands": { "us": ["Africa Scoring"], "ussr": ["NATO"] }
+    },
+    {
+      "name": "south-america-ussr-control",
+      "description": "USSR holds every country in South America (US holds none) — Control, all four battlegrounds, no adjacency bonus (no South American country borders a superpower). USSR to act with South America Scoring in hand.",
+      "status": { "active": "Ussr" },
+      "influence": {
+        "Colombia": [0, 1],
+        "Ecuador": [0, 2],
+        "Venezuela": [0, 2],
+        "Peru": [0, 2],
+        "Bolivia": [0, 2],
+        "Paraguay": [0, 2],
+        "Chile": [0, 3],
+        "Argentina": [0, 2],
+        "Uruguay": [0, 2],
+        "Brazil": [0, 2]
+      },
+      "hands": { "us": ["NATO"], "ussr": ["South America Scoring"] }
+    },
+    {
+      "name": "southeast-asia-mixed",
+      "description": "US controls Thailand (the sub-region's one battleground, worth 2) and the Philippines (worth 1); USSR controls Vietnam and Laos/Cambodia (worth 1 each) — net +1 for the US. Southeast Asia Scoring has no tiers: this exercises the per-country payout, and the card should end up removed from the game rather than discarded (it's marked removed_after_event). US to act.",
+      "status": { "active": "Us" },
+      "influence": {
+        "Thailand": [2, 0],
+        "Philippines": [2, 0],
+        "Vietnam": [0, 1],
+        "Laos/Cambodia": [0, 1]
+      },
+      "hands": { "us": ["Southeast Asia Scoring"], "ussr": ["NATO"] }
+    },
+    {
+      "name": "vp-cap-us-wins",
+      "description": "VP already at +18. US controls Pakistan, India, and Burma — Asia Domination (+7) plus 2 battlegrounds (+2), no adjacency — for +9, which would put the track at +27. It should clamp to +20 and end the game with a US victory by VP, not Europe Control. US to act with Asia Scoring in hand.",
+      "status": { "active": "Us", "vp": 18 },
+      "influence": {
+        "Pakistan": [2, 0],
+        "India": [3, 0],
+        "Burma": [2, 0]
+      },
+      "hands": { "us": ["Asia Scoring"], "ussr": ["NATO"] }
+    },
+    {
+      "name": "vp-cap-ussr-wins",
+      "description": "The mirror of vp-cap-us-wins: VP already at -18, USSR controls Pakistan, India, and Burma for the same -9 swing, clamping to -20 and ending the game with a USSR victory by VP. USSR to act with Asia Scoring in hand.",
+      "status": { "active": "Ussr", "vp": -18 },
+      "influence": {
+        "Pakistan": [0, 2],
+        "India": [0, 3],
+        "Burma": [0, 2]
+      },
+      "hands": { "us": ["NATO"], "ussr": ["Asia Scoring"] }
+    },
+    {
+      "name": "empty-region",
+      "description": "No influence anywhere in the Middle East for either side — both reach Tier::None, net VP change 0, no winner. The baseline case: nothing to score. USSR to act with Middle East Scoring in hand.",
+      "status": { "active": "Ussr" },
+      "hands": { "us": ["NATO"], "ussr": ["Middle East Scoring"] }
+    }
+  ]
+}
