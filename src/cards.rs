@@ -310,7 +310,24 @@ impl CardCatalog {
     pub fn is_empty(&self) -> bool {
         self.cards.is_empty()
     }
+
+    /// Every card in the catalog, load order (ascending id) — what the
+    /// REPL's card-name completer walks to build its candidate list.
+    pub fn iter(&self) -> impl Iterator<Item = &Card> {
+        self.cards.iter()
+    }
 }
+
+/// The most cards a hand holds in this implementation — not quite the
+/// real hand-limit rule (discarding down to it, and the Late War size
+/// bump, are both out of scope), but the number every hand this crate
+/// actually deals reaches: the demo scenario, and every bundled test
+/// state, both deal exactly this many cards per side. `main.rs`'s
+/// debug-mode `give` refuses to push a hand past it, and
+/// [`crate::scenario::Scenario::from_raw`] refuses to load one that
+/// already is — see `CLAUDE.md`'s own `render/hand.rs` doc for why the
+/// hand strip itself has no trouble with more (it paginates).
+pub const MAX_HAND_SIZE: usize = 9;
 
 /// Each side's held cards — a hand is just the list of [`CardId`]s dealt
 /// to it, in hand order. Deliberately doesn't include the China Card
@@ -338,11 +355,26 @@ impl Hands {
         Hands { us, ussr, discard: Vec::new(), removed: Vec::new() }
     }
 
+    /// Like [`Hands::new`], but also seeding the discard and removed-from-
+    /// game piles — what [`crate::scenario::Scenario::from_json`] needs
+    /// to restore a saved test state, which (unlike a fresh scenario) can
+    /// have cards sitting in either pile already.
+    pub fn with_piles(us: Vec<CardId>, ussr: Vec<CardId>, discard: Vec<CardId>, removed: Vec<CardId>) -> Self {
+        Hands { us, ussr, discard, removed }
+    }
+
     pub fn hand(&self, side: Superpower) -> &[CardId] {
         match side {
             Superpower::Us => &self.us,
             Superpower::Ussr => &self.ussr,
         }
+    }
+
+    /// Whether `side`'s hand is already at [`MAX_HAND_SIZE`] — what
+    /// `main.rs`'s debug-mode `give` checks before pushing another card
+    /// onto it.
+    pub fn is_full(&self, side: Superpower) -> bool {
+        self.hand(side).len() >= MAX_HAND_SIZE
     }
 
     fn hand_mut(&mut self, side: Superpower) -> &mut Vec<CardId> {
@@ -394,6 +426,37 @@ impl Hands {
 
     pub fn removed(&self) -> &[CardId] {
         &self.removed
+    }
+
+    /// Removes `card` from wherever it currently sits — either hand, the
+    /// discard pile, or the removed-from-game pile — returning whether it
+    /// was found at all. Debug-mode support for
+    /// [`crate::game::Game::hands_mut`]: `give`/`discard`/`exile` all need
+    /// to pick a card up from wherever it is before moving it somewhere
+    /// else, the same one card never existing in two piles at once that
+    /// the normal play/discard/remove path already keeps.
+    pub fn take(&mut self, card: CardId) -> bool {
+        for side in [Superpower::Us, Superpower::Ussr] {
+            if self.remove(side, card).is_some() {
+                return true;
+            }
+        }
+        if let Some(index) = self.discard.iter().position(|&c| c == card) {
+            self.discard.remove(index);
+            return true;
+        }
+        if let Some(index) = self.removed.iter().position(|&c| c == card) {
+            self.removed.remove(index);
+            return true;
+        }
+        false
+    }
+
+    /// Adds `card` to `side`'s hand, at the end — the other half of
+    /// [`Hands::take`] a debug-mode `give` needs: take it from wherever it
+    /// was, then push it onto the new hand.
+    pub fn push_to_hand(&mut self, side: Superpower, card: CardId) {
+        self.hand_mut(side).push(card);
     }
 }
 

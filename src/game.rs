@@ -342,6 +342,44 @@ impl Game {
         &mut self.board
     }
 
+    /// Mutable access to the status (turn/AR/active side/DEFCON/VP/China
+    /// Card/…), for debug-mode editing (`vp`/`defcon`/`turn`/`ar`/
+    /// `active`/`china`). Bypasses `advance`/`apply_vp`/`set_winner`
+    /// entirely, the same way [`Game::board_mut`] bypasses the ops
+    /// system — a caller should refuse this while [`Game::operation`] is
+    /// `Some` or a card is in play, and report the change itself via
+    /// [`Game::record_edit`] or [`Game::record_note`], since `Game`
+    /// cannot observe what's done with this any more than it can for
+    /// `board_mut`.
+    pub fn status_mut(&mut self) -> &mut GameStatus {
+        &mut self.status
+    }
+
+    /// Mutable access to both sides' hands and the discard/removed
+    /// piles, for debug-mode `give`/`discard`/`exile`
+    /// ([`crate::cards::Hands::take`]/`push_to_hand`/`discard`/
+    /// `remove_from_game`). Bypasses `play_card`/`confirm`/`cancel`
+    /// entirely, so a caller reports what it did the same way
+    /// [`Game::board_mut`]'s callers do.
+    pub fn hands_mut(&mut self) -> &mut Hands {
+        &mut self.hands
+    }
+
+    /// A snapshot of the live game — status, board, and hands — in the
+    /// exact shape a [`Scenario`] holds, for
+    /// [`crate::states::StateLibrary::save`] to write out. Deliberately
+    /// drops the log, whichever card is in play, and any open
+    /// operation: a saved *test state* is a bare position to jump back
+    /// into, not an in-progress game's move history (see
+    /// `StateLibrary`'s own doc for why those are kept as two different
+    /// things). Refused by the caller (not here — `Game` has no concept
+    /// of "refuse") while a card is in play, the same way `save` refuses
+    /// in `main.rs`, so a snapshot never silently drops a half-played
+    /// turn.
+    pub fn snapshot(&self) -> Scenario {
+        Scenario { status: self.status, board: self.board.clone(), hands: self.hands.clone() }
+    }
+
     /// The board a view should read: the open operation's speculative one
     /// if it has one (a placement does; a realignment or coup doesn't,
     /// since their rolls already land on the real board), otherwise the
