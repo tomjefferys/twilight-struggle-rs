@@ -2,12 +2,12 @@ use std::fs;
 use std::io::{self, IsTerminal, Write};
 
 use twilight_struggle::render::{
-    coup_result_line, log_entry_line, log_text, operation_abandoned_line, operation_balance_line, render_card, render_country, render_hand,
-    render_log, render_region, render_world, render_world_map, roll_result_line,
+    coup_result_line, game_over_line, log_entry_line, log_text, operation_abandoned_line, operation_balance_line, render_card,
+    render_country, render_hand, render_log, render_region, render_scoring_result, render_world, render_world_map, roll_result_line,
 };
 use twilight_struggle::{
-    ai, CardCatalog, CardFound, ColorMode, Dice, Found, Game, GameError, MapLayout, Operation, OperationKind, RandomAi, Region,
-    RollOutcome, Scenario, Superpower, ViewMode, WorldMap, CHINA_CARD,
+    ai, CardCatalog, CardFound, ColorMode, Dice, EventOutcome, Found, Game, GameError, MapLayout, Operation, OperationKind, RandomAi,
+    Region, RollOutcome, Scenario, Superpower, ViewMode, WorldMap, CHINA_CARD,
 };
 
 mod interactive;
@@ -340,6 +340,7 @@ fn run_command(session: &mut Session, line: &str) {
         "influence" => run_begin_command(session, OperationKind::Influence, &words),
         "realign" => run_begin_command(session, OperationKind::Realign, &words),
         "coup" => run_begin_command(session, OperationKind::Coup, &words),
+        "event" => run_event_command(session),
         "place" => run_place_command(session, &words),
         "roll" => run_roll_command(session, &words),
         "undo" => run_undo_command(session),
@@ -472,6 +473,26 @@ fn run_begin_command(session: &mut Session, kind: OperationKind, words: &[&str])
                     "started a {side} coup with {ops} ops — `roll <country>` spends all {ops} on one attempt, \
                      resolved immediately onto the board and cannot be taken back"
                 ),
+            }
+        }
+        Err(e) => println!("{e}"),
+    }
+}
+
+/// `event` resolves whichever card is in play's own text — the other
+/// thing a played card can fund, alongside `influence`/`realign`/`coup`.
+/// Only a scoring card's event is implemented so far; anything else is
+/// refused with [`GameError::EventNotImplemented`]'s own text. Prints the
+/// same breakdown the interactive map's modal shows, and, if the event
+/// just won the game, [`game_over_line`] right after it.
+fn run_event_command(session: &mut Session) {
+    match session.game.play_event(&session.map, &session.cards) {
+        Ok(EventOutcome::Scoring(result)) => {
+            let vp_after = session.game.status().vp;
+            let canvas = render_scoring_result(&session.map, &session.cards, &result, vp_after, None);
+            println!("{}", canvas.render(session.color));
+            if let Some(victory) = session.game.winner() {
+                println!("{}", game_over_line(victory));
             }
         }
         Err(e) => println!("{e}"),
@@ -766,6 +787,9 @@ fn run_status_command(session: &Session) {
         session.game.ops_available(),
     );
     print_operation_banner(session);
+    if let Some(victory) = session.game.winner() {
+        println!("{}", game_over_line(victory));
+    }
 }
 
 /// `pass` forfeits the active side's turn without opening an operation.
@@ -883,9 +907,11 @@ Commands:
   play <id|name>          take a card from the active side's hand (id,
                           name prefix, or exact name — the China Card
                           included, when it's held face up) — its ops
-                          value is what influence/realign/coup spend next;
-                          nothing about the card's text happens — or press
-                          space inside the interactive map
+                          value is what influence/realign/coup spend next,
+                          or `event` resolves its text instead (a scoring
+                          card has no ops, so event is the only way to
+                          play one) — or press space inside the
+                          interactive map
 
   influence               start placing influence for the active side,
                           spending the card already in play — or press i
@@ -917,6 +943,16 @@ Commands:
   undo                    (during a coup) refuses: a resolved attempt
                           can't be taken back
 
+  event                   resolve the card in play's own text instead of
+                          its ops — so far, only the seven scoring cards'
+                          events are implemented (anything else is
+                          refused); discards the card (or, for a card
+                          removed after its event, removes it from the
+                          game entirely) and passes the turn — or, if it
+                          wins the game outright (VP reaching ±20, or
+                          Europe Scoring's Control tier), ends it instead
+                          — or press e inside the interactive map
+
   confirm                 commit a pending placement, or close a finished
                           realignment or coup (whose rolls are already on
                           the board) — either way, the card played is
@@ -944,15 +980,19 @@ Commands:
                           of worldmap/region/country mark touched countries
                           and are navigable inside interactive mode — space
                           plays the selected card, i/a/o start an operation
-                          with it and p passes, +/= place on region or
-                          country, u undo, c confirm, X cancel, Backspace
-                          steps back one level the same way `abandon` does
-                          — c and X hand the turn over without leaving the
-                          map, so the next side can start its own card from
-                          the same screen; r rolls or attempts a coup only
-                          on the country screen, opened from region with
-                          Enter or r; set/add/remove/load are refused until
-                          you confirm or cancel)
+                          with it, e resolves its event (a scoring card's
+                          only way to play), and p passes, +/= place on
+                          region or country, u undo, c confirm, X cancel,
+                          Backspace steps back one level the same way
+                          `abandon` does — c and X hand the turn over
+                          without leaving the map, so the next side can
+                          start its own card from the same screen; r rolls
+                          or attempts a coup only on the country screen,
+                          opened from region with Enter or r; set/add/
+                          remove/load are refused until you confirm or
+                          cancel; once a scoring event ends the game, the
+                          status bar's own row says so and every further
+                          action is refused)
 
   hand [us|ussr]          the named side's hand (default: active side),
                           as a strip of mini-card boxes — or see it drawn

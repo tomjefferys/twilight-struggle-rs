@@ -14,6 +14,7 @@ pub mod hand;
 pub mod log;
 pub mod region;
 pub mod roll;
+pub mod score;
 pub mod statusbar;
 pub mod world;
 pub mod worldmap;
@@ -24,6 +25,7 @@ pub use hand::{render_hand, HAND_ROWS, HAND_WIDTH};
 pub use log::{log_entry_line, log_text, render_log};
 pub use region::render_region;
 pub use roll::{render_roll_result, RollReport};
+pub use score::render_scoring_result;
 pub use statusbar::{render_status_bar, STATUS_BAR_ROWS};
 pub use world::render_world;
 pub use worldmap::render_world_map;
@@ -460,6 +462,17 @@ pub fn operation_balance_line(layout: &crate::layout::MapLayout, board: &crate::
     format!("{} · {}", operation_header(op), operation_touched_line(layout, board, op))
 }
 
+/// `GAME OVER — USSR wins (VP)` — [`statusbar::render_status_bar`]'s own
+/// winner row, shared so `main.rs`'s `status`/`event` commands print the
+/// exact same wording when there's no screen to draw it on.
+pub fn game_over_line(victory: crate::game::Victory) -> String {
+    let reason = match victory.reason {
+        crate::game::VictoryReason::Vp => "VP",
+        crate::game::VictoryReason::EuropeControl => "Europe control",
+    };
+    format!("GAME OVER — {} wins ({reason})", victory.side)
+}
+
 /// The side/verb/ops-remaining half of [`operation_balance_line`] on its
 /// own — the country view's Operation panel uses this as its title and
 /// draws [`operation_touched_line`] as a row inside instead of gluing the
@@ -647,4 +660,4 @@ pub(crate) fn vp_line(vp: i8) -> String {
 /// steps rather than two different hints the caller would have to choose
 /// between. The status bar (which does know) uses its own three-state
 /// wording instead — see `statusbar.rs`.
-pub(crate) const BEGIN_HINT: &str = "space play card · i/a/o influence/realign/coup · p pass";
+pub(crate) const BEGIN_HINT: &str = "space play card · i/a/o influence/realign/coup · e event · p pass";

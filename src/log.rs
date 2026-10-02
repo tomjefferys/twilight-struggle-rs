@@ -26,7 +26,8 @@
 
 use crate::cards::CardId;
 use crate::country::{CountryId, Superpower};
-use crate::game::OperationKind;
+use crate::events::ScoringResult;
+use crate::game::{OperationKind, Victory};
 use crate::ops::{CoupResult, RollResult};
 
 /// What happened, with no opinion on how it should be displayed.
@@ -72,6 +73,18 @@ pub enum Event {
     },
     /// The active side forfeited its turn with no operation open.
     Pass,
+    /// A scoring card's event resolved — [`crate::game::Game::play_event`],
+    /// pushed right after the `Selected` entry for the same card (so
+    /// still before `advance`, if the game didn't just end) and carrying
+    /// the VP track's new value, since `result.vp_delta` alone doesn't
+    /// say what it landed on.
+    Scored { result: ScoringResult, vp_after: i8 },
+    /// The game ended — pushed by [`crate::game::Game::play_event`]
+    /// immediately after the `Scored` entry that caused it, the one
+    /// entry type with no side of its own (the log's `side` field is set
+    /// from the active player who happened to trigger it, but the
+    /// victory itself belongs to [`crate::game::Victory::side`]).
+    GameOver(Victory),
     /// A `set`/`add`/`remove`-style debug edit, made through
     /// [`crate::game::Game::board_mut`] — which bypasses the operation
     /// system entirely, so `Game` cannot observe it except through this

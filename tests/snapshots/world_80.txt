@@ -8,28 +8,27 @@
 │  Yugoslavi -:2   Hungary   -:1   Bulgaria  ->3   Turkey    2<-  │
 │  Romania   ->3                                                  │
 └─────────────────────────────────────────────────────────────────┘
-┌ Asia  bg 5-2  ctry 6-3 ─────────────────────────────────────────┐
-│  Afghanist ->2  *Pakistan  2<-   China     -:-  *North Kor ->3  │
-│ *South Kor 3<-  *Japan     4<-  *India     2:1   Burma     -:-  │
-│  Laos      -:-  *Vietnam   ->2  *Philippin 2<-   Taiwan    -:-  │
-│ *Thailand  2<-   Cambodia  -:-  *Indonesia 1:1   Malaysia  -:-  │
-│  Australia 4<-                                                  │
+┌ Asia  bg 4-1  ctry 6-3 ─────────────────────────────────────────┐
+│  Afghanist ->2  *Pakistan  2<-  *North Kor ->3  *South Kor 3<-  │
+│ *Japan     4<-  *India     2:1   Burma     -:-   Laos/Camb -:-  │
+│  Philippin 2<-   Taiwan    -:-  *Thailand  2<-   Vietnam   ->2  │
+│  Indonesia 1:1   Malaysia  -:-   Australia 4<-                  │
 └─────────────────────────────────────────────────────────────────┘
 ┌ Middle East  bg 1-1  ctry 1-2 ──────────────────────────────────┐
-│  Lebanon   -:-   Syria     ->2   Libya     -:1  *Egypt     ->3  │
-│ *Israel    4<-   Jordan    -:-   Iraq      -:2  *Iran      2:1  │
-│  Saudi Ara -:-   Gulf Stat -:-                                  │
+│  Lebanon   -:-   Syria     ->2  *Libya     -:1  *Egypt     ->3  │
+│ *Israel    4<-   Jordan    -:-  *Iraq      -:2  *Iran      2:1  │
+│ *Saudi Ara -:-   Gulf Stat -:-                                  │
 └─────────────────────────────────────────────────────────────────┘
 ┌ Africa  bg 1-2  ctry 1-2 ───────────────────────────────────────┐
 │  Morocco   1:-  *Algeria   1:2   Tunisia   -:-   West Afri -:-  │
 │  Ivory Coa -:-   Saharan S -:-   Sudan     -:-  *Nigeria   2<-  │
-│  Cameroon  -:-   Ethiopia  -:-   Somalia   -:-  *Angola    ->2  │
-│ *Zaire     ->1   Kenya     -:-   Botswana  -:-   Zimbabwe  -:-  │
-│  SE Africa -:-   South Afr -:-                                  │
+│  Cameroon  -:-   Ethiopia  -:-   Somalia   -:-  *South Afr -:-  │
+│ *Angola    ->2  *Zaire     ->1   Kenya     -:-   Botswana  -:-  │
+│  Zimbabwe  -:-   SE Africa -:-                                  │
 └─────────────────────────────────────────────────────────────────┘
-┌ Central America  bg 1-1  ctry 3-1 ──────────────────────────────┐
-│  Mexico    2<-   Guatemala -:-   Haiti     1<-   Dominican -:-  │
-│  El Salvad -:-   Honduras  -:-  *Cuba      ->3  *Nicaragua 1:1  │
+┌ Central America  bg 2-1  ctry 3-1 ──────────────────────────────┐
+│ *Mexico    2<-   Guatemala -:-   Haiti     1<-   Dominican -:-  │
+│  El Salvad -:-   Honduras  -:-  *Cuba      ->3   Nicaragua 1:1  │
 │  Costa Ric -:-  *Panama    2<-                                  │
 └─────────────────────────────────────────────────────────────────┘
 ┌ South America  bg 3-0  ctry 3-0 ────────────────────────────────┐

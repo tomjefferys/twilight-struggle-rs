@@ -4,6 +4,6 @@ USSR hand · 9 cards + China — [ ] select · z zoom
 │USSR Early     ││USSR Early*    ││USSR Early*    ││USSR Early*    ││Both Early     │
 └───────────────┘└───────────────┘└───────────────┘└───────────────┘└───────────────┘
 ┌───────────────┐┌───────────────┐┌───────────────┐┌───────────────┐┌───────────────┐
-│1 UN Intervent…││4 Nuclear Test…││3 Containment  ││1 CIA Created  ││★4 The China C…│
+│S Asia Scoring ││S Middle East …││3 Containment  ││1 CIA Created  ││★4 The China C…│
 │Both Early     ││Both Early     ││US   Early*    ││US   Early*    ││face up        │
 └───────────────┘└───────────────┘└───────────────┘└───────────────┘└───────────────┘

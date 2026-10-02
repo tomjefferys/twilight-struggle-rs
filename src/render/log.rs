@@ -12,7 +12,9 @@
 
 use crate::cards::{CardCatalog, CardId};
 use crate::country::{CountryId, Superpower};
-use crate::game::OperationKind;
+use crate::events::scoring::{ScoringKind, SideScore, Tier};
+use crate::events::ScoringResult;
+use crate::game::{OperationKind, Victory, VictoryReason};
 use crate::log::{Event, GameLog, LogEntry};
 use crate::map::WorldMap;
 use crate::ops::{CoupResult, RollResult};
@@ -129,6 +131,8 @@ fn action_and_detail(map: &WorldMap, cards: &CardCatalog, entry: &LogEntry) -> (
         Event::Pass => ("pass", String::new()),
         Event::Edit { country, side, before, after } => ("edit", edit_detail(map, *country, *side, *before, *after)),
         Event::Note(text) => ("note", text.clone()),
+        Event::Scored { result, vp_after } => ("score", scored_detail(map, cards, result, *vp_after)),
+        Event::GameOver(victory) => ("gameover", game_over_detail(*victory)),
     }
 }
 
@@ -211,4 +215,55 @@ fn coup_detail(map: &WorldMap, side: Superpower, result: &CoupResult) -> String 
 
 fn edit_detail(map: &WorldMap, country: CountryId, side: Superpower, before: u8, after: u8) -> String {
     format!("{} {side} {before} -> {after}", map.country(country).name)
+}
+
+fn tier_label(tier: Tier) -> &'static str {
+    match tier {
+        Tier::None => "none",
+        Tier::Presence => "pres",
+        Tier::Domination => "dom",
+        Tier::Control => "ctrl",
+    }
+}
+
+/// One side's own slice of a region scoring line — e.g. `US 7 (dom, 2 BG,
+/// 1 adj)` — omitting the battleground/adjacency parentheticals whenever
+/// they're zero, the same "don't show a contribution that didn't apply"
+/// rule `realign::Modifiers::reasons` follows.
+fn side_breakdown(side: Superpower, score: &SideScore) -> String {
+    let mut parts = vec![tier_label(score.tier).to_string()];
+    if score.battleground_vp > 0 {
+        parts.push(format!("{} BG", score.battleground_vp));
+    }
+    if score.adjacency_vp > 0 {
+        parts.push(format!("{} adj", score.adjacency_vp));
+    }
+    format!("{side} {} ({})", score.total(), parts.join(", "))
+}
+
+/// `result.vp_delta` and `vp_after` are both carried on the `Scored`
+/// entry itself (see its own doc) rather than recomputed here — this
+/// only has to format them.
+fn scored_detail(map: &WorldMap, cards: &CardCatalog, result: &ScoringResult, vp_after: i8) -> String {
+    let name = &cards.card(result.card).name;
+    let body = match &result.kind {
+        ScoringKind::Region { region, us, ussr } => {
+            format!("{region}: {} · {}", side_breakdown(Superpower::Us, us), side_breakdown(Superpower::Ussr, ussr))
+        }
+        ScoringKind::SoutheastAsia { controlled } if controlled.is_empty() => "no countries controlled".to_string(),
+        ScoringKind::SoutheastAsia { controlled } => controlled
+            .iter()
+            .map(|&(id, side, vp)| format!("{} {side}+{vp}", map.country(id).name))
+            .collect::<Vec<_>>()
+            .join(", "),
+    };
+    format!("{name}: {body} -> {:+} VP (now {vp_after})", result.vp_delta)
+}
+
+fn game_over_detail(victory: Victory) -> String {
+    let reason = match victory.reason {
+        VictoryReason::Vp => "VP",
+        VictoryReason::EuropeControl => "Europe control",
+    };
+    format!("{} wins ({reason})", victory.side)
 }

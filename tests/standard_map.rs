@@ -3,7 +3,7 @@ use twilight_struggle::{Board, MapError, Region, SubRegion, Superpower, WorldMap
 #[test]
 fn standard_map_loads_and_has_expected_shape() {
     let map = WorldMap::standard().expect("standard map should load");
-    assert_eq!(map.len(), 86);
+    assert_eq!(map.len(), 84);
 
     // Every SE Asia sub-region country must be in the Asia region.
     for (_, country) in map.iter() {
@@ -16,6 +16,84 @@ fn standard_map_loads_and_has_expected_shape() {
             assert_eq!(country.region, Region::Europe, "{} is in a Europe sub-region but not Europe", country.name);
         }
     }
+}
+
+/// Pins the per-region country counts against the real board, which this
+/// crate's map data has previously drifted from (merged/extra countries,
+/// wrong battlegrounds) without any test catching it.
+#[test]
+fn each_region_has_the_expected_country_count() {
+    let map = WorldMap::standard().unwrap();
+    let mut counts = std::collections::HashMap::new();
+    for (_, country) in map.iter() {
+        *counts.entry(country.region).or_insert(0) += 1;
+    }
+    assert_eq!(counts[&Region::Europe], 21);
+    assert_eq!(counts[&Region::MiddleEast], 10);
+    assert_eq!(counts[&Region::Africa], 18);
+    assert_eq!(counts[&Region::CentralAmerica], 10);
+    assert_eq!(counts[&Region::SouthAmerica], 10);
+    assert_eq!(counts[&Region::Asia], 15);
+}
+
+/// Pins every battleground country, by region — the real board's own
+/// list, not just "however many this crate's data happens to have".
+#[test]
+fn battlegrounds_match_the_real_board() {
+    let map = WorldMap::standard().unwrap();
+    let battlegrounds = |region: Region| -> Vec<&str> {
+        let mut names: Vec<&str> =
+            map.iter().filter(|(_, c)| c.region == region && c.battleground).map(|(_, c)| c.name.as_str()).collect();
+        names.sort();
+        names
+    };
+
+    let mut europe = battlegrounds(Region::Europe);
+    europe.sort();
+    let mut expected = vec!["France", "West Germany", "East Germany", "Poland", "Italy"];
+    expected.sort();
+    assert_eq!(europe, expected);
+
+    let mut expected = vec!["Egypt", "Israel", "Iraq", "Iran", "Libya", "Saudi Arabia"];
+    expected.sort();
+    assert_eq!(battlegrounds(Region::MiddleEast), expected);
+
+    let mut expected = vec!["North Korea", "South Korea", "Japan", "Pakistan", "India", "Thailand"];
+    expected.sort();
+    assert_eq!(battlegrounds(Region::Asia), expected);
+
+    let mut expected = vec!["Algeria", "Nigeria", "Zaire", "Angola", "South Africa"];
+    expected.sort();
+    assert_eq!(battlegrounds(Region::Africa), expected);
+
+    let mut expected = vec!["Mexico", "Cuba", "Panama"];
+    expected.sort();
+    assert_eq!(battlegrounds(Region::CentralAmerica), expected);
+
+    let mut expected = vec!["Venezuela", "Chile", "Argentina", "Brazil"];
+    expected.sort();
+    assert_eq!(battlegrounds(Region::SouthAmerica), expected);
+}
+
+/// The specific countries with a direct superpower border, pinned so a
+/// future map edit can't silently drop or add one.
+#[test]
+fn superpower_borders_match_the_real_board() {
+    let map = WorldMap::standard().unwrap();
+    let borders = |sp: Superpower| -> Vec<&str> {
+        let mut names: Vec<&str> =
+            map.iter().filter(|(_, c)| c.borders_superpower(sp)).map(|(_, c)| c.name.as_str()).collect();
+        names.sort();
+        names
+    };
+
+    let mut expected = vec!["Canada", "Mexico", "Cuba", "Japan"];
+    expected.sort();
+    assert_eq!(borders(Superpower::Us), expected);
+
+    let mut expected = vec!["Finland", "Poland", "Romania", "Afghanistan", "North Korea"];
+    expected.sort();
+    assert_eq!(borders(Superpower::Ussr), expected);
 }
 
 #[test]
