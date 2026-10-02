@@ -14,12 +14,29 @@ use crossterm::{execute, queue};
 
 use twilight_struggle::render::{
     log_entry_line, operation_abandoned_line, operation_closed_line, operation_header, render_card, render_country, render_hand,
-    render_region, render_roll_result, render_status_bar, render_world_map, Canvas, RollReport, HAND_ROWS,
+    render_region, render_roll_result, render_scoring_result, render_status_bar, render_world_map, Canvas, RollReport, HAND_ROWS,
 };
+use twilight_struggle::events::ScoringResult;
 use twilight_struggle::{
-    ai, Board, CardCatalog, CardId, ColorMode, CountryId, Dice, Direction, Event, Game, GameError, LogEntry, MapLayout, OperationKind,
-    RandomAi, Region, RollOutcome, Superpower, ViewMode, WorldMap, CHINA_CARD,
+    ai, Board, CardCatalog, CardId, ColorMode, CountryId, Dice, Direction, Event, EventOutcome, Game, GameError, LogEntry, MapLayout,
+    OperationKind, RandomAi, Region, RollOutcome, Superpower, ViewMode, WorldMap, CHINA_CARD,
 };
+
+/// Whichever irreversible result is currently shown as its own modal —
+/// a resolved realignment roll/coup attempt, or a resolved scoring
+/// card's event. Both share one queue (`modal` in [`run`]) and the same
+/// Enter-to-dismiss handling, since both are "too important, and too
+/// easy to miss in a dense message line, to report any other way" in
+/// exactly the same sense — see [`RollReport`]'s own doc for the
+/// original reasoning, which applies here unchanged.
+enum Modal {
+    Roll(RollReport),
+    /// A scoring event's own result, plus the VP track's value right
+    /// after it applied — [`twilight_struggle::events::ScoringResult`]
+    /// only carries the *change*, the same split `RollReport` keeps
+    /// between a roll's own result and the `before` state it needs.
+    Score(ScoringResult, i8),
+}
 
 /// Which screen is currently showing.
 enum Screen {
@@ -172,7 +189,7 @@ pub fn run(
     // times (a multi-op realignment) before handing control back; each is
     // shown in turn, dismissed with Enter, the human and AI cases sharing
     // the same queue.
-    let mut roll_modal: VecDeque<RollReport> = VecDeque::new();
+    let mut modal: VecDeque<Modal> = VecDeque::new();
     // Each side's selected index into its own hand (China Card appended
     // last, when it holds it) — kept per side, indexed via `side_index`,
     // so passing the turn back and forth doesn't lose either side's place.
@@ -184,15 +201,15 @@ pub fn run(
     // the newly active side's own hand takes its place.
     let mut zoomed = false;
 
-    maybe_run_ai_turn(ai_side, ai, game, map, cards, dice, &mut message, &mut sticky, &mut zoomed, &mut roll_modal);
-    draw(&screen, map, layout, cards, game, message.as_deref(), &hand_selected, zoomed, &roll_modal, color)?;
+    maybe_run_ai_turn(ai_side, ai, game, map, cards, dice, &mut message, &mut sticky, &mut zoomed, &mut modal);
+    draw(&screen, map, layout, cards, game, message.as_deref(), &hand_selected, zoomed, &modal, color)?;
     loop {
         match event::read()? {
             TermEvent::Key(key) if key.kind == KeyEventKind::Press => {
                 if key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL) {
                     return Ok(());
                 }
-                if !roll_modal.is_empty() {
+                if !modal.is_empty() {
                     // The roll-result modal is strictly in front of
                     // everything else — a zoomed card can't even be open
                     // at the same time, since both the human's own `r`
@@ -202,12 +219,12 @@ pub fn run(
                     // else reaches the map or the hand while it's up.
                     match key.code {
                         KeyCode::Enter | KeyCode::Esc => {
-                            roll_modal.pop_front();
+                            modal.pop_front();
                         }
                         KeyCode::Char('q') => return Ok(()),
                         _ => {}
                     }
-                    draw(&screen, map, layout, cards, game, message.as_deref(), &hand_selected, zoomed, &roll_modal, color)?;
+                    draw(&screen, map, layout, cards, game, message.as_deref(), &hand_selected, zoomed, &modal, color)?;
                     continue;
                 }
                 if !std::mem::take(&mut sticky) {
@@ -229,7 +246,7 @@ pub fn run(
                         }
                         _ => {}
                     }
-                    draw(&screen, map, layout, cards, game, message.as_deref(), &hand_selected, zoomed, &roll_modal, color)?;
+                    draw(&screen, map, layout, cards, game, message.as_deref(), &hand_selected, zoomed, &modal, color)?;
                     continue;
                 }
                 match key.code {
@@ -248,6 +265,14 @@ pub fn run(
                     KeyCode::Char('i') => message = begin(game, OperationKind::Influence),
                     KeyCode::Char('a') => message = begin(game, OperationKind::Realign),
                     KeyCode::Char('o') => message = begin(game, OperationKind::Coup),
+                    KeyCode::Char('e') => match game.play_event(map, cards) {
+                        Ok(EventOutcome::Scoring(result)) => {
+                            let vp_after = game.status().vp;
+                            zoomed = false;
+                            modal.push_back(Modal::Score(result, vp_after));
+                        }
+                        Err(e) => message = Some(e.to_string()),
+                    },
                     KeyCode::Char('p') => {
                         let passing = game.active();
                         message = Some(match game.pass() {
@@ -346,7 +371,7 @@ pub fn run(
                                 let side = game.active();
                                 let before = (game.board().influence(*selected, Superpower::Us), game.board().influence(*selected, Superpower::Ussr));
                                 match game.roll(map, *selected, dice) {
-                                    Ok(outcome) => roll_modal.push_back(RollReport { side, outcome, before }),
+                                    Ok(outcome) => modal.push_back(Modal::Roll(RollReport { side, outcome, before })),
                                     Err(GameError::Realign(e)) => message = Some(format!("{}: {e}", map.country(*selected).name)),
                                     Err(GameError::Coup(e)) => message = Some(format!("{}: {e}", map.country(*selected).name)),
                                     Err(_) => {}
@@ -360,25 +385,28 @@ pub fn run(
                         },
                     },
                 }
-                maybe_run_ai_turn(ai_side, ai, game, map, cards, dice, &mut message, &mut sticky, &mut zoomed, &mut roll_modal);
-                draw(&screen, map, layout, cards, game, message.as_deref(), &hand_selected, zoomed, &roll_modal, color)?;
+                maybe_run_ai_turn(ai_side, ai, game, map, cards, dice, &mut message, &mut sticky, &mut zoomed, &mut modal);
+                draw(&screen, map, layout, cards, game, message.as_deref(), &hand_selected, zoomed, &modal, color)?;
             }
-            TermEvent::Resize(_, _) => draw(&screen, map, layout, cards, game, message.as_deref(), &hand_selected, zoomed, &roll_modal, color)?,
+            TermEvent::Resize(_, _) => draw(&screen, map, layout, cards, game, message.as_deref(), &hand_selected, zoomed, &modal, color)?,
             _ => {}
         }
     }
 }
 
 /// If `ai_side` names whoever's active right now, plays that whole turn
-/// via [`ai::play_turn`] — a no-op otherwise (no AI side set, or it's the
-/// human's turn). Turns the turn's own log entries into the next message
-/// (joined by `\n`, marked `sticky` since — like the roll-result modal —
-/// it isn't otherwise recoverable from the screen the way a refusal or a
-/// confirm/cancel/pass report already is), queues a [`RollReport`] modal
-/// for every realignment roll or coup attempt the turn made
-/// ([`reconstruct_roll_reports`]) — the human and the AI share the same
-/// modal, dismissed the same way — and closes any open zoom overlay, the
-/// same way `c`/`X`/`p` do for a human-ended turn.
+/// via [`ai::play_turn`] — a no-op otherwise (no AI side set, it's the
+/// human's turn, or [`Game::winner`] is already set — once it is,
+/// `Game::active` never changes again, so without this check every
+/// later keypress would see the same AI side still "active" and try to
+/// replay an already-finished turn). Turns the turn's own log entries
+/// into the next message (joined by `\n`, marked `sticky` since — like
+/// the modal queue below — it isn't otherwise recoverable from the
+/// screen the way a refusal or a confirm/cancel/pass report already is),
+/// queues a [`Modal`] for every realignment roll, coup attempt, or
+/// scoring event the turn made ([`queue_turn_modals`]) — the human and
+/// the AI share the same queue, dismissed the same way — and closes any
+/// open zoom overlay, the same way `c`/`X`/`p` do for a human-ended turn.
 #[allow(clippy::too_many_arguments)]
 fn maybe_run_ai_turn(
     ai_side: Option<Superpower>,
@@ -390,9 +418,9 @@ fn maybe_run_ai_turn(
     message: &mut Option<String>,
     sticky: &mut bool,
     zoomed: &mut bool,
-    roll_modal: &mut VecDeque<RollReport>,
+    modal: &mut VecDeque<Modal>,
 ) {
-    if ai_side != Some(game.active()) {
+    if ai_side != Some(game.active()) || game.winner().is_some() {
         return;
     }
     let side = game.active();
@@ -403,9 +431,7 @@ fn maybe_run_ai_turn(
     if let Err(e) = outcome {
         lines.push(format!("AI error: {e}"));
     }
-    for report in reconstruct_roll_reports(game.board(), new_entries) {
-        roll_modal.push_back(report);
-    }
+    queue_turn_modals(modal, game.board(), new_entries);
     *message = Some(format!("{side} (AI) plays: {}", lines.join(" · ")));
     *sticky = true;
     *zoomed = false;
@@ -463,6 +489,32 @@ fn reconstruct_roll_reports(board: &Board, entries: &[LogEntry]) -> Vec<RollRepo
         reports.push_front(RollReport { side, outcome, before });
     }
     reports.into_iter().collect()
+}
+
+/// Walks one turn's new log entries in the order they actually happened,
+/// queueing a [`Modal`] for each `Event::Realign`/`Event::Coup` (paired
+/// off against [`reconstruct_roll_reports`]'s own output, which comes
+/// back in the same relative order) and each `Event::Scored` (no
+/// reconstruction needed — the entry already carries both the result
+/// and the VP it landed on). A scoring card never shares a turn with a
+/// roll (it has no ops to open a realignment or coup with), so there's
+/// no real turn where the two interleave, but walking forward like this
+/// costs nothing and stays correct if that ever changes.
+fn queue_turn_modals(modal: &mut VecDeque<Modal>, board: &Board, entries: &[LogEntry]) {
+    let mut rolls = reconstruct_roll_reports(board, entries).into_iter();
+    for entry in entries {
+        match &entry.event {
+            Event::Realign(_) | Event::Coup(_) => {
+                if let Some(report) = rolls.next() {
+                    modal.push_back(Modal::Roll(report));
+                }
+            }
+            Event::Scored { result, vp_after } => {
+                modal.push_back(Modal::Score(result.clone(), *vp_after));
+            }
+            _ => {}
+        }
+    }
 }
 
 /// `i`/`a`/`o`: opens `kind` for the active side. `None` on success — the
@@ -612,7 +664,7 @@ fn draw(
     message: Option<&str>,
     hand_selected: &[usize; 2],
     zoomed: bool,
-    roll_modal: &VecDeque<RollReport>,
+    modal: &VecDeque<Modal>,
     color: ColorMode,
 ) -> io::Result<()> {
     let board = game.board();
@@ -637,17 +689,20 @@ fn draw(
         blit_centred(&mut canvas, &card_canvas);
     }
 
-    // The roll-result modal sits on top of everything, including a zoomed
-    // card — the two can't actually be open together (see `run`'s own
-    // doc), but drawing it last keeps that true even if that ever changes.
-    if let Some(report) = roll_modal.front() {
-        let queue_pos = (roll_modal.len() > 1).then_some((1, roll_modal.len()));
-        let modal_canvas = render_roll_result(map, report, queue_pos);
+    // The modal queue sits on top of everything, including a zoomed card
+    // — the two can't actually be open together (see `run`'s own doc),
+    // but drawing it last keeps that true even if that ever changes.
+    if let Some(front) = modal.front() {
+        let queue_pos = (modal.len() > 1).then_some((1, modal.len()));
+        let modal_canvas = match front {
+            Modal::Roll(report) => render_roll_result(map, report, queue_pos),
+            Modal::Score(result, vp_after) => render_scoring_result(map, cards, result, *vp_after, queue_pos),
+        };
         blit_centred(&mut canvas, &modal_canvas);
     }
 
     let card_in_play = game.card_in_play().map(|id| cards.card(id));
-    let bar = render_status_bar(layout, board, game.status(), card_in_play, op, canvas.width());
+    let bar = render_status_bar(layout, board, game.status(), card_in_play, op, game.winner(), canvas.width());
 
     let rows = terminal::size().map(|(_, h)| h as usize).unwrap_or(bar.height() + canvas.height() + HAND_ROWS);
     let view_budget = rows.saturating_sub(bar.height() + message.is_some() as usize + HAND_ROWS);

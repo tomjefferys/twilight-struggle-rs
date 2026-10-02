@@ -28,7 +28,7 @@ pub enum EventOutcome {
 
 /// Whether `card`'s event is implemented yet — what
 /// [`crate::game::Game::play_event`] checks before calling [`resolve`],
-/// and what [`crate::action::Game::legal_actions`] checks before
+/// and what [`crate::game::Game::legal_actions`] checks before
 /// offering `Action::Event` for a card in play.
 pub fn is_implemented(card: CardId) -> bool {
     scoring::is_scoring_card(card)
