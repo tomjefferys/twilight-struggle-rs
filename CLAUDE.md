@@ -707,8 +707,20 @@ All game/display data is JSON or plain text, embedded into the binary via
 `include_str!` rather than read at runtime — the data is part of the
 build, not a runtime dependency.
 
-- `standard_map.json` — the 86 countries and their adjacency (game rules
-  data).
+- `standard_map.json` — the 84 countries and their adjacency (game rules
+  data). Audited once against the real board (two independent open-source
+  implementations cross-checked against each other) after it was found to
+  drift from it in several ways: Laos and Cambodia were two separate
+  countries rather than the single "Laos/Cambodia", an extra "China"
+  country existed with no counterpart on the real board, several
+  adjacencies were extra or missing (mostly in the Middle East, Africa,
+  and Southeast Asia), and several battlegrounds were wrong (Middle East
+  was missing Iraq/Libya/Saudi Arabia; Africa was missing South Africa;
+  Central America had Nicaragua instead of Mexico; Asia wrongly had
+  Vietnam/Indonesia/the Philippines). Pinned by
+  `tests/standard_map.rs::{each_region_has_the_expected_country_count,
+  battlegrounds_match_the_real_board, superpower_borders_match_the_real_board}`
+  so a future edit can't silently drift again.
 - `standard_layout.json` — display-only layout data (region-view cells,
   codes, world map positions, superpower boxes).
 - `world_background.txt` — pre-rasterized ASCII/Unicode landmass art for
