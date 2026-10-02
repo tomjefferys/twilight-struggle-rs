@@ -3,10 +3,13 @@
 A Rust CLI implementation of the board game *Twilight Struggle*. Currently
 focused on the data model and terminal display, a handful of the
 ops-spending actions (influence placement, realignment, coups), enforced
-alternating turns, playing a card from each side's hand purely for its
-ops value (no card text/events, DEFCON, Military Operations, scoring, or
-redealing yet), and a first AI opponent that plays uniformly random legal
-moves.
+alternating turns, playing a card from each side's hand for its ops
+value, and — the first slice of card *events* — the seven scoring cards,
+which can end the game outright (VP reaching ±20, or Europe Scoring's
+Control tier). Every other card's text, DEFCON, Military Operations, and
+redealing are still out of scope, as is the headline phase and an
+opponent's card's ops-and-event dual use. A first AI opponent plays
+uniformly random legal moves.
 
 ## Architecture
 
@@ -65,10 +68,12 @@ moves.
   except a numeric query matches a card's id (its printed number) before
   falling back to name matching. `Hands` is the mutable per-game state — a
   `[Vec<CardId>; 2]` indexed by `Superpower`, plus a shared `discard` pile
-  a played card lands in once its operation closes — kept here rather than
-  its own module since it's still a thin wrapper with nothing else to say
-  about it; cheap to clone like `Board`, for the same reason (`Game` needs
-  to stay clonable for AI lookahead). `Hands::remove`/`insert` move a card
+  a played card lands in once its operation (or an event that isn't
+  `removed_after_event`) closes, and a second `removed` pile for one that
+  is — kept here rather than its own module since it's still a thin
+  wrapper with nothing else to say about it; cheap to clone like `Board`,
+  for the same reason (`Game` needs to stay clonable for AI lookahead).
+  `Hands::remove`/`insert` move a card
   out of (and back into, at the same index) a hand — the mechanics
   `Game::play_card`/`return_card` below drive, not a policy of their own.
   Deliberately never includes `CHINA_CARD` (id 6) in a hand: it changes
@@ -79,10 +84,14 @@ moves.
   ops value reads wherever space is tight — its digit, `S` for a scoring
   card, or `★{ops}` for the China Card — shared by the hand strip's
   mini-card boxes and (everywhere else) nothing, since the zoom view's own
-  title has room to spell "Ops" out instead. Still no card *event*
-  behaviour — nothing here reads or triggers a card's text; `Game` below
-  is the first place playing a card means anything (its ops value, nothing
-  else).
+  title has room to spell "Ops" out instead. No card *event* behaviour
+  lives here either way — this module only ever moves a `CardId` around
+  (plus the one exception `removed_after_event` cards need:
+  `Hands::remove_from_game`, a second pile alongside `discard` that a
+  card lands in once *its event* — never its ops — has it leave the game
+  for good); `Game` below (`play_card`'s own doc, and `play_event`'s) is
+  what actually reads a card's text, via `events::resolve`, and what its
+  ops value means in the first place.
 - **`Scenario`** (`src/scenario.rs`) / **`GameStatus`** (`src/status.rs`)
   — a named starting state (currently just `data/demo_state.json`): a
   `Board` snapshot, starting `Hands` (`Scenario::from_json` resolves each
@@ -149,25 +158,67 @@ moves.
   `InfluencePlacement`, `Realignment`, `Coup`, and `Operation` all derive
   `Clone` — cheap, per `Board`'s own design note — for the same reason:
   `Game` (below) needs to be clonable for AI lookahead.
+- **`events`** (`src/events/`) — card *events*, as opposed to ops value
+  (which `ops/` above and `Game::begin` already cover). `events::resolve`
+  is the single entry point `Game::play_event` calls, returning an
+  `EventOutcome`; `events::is_implemented` is what `Game::play_event` and
+  `Game::legal_actions` both check before calling it, or offering
+  `Action::Event`, respectively. Scoring cards are the first (and so far
+  only) stage:
+  - `events::scoring` (rule 10.1) resolves any of the seven scoring cards
+    into a per-side breakdown plus the VP swing it produces — pure
+    functions of `(map, board, card)`, mirroring `ops::realign`'s own
+    `modifiers`/`odds` split, so a preview needs no session open. Six
+    cards (Asia, Europe, Middle East, Central America, Africa, South
+    America) share one shape: a `RegionScoring` table entry (the
+    presence/domination/control point values rule 10.1's own chart
+    gives) and one `score_region` function computing, for each side, its
+    `Tier` (`None`/`Presence`/`Domination`/`Control`, rule 10.1's own
+    definitions — `Domination` needs more countries *and* more
+    battlegrounds than the opponent, plus at least one battleground and
+    one non-battleground of its own; `Control` needs more countries and
+    *every* battleground in the region) and every VP contribution kept
+    itemised in a `SideScore` (`tier_vp`, `battleground_vp`,
+    `adjacency_vp`) rather than just summed, so a view can explain the
+    number instead of just showing it — the same reasoning
+    `realign::Modifiers` follows. The battleground and
+    superpower-adjacency bonuses are computed uniformly across every
+    card even though the Middle East/Africa/South America cards' own
+    text omits the adjacency one — no country in any of those three
+    regions actually borders a superpower (pinned by
+    `tests/standard_map.rs::superpower_borders_match_the_real_board`), so
+    the two are behaviourally identical and special-casing it per card
+    would just be more code for the same result. Europe Scoring is the
+    one card whose `Control` is an outright win (`ControlVp::AutomaticVictory`)
+    rather than a VP value, surfaced as `ScoringResult::automatic_victory`.
+    The seventh card, Southeast Asia Scoring, pays 1 VP per controlled
+    country in the `SoutheastAsia` sub-region and 2 for Thailand — read
+    off `Country::battleground` rather than hand-matched by name, since
+    the map fix below leaves Thailand as that sub-region's *only*
+    battleground, exactly the one the card's own text singles out for
+    the higher value.
 - **`Game`** (`src/game.rs`) — turns. Owns the status, the board, whichever
   card is in play, and whichever `Operation` is open, so "a turn plays a
   card, then spends its ops on one operation, then closing that operation
   passes the turn" lives in one place rather than being duplicated between
   the REPL and interactive mode. `play_card(cards, id)` is the first step
-  of a turn now: it takes `id` from the active side's hand (nothing about
-  the card's text or event — only its ops value), refusing a scoring card
-  (`ScoringCard`), a card not actually available to the active side
-  (`NotInHand`), or a second card while one's already in play
-  (`CardInPlay`). The China Card (`CHINA_CARD`) is the one exception to
+  of a turn now: it takes `id` from the active side's hand, making it
+  whichever of `begin`/`play_event` funds next — refusing a card not
+  actually available to the active side
+  (`NotInHand`/`ChinaCardFaceDown`), a second card while one's already in
+  play (`CardInPlay`), or anything at all once `Game::winner` is set
+  (`GameOver`). The China Card (`CHINA_CARD`) is the one exception to
   "in your hand": it's playable instead whenever `GameStatus::china_card`
   names the active side and `china_card_face_up` is true
   (`ChinaCardFaceDown` otherwise — see `Hands`'s own doc for why it's
   never in a hand list at all). `begin(kind)` is the entire *operation*
   enforcement mechanism: it always opens with `active()` and the played
-  card's own ops (refused with `NoCard` if none has been played), so
-  there's no argument through which a caller could name the wrong side or
-  the wrong ops count, and it's refused while an operation is already
-  open. One turn spends exactly one card on exactly one operation —
+  card's own ops (refused with `NoCard` if none has been played, or
+  `ScoringCard` if it has no ops to spend — a scoring card can only fund
+  `play_event` instead), so there's no argument through which a caller
+  could name the wrong side or the wrong ops count, and it's refused
+  while an operation is already open. One turn spends exactly one card on
+  exactly one operation —
   `confirm`/`cancel` are the only two ways to close one *for real*, and
   both discard the played card (sending it to `Hands`'s own discard pile,
   or — for the China Card — passing it face down to the opponent instead,
@@ -222,26 +273,55 @@ moves.
   (`PlayedCard::hand_index` — `None` for the China Card) purely so
   `render::render_hand` can splice it back into its old spot rather than
   just letting it disappear from the strip; see that function's own doc.
+  `play_event(map, cards)` sits alongside `begin` as the other thing a
+  played card can fund: it resolves the card's own text via
+  `events::resolve` (refused with `EventNotImplemented` for anything
+  `events::is_implemented` doesn't recognise yet), applies the resulting
+  VP (clamped to ±20 rule 5.5's cap, via the private `apply_vp`), and
+  either discards the card (or, for a `removed_after_event` card, sends
+  it to `Hands::remove_from_game` instead — never reshuffled back in) and
+  hands the turn over the same way `confirm`/`cancel` do, or — if the VP
+  cap was just hit, or the event is an outright win (Europe Scoring's
+  Control tier) — leaves the turn exactly where it ended instead, since
+  there's nothing left to hand over. Nothing here yet lets a card be
+  played for ops *and* its event in either order (the dual-use rule for
+  an opponent's card) — every event implemented so far (scoring cards)
+  has no ops to combine with, so `PlayedCard` has no "which half is still
+  open" state; a future stage that adds an ops-and-event card will need
+  to grow that, not reshape it. `Game::winner()` reports the result once
+  either path sets it (a `Victory { side, reason }`, `reason` one of
+  `VictoryReason::Vp`/`EuropeControl`) — never clears, and from then on
+  `play_card`/`begin`/`pass` all refuse with `GameError::GameOver`.
 - **`action`** (`src/action.rs`) — the surface an AI opponent drives
   instead of calling `Game`'s own methods directly: `Action`, one legal
-  forward move (`PlayCard`/`Begin`/`Place`/`Roll`/`Confirm`/`Pass`), plus
-  `Game::legal_actions` (every legal `Action` for whoever's active right
-  now, in a fixed order so a seeded AI's choices stay reproducible) and
-  `Game::apply` (a thin dispatch onto the `Game` method each variant
-  names). Deliberately forward moves only — never `undo`/`abandon`/
-  `return_card` (human-only take-backs an AI never needs, since it simply
-  doesn't choose the action it'd be undoing) or `cancel` (every board
-  outcome it can produce is already reachable through `confirm` alone).
-  That exclusion is also what guarantees the list is never empty and a
+  forward move (`PlayCard`/`Begin`/`Event`/`Place`/`Roll`/`Confirm`/`Pass`),
+  plus `Game::legal_actions` (every legal `Action` for whoever's active
+  right now, in a fixed order so a seeded AI's choices stay reproducible)
+  and `Game::apply` (a thin dispatch onto the `Game` method each variant
+  names — `Event` onto `play_event`). Deliberately forward moves only —
+  never `undo`/`abandon`/`return_card` (human-only take-backs an AI never
+  needs, since it simply doesn't choose the action it'd be undoing) or
+  `cancel` (every board outcome it can produce is already reachable
+  through `confirm` alone). With a card in play and no operation open,
+  `Event` is offered whenever `events::is_implemented` recognises it, and
+  the three `Begin` kinds whenever the card isn't a scoring card (one has
+  no ops for `Begin` to spend; the other, so far, has no implemented
+  event) — never both, since nothing implemented yet is both. That
+  exclusion is also most of what guarantees the list is never empty and a
   random walk through it can't stall: every action either spends ops or
   closes/opens a step, so repeated `legal_actions`/`apply` calls always
-  reach a `Confirm` or `Pass` that hands the turn over.
+  reach a `Confirm` or `Pass` that hands the turn over — except once
+  `Game::winner` is set, the one case `legal_actions` returns empty
+  outright, since there's nothing left to do.
 - **`ai`** (`src/ai/`) — the framework built on `action.rs`: the `Ai`
   trait (`choose`, given a game, its map/cards, and the current
   `legal_actions` list, picks one of them) and `play_turn`, which drives
   one `Ai` through a whole turn — `legal_actions` → `choose` → `apply`,
-  looped until `Game::active` changes — from any point mid-turn, not just
-  a turn's very start. `ai::random::RandomAi` is the first implementation:
+  looped until `Game::active` changes *or* `Game::winner` is set (a
+  scoring event can end the game mid-turn without `active` ever changing,
+  and `legal_actions` would otherwise come back empty, which `Ai::choose`
+  is documented to never see) — from any point mid-turn, not just a
+  turn's very start. `ai::random::RandomAi` is the first implementation:
   picks uniformly among whatever's legal, via its own `Dice` (seeded
   independently of the game's own, so an AI's choices never shift a
   realignment's or coup's die sequence). Wired into both `main.rs` (an
@@ -287,7 +367,13 @@ moves.
   *abandoned* operation (`Game::abandon`) still leaves no trace of
   itself — no `Placed`/`Realign`/`Coup`/`Closed`/`Selected` entry, since
   abandon is only ever possible before `log_card_selected` has run for
-  either of its two triggers. `Event::Pass` covers `Game::pass`. `Game::board_mut` is the one mutator
+  either of its two triggers. `Event::Pass` covers `Game::pass`.
+  `Game::play_event` pushes its own card's `Selected` entry too (the same
+  call, since a card funding an event is just as irrevocable from that
+  point on as one funding an operation), then `Event::Scored` — the
+  result plus the VP track's new value, since the result alone only
+  carries the *change* — and, if the event just ended the game,
+  `Event::GameOver` right after it. `Game::board_mut` is the one mutator
   `Game` can't observe by itself (`set`/`add`/`remove` in `main.rs` bypass
   the operation system entirely), so `Game::record_edit` and
   `Game::record_note` exist for a caller to report an edit or an
@@ -404,15 +490,25 @@ moves.
     (`Color::Us`/`Color::Ussr`, `Muted` for a debug edit or note) —
     `render_log(..).render(ColorMode::Never)` is byte-identical to
     `log_text`, so the on-screen `log` command and the exported file are
-    guaranteed to be one format, not two.
+    guaranteed to be one format, not two. `Event::Scored` gets its own
+    `score` line (each side's tier and VP contributions, the net swing,
+    the new VP total) and `Event::GameOver` a `gameover` one (the winner
+    and why) — both dense one-liners for this view specifically; the
+    interactive map's own modal (`score.rs` below) spells the same result
+    out as a titled box instead.
   - `statusbar.rs` — the two-row turn/operation bar `interactive.rs` draws
     above every map screen: turn/AR/active side (its own colour)/DEFCON/
-    VP, then one of three states for the card/operation row — no card in
-    play (a prompt naming the keys to select and play one); a card in play
-    with no operation open yet (its name/ops and the keys to spend or
-    return it); or an open operation (`operation_balance_line`, reused
-    rather than reworded, prefixed with the card's name). The only view
-    besides `world.rs` that reads a `GameStatus`, deliberately its own
+    VP, then one of four states for the card/operation row — a set
+    `Game::winner`, which replaces the row entirely with
+    `game_over_line` (shared with `main.rs`'s own `status`/`event`
+    commands, so the wording can't drift between the two); otherwise, no
+    card in play (a prompt naming the keys to select and play one); a
+    card in play with no operation open yet (its name and the keys to
+    spend or return it — `e score` in place of the ops keys for a
+    scoring card, since it has none to spend); or an open operation
+    (`operation_balance_line`, reused rather than reworded, prefixed with
+    the card's name). The only view besides `world.rs` that reads a
+    `GameStatus`, deliberately its own
     compact line rather than the dashboard's (already clipped at width
     104) — the two share only `vp_line`'s
     wording, extracted so they can't drift. Always exactly
@@ -481,6 +577,18 @@ moves.
     Replaces the dense one-line `roll_result_line`/`coup_result_line`
     summaries for interactive mode specifically; those two stay as they
     are for the REPL's own `roll` command, which has no modal to show.
+  - `score.rs` — `render_scoring_result`, the Scoring analogue of
+    `roll.rs`'s own modal, for a resolved scoring-card event: a titled
+    box (named after the card) giving each side's own tier, its
+    battleground/adjacency/tier VP contributions and their total
+    (`push_side_lines`, wrapped the same "don't widen the box" way
+    `roll.rs`'s modifier breakdown is), the net VP change and the VP
+    track's new value, and — for Europe Scoring's Control tier — who
+    just won the game, bordered in the winning side's colour. Southeast
+    Asia Scoring's own `ScoringKind` has no tiers to show, so it lists
+    each controlled country and who holds it instead. Takes the same
+    `(n, total)` queue position `render_roll_result` does, since
+    `interactive.rs` queues the two kinds of modal together.
 
   `render_region`, `render_world_map`, and `render_country` all take an
   optional `&Operation` (`region.rs`/`worldmap.rs`/`country.rs`). `None`
@@ -517,9 +625,10 @@ moves.
   everywhere the REPL touches the board. `play <id|name>` is the new first
   step of a turn: it takes a card from the active side's hand (the same
   forgiving `CardCatalog::find` lookup `card` uses) and makes it the card
-  `Game::begin` will spend; `influence`/`realign`/`coup` still take no
-  arguments — the side and the ops are always the played card's, via
-  `Game::begin`, never typed in — and `place`/`undo`/`confirm`/`cancel`/
+  `Game::begin` will spend, or `Game::play_event` will resolve instead;
+  `influence`/`realign`/`coup`/`event` all take no arguments — the side
+  (and, for the first three, the ops) are always the played card's,
+  never typed in — and `place`/`undo`/`confirm`/`cancel`/
   `roll` all read and write through `Session.game` rather than a bare
   `Board` and `Option<Operation>`. `influence`/`place`/`undo`/`confirm`/
   `cancel` stage and commit an influence placement; `realign`/`roll`/
@@ -539,12 +648,17 @@ moves.
   roll already spent, once a realignment or coup has rolled), leaving the
   card in play; with no operation open but a card in play, it returns the
   card to the hand instead (`Game::return_card`) — the free undo for a
-  mistaken `play`/`influence`/`realign`/`coup`. `status` reports the
-  turn/AR/active side, whichever card is in play, and the open
-  operation's balance. `play`/`influence`/`realign`/`coup`/`pass`/
-  `abandon` are no longer REPL-only — the same six are bound to
-  `space`/`i`/`a`/`o`/`p`/Backspace inside `interactive.rs`, which is also
-  where `confirm`/`cancel` stay bound to `c`/`X`; the `wm`
+  mistaken `play`/`influence`/`realign`/`coup`. `event` resolves the card
+  in play's own text (so far, only a scoring card's — anything else is
+  refused with `GameError::EventNotImplemented`'s own text), printing
+  `render::render_scoring_result`'s same breakdown and, if it just ended
+  the game, `render::game_over_line` right after it. `status` reports the
+  turn/AR/active side, whichever card is in play, the open operation's
+  balance, and — once set — `Game::winner` via that same
+  `game_over_line`. `play`/`influence`/`realign`/`coup`/`event`/`pass`/
+  `abandon` are no longer REPL-only — the same seven are bound to
+  `space`/`i`/`a`/`o`/`e`/`p`/Backspace inside `interactive.rs`, which is
+  also where `confirm`/`cancel` stay bound to `c`/`X`; the `wm`
   arm no longer reports a confirm/cancel/pass that happened inside the
   map (interactive mode's own message row already did), only a session
   left open on the way out. Either way, `set`/`add`/`remove`/`load` are refused while a
@@ -609,20 +723,26 @@ moves.
   every key handler goes through it and turns stay enforced here too, and
   a two-row status bar (`render::render_status_bar`) is drawn above
   whichever screen is showing — turn/AR/active side (in its own colour)/
-  DEFCON/VP, then one of its three states for the card/operation row (see
+  DEFCON/VP, then one of its four states for the card/operation row (see
   `statusbar.rs` above) — since a keypress alone carries no "USSR" the way
   the REPL prompt does. A turn now starts with `Space`, which plays the
   selected hand card (`Game::play_card`) — a no-op on an empty hand, or
   once a card's already in play. Only then do `i`/`a`/`o` open an
   influence placement, realignment, or coup for the active side, spending
-  that card's own ops, and `p` passes the turn (`Game::pass`) — all four
-  global, working from any of the three screens, and refused
-  (`GameError`'s own text shown in the message row) while an operation is
-  already open, or — for `i`/`a`/`o` — with no card in play yet, or — for
-  `p` — with a card in play but no operation open: `Game::begin` and
-  `Game::pass` always act for `Game::active`, so there's no side to infer
-  from the key itself, which is what makes a keypress binding possible at
-  all. `c` confirms/closes the open operation via `Game::confirm` and `X`
+  that card's own ops, `e` resolves its event instead
+  (`Game::play_event` — so far, the only way to play a scoring card,
+  since it has no ops for `i`/`a`/`o` to spend), and `p` passes the turn
+  (`Game::pass`) — all five global, working from any of the three
+  screens, and refused (`GameError`'s own text shown in the message row)
+  while an operation is already open, or — for `i`/`a`/`o`/`e` — with no
+  card in play yet, or — for `p` — with a card in play but no operation
+  open: `Game::begin` and `Game::pass` always act for `Game::active`, so
+  there's no side to infer from the key itself, which is what makes a
+  keypress binding possible at all. Once `Game::winner` is set — `e` can
+  cause that directly, or an AI's turn can (see below) — every one of
+  these five is refused the same way (`GameError::GameOver`'s own text),
+  and the status bar's own row says why there's nothing left to do.
+  `c` confirms/closes the open operation via `Game::confirm` and `X`
   cancels/closes it via `Game::cancel` — either way discarding the card
   that funded it (or, for the China Card, passing it face down to the
   opponent) and handing the turn to the other side *without leaving the
@@ -646,34 +766,45 @@ moves.
   country screen, and `u` always refuses there: a resolved roll or
   attempt can't be taken back. `Esc`/`q` leave a still-open session
   untouched rather than clearing it, so it can be resumed from the REPL
-  or by reopening the map. A roll's outcome — unlike a refusal, or a
-  confirm/cancel/abandon/pass/begin/play report, all of which the status
-  bar's own next redraw already reflects — isn't otherwise recoverable
-  from the screen, so rather than a message-row line it opens
-  `render::render_roll_result` as a modal, blitted centred over whichever
-  screen is showing (`blit_centred`, shared with the hand's zoomed-card
-  overlay below) and dismissed only by Enter (or Esc, as a synonym) —
-  every other key is swallowed while it's up, the same modal precedence
-  the zoom overlay has, and the two can never be open together (both
-  close the other the instant they'd open). Queued rather than a single
-  slot (`roll_modal: VecDeque<RollReport>`), since a single keypress can
-  still only resolve one roll at a time but an AI's turn can make several
-  in a row; each is shown in order, and the hint row names its position
-  once more than one is queued.
+  or by reopening the map. A roll's outcome, and a scoring event's own
+  result — unlike a refusal, or a confirm/cancel/abandon/pass/begin/play
+  report, all of which the status bar's own next redraw already
+  reflects — aren't otherwise recoverable from the screen, so rather
+  than a message-row line each opens its own modal
+  (`render::render_roll_result`/`render_scoring_result`), blitted centred
+  over whichever screen is showing (`blit_centred`, shared with the
+  hand's zoomed-card overlay below) and dismissed only by Enter (or Esc,
+  as a synonym) — every other key is swallowed while one's up, the same
+  modal precedence the zoom overlay has, and the two can never be open
+  together (both close the other the instant they'd open). The two share
+  one queue (`modal: VecDeque<Modal>`, `Modal::Roll`/`Modal::Score`)
+  rather than a single slot, since a single keypress can still only
+  produce one at a time but an AI's turn can make several (a multi-op
+  realignment's rolls; never, so far, a mix of the two kinds, since a
+  scoring card has no ops to open a roll-producing operation with); each
+  is shown in order, and the hint row names its position once more than
+  one is queued.
   `run` also takes `ai_side: Option<Superpower>` and `&mut RandomAi`,
   threaded through from `Session` — `maybe_run_ai_turn` runs before the
   very first draw and again after every handled keypress, and, whenever
-  `ai_side` matches `Game::active`, plays that whole turn via
+  `ai_side` matches `Game::active` *and* `Game::winner` isn't already set
+  (otherwise `Game::active` would still name the AI's side forever, with
+  nothing left to play, and this would try to replay an already-finished
+  turn on every later keypress), plays that whole turn via
   `ai::play_turn`, folds its log entries into one message line (closing
   any open zoom overlay and marking the message `sticky`, the one
   remaining use of that flag — the one-extra-keypress survival the AI's
-  own summary line still needs, now that a roll's outcome has its own
-  modal instead), reconstructs a `RollReport` for each realignment roll
-  or coup attempt the turn made (`reconstruct_roll_reports`, walking the
-  turn's own new log entries in reverse from the real board to recover
-  each roll's "before" state — the one thing the log doesn't carry) and
-  queues them the same way the human's own `r` does, and leaves the
-  message for that keypress's own `draw` call to show.
+  own summary line still needs, now that a roll's or a scoring event's
+  outcome has its own modal instead), queues a `Modal` for each
+  realignment roll, coup attempt, or scoring event the turn made
+  (`queue_turn_modals`, walking the turn's own new log entries forward
+  and pairing each roll off against `reconstruct_roll_reports`'s own
+  output — which recovers each roll's "before" state, the one thing the
+  log doesn't carry, by walking in reverse from the real board — while a
+  `Scored` entry needs no reconstruction, since it already carries both
+  the result and the VP it landed on) and queues them the same way the
+  human's own `r`/`e` do, and leaves the message for that keypress's own
+  `draw` call to show.
 
   The active side's hand (`render::render_hand`) is drawn as a fixed-
   height strip pinned below every screen — global, like the status bar
@@ -691,9 +822,10 @@ moves.
   other side's place. `Esc` closes an open zoom first, before whatever it
   would otherwise do on that screen; `c`/`X`/`p` close it too, but only
   when they actually hand the turn over (a refusal leaves it open) — the
-  newly active side's own hand takes its place either way. This still
-  isn't card *event* behaviour — nothing here reads a card's text or
-  triggers it, only its ops value, via `Game::play_card`.
+  newly active side's own hand takes its place either way. `[`/`]`/`z`
+  are the hand strip's own keys and never trigger a card's event — only
+  `e` does that, via `Game::play_event`, and only for whichever card is
+  already in play.
 
   The only place in the crate that touches the terminal directly —
   everything it draws still comes from `render::render_world_map`/
