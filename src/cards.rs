@@ -330,11 +330,12 @@ pub struct Hands {
     us: Vec<CardId>,
     ussr: Vec<CardId>,
     discard: Vec<CardId>,
+    removed: Vec<CardId>,
 }
 
 impl Hands {
     pub fn new(us: Vec<CardId>, ussr: Vec<CardId>) -> Self {
-        Hands { us, ussr, discard: Vec::new() }
+        Hands { us, ussr, discard: Vec::new(), removed: Vec::new() }
     }
 
     pub fn hand(&self, side: Superpower) -> &[CardId] {
@@ -379,6 +380,20 @@ impl Hands {
 
     pub fn discards(&self) -> &[CardId] {
         &self.discard
+    }
+
+    /// Sends `card` to the removed-from-play pile instead of the discard
+    /// pile — where a `removed_after_event` card lands once *its event*
+    /// resolves (rule 4.4). Ops play never removes a card, however that
+    /// flag reads: it's the event, not the card, that's one-shot, so
+    /// `confirm`/`cancel` (the ops path) always call [`Hands::discard`]
+    /// instead, regardless of this flag.
+    pub fn remove_from_game(&mut self, card: CardId) {
+        self.removed.push(card);
+    }
+
+    pub fn removed(&self) -> &[CardId] {
+        &self.removed
     }
 }
 

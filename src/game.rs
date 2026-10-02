@@ -23,6 +23,25 @@
 //! [`Game::pass`] is refused with a card in play — there's nothing to pass
 //! on once a card's been committed to the turn, so [`Game::return_card`] is
 //! the way out of a card played by mistake.
+//!
+//! [`Game::play_event`] is the other thing a played card can fund, sitting
+//! alongside `begin` rather than inside it: it resolves `card`'s own text
+//! (via [`crate::events::resolve`]) instead of opening an [`Operation`].
+//! A scoring card can *only* go this way — it has no ops to spend, so
+//! `begin` refuses it — which is why `play_card` no longer refuses a
+//! scoring card itself; only `begin` does, now that there's something
+//! else to do with one. Nothing here yet lets a card be played for ops
+//! *and* its event in either order (the dual-use rule for an opponent's
+//! card) — `PlayedCard` has no "which half is still open" state because
+//! every event implemented so far (scoring cards) has nothing to combine
+//! with: a future stage that adds an ops-and-event card will need to grow
+//! that, not reshape it.
+//!
+//! A scoring event can end the game outright — Europe Scoring's Control
+//! tier, or VP simply reaching ±20 — which [`Game::winner`] reports.
+//! Once set, it never clears and every forward-moving method
+//! ([`Game::play_card`], [`Game::begin`], [`Game::pass`]) refuses with
+//! [`GameError::GameOver`].
 
 use std::fmt;
 
@@ -30,6 +49,7 @@ use crate::board::Board;
 use crate::cards::{CardCatalog, CardId, Hands, CHINA_CARD};
 use crate::country::{CountryId, Superpower};
 use crate::dice::Dice;
+use crate::events::{self, EventOutcome};
 use crate::log::{Event, GameLog, LogEntry};
 use crate::map::WorldMap;
 use crate::ops::{
@@ -38,6 +58,23 @@ use crate::ops::{
 use crate::ops::{Coup, CoupResult};
 use crate::scenario::Scenario;
 use crate::status::GameStatus;
+
+/// Why the game ended.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum VictoryReason {
+    /// The VP track hit +20 (US) or -20 (USSR).
+    Vp,
+    /// Europe Scoring's Control tier (rule 10.1) — the one region card
+    /// whose Control is an outright win rather than a VP value.
+    EuropeControl,
+}
+
+/// The game is over: who won, and why.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Victory {
+    pub side: Superpower,
+    pub reason: VictoryReason,
+}
 
 /// Which kind of operation [`Game::begin`] should open.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -88,11 +125,18 @@ pub enum GameError {
     /// [`Game::play_card`] refused: `card` isn't in the active side's hand
     /// (or, for the China Card, the active side doesn't hold it).
     NotInHand,
-    /// [`Game::play_card`] refused: a scoring card has no ops to spend.
+    /// [`Game::begin`] refused: a scoring card has no ops to spend — it
+    /// can only be played as an event, via [`Game::play_event`].
     ScoringCard,
     /// [`Game::play_card`] refused: the China Card is face down, so it
     /// can't be played for its ops this turn.
     ChinaCardFaceDown,
+    /// [`Game::play_event`] refused: [`crate::events::is_implemented`]
+    /// doesn't recognise this card yet.
+    EventNotImplemented { card: CardId },
+    /// [`Game::play_card`], [`Game::begin`], or [`Game::pass`] refused:
+    /// [`Game::winner`] is already set, so there's nothing left to do.
+    GameOver,
     Placement(PlacementError),
     Realign(RealignError),
     Coup(CoupError),
@@ -114,8 +158,10 @@ impl fmt::Display for GameError {
             GameError::NoCard => write!(f, "no card in play — play one first"),
             GameError::CardInPlay { card } => write!(f, "card #{card} is already in play — play an operation with it, or return it first"),
             GameError::NotInHand => write!(f, "that card isn't in your hand"),
-            GameError::ScoringCard => write!(f, "a scoring card has no ops to spend"),
+            GameError::ScoringCard => write!(f, "a scoring card can only be played as an event"),
             GameError::ChinaCardFaceDown => write!(f, "the China Card is face down and can't be played yet"),
+            GameError::EventNotImplemented { card } => write!(f, "card #{card}'s event isn't implemented yet"),
+            GameError::GameOver => write!(f, "the game is already over"),
             GameError::Placement(e) => write!(f, "{e}"),
             GameError::Realign(e) => write!(f, "{e}"),
             GameError::Coup(e) => write!(f, "{e}"),
@@ -159,6 +205,10 @@ struct PlayedCard {
     ops: u8,
     hand_index: Option<usize>,
     logged: bool,
+    /// Whether this card is a scoring card — cached from the catalog at
+    /// [`Game::play_card`] time so [`Game::begin`] can refuse it without
+    /// needing a [`CardCatalog`] of its own.
+    scoring: bool,
 }
 
 /// The live game: status (including whose turn it is), the committed
@@ -175,11 +225,12 @@ pub struct Game {
     op: Option<Operation>,
     log: GameLog,
     hands: Hands,
+    winner: Option<Victory>,
 }
 
 impl Game {
     /// Starts from a scenario's status, board, and hands, with no card
-    /// played, no operation open, and an empty history.
+    /// played, no operation open, no winner, and an empty history.
     pub fn from_scenario(scenario: &Scenario) -> Self {
         Game {
             status: scenario.status,
@@ -188,11 +239,19 @@ impl Game {
             op: None,
             log: GameLog::new(),
             hands: scenario.hands.clone(),
+            winner: None,
         }
     }
 
     pub fn status(&self) -> &GameStatus {
         &self.status
+    }
+
+    /// The game's winner, if a scoring event has ended it (Europe
+    /// Scoring's Control tier, or VP reaching ±20) — `None` while play
+    /// continues. Never clears once set.
+    pub fn winner(&self) -> Option<Victory> {
+        self.winner
     }
 
     /// The game's history so far.
@@ -240,6 +299,7 @@ impl Game {
             op: self.op.clone(),
             log: GameLog::new(),
             hands: self.hands.clone(),
+            winner: self.winner,
         }
     }
 
@@ -249,6 +309,21 @@ impl Game {
     /// [`Game::play_card`] has already removed.
     pub fn hand(&self, side: Superpower) -> &[CardId] {
         self.hands.hand(side)
+    }
+
+    /// Every card discarded so far — via `confirm`/`cancel` (the ops
+    /// path) or [`Game::play_event`] on a card that isn't
+    /// `removed_after_event`. Read-only, the same shape [`Game::hand`]
+    /// already gives a current hand.
+    pub fn discards(&self) -> &[CardId] {
+        self.hands.discards()
+    }
+
+    /// Every card [`Game::play_event`] has removed from the game entirely
+    /// (a `removed_after_event` card, e.g. Southeast Asia Scoring) —
+    /// never reshuffled back into a deck, unlike [`Game::discards`].
+    pub fn removed_from_game(&self) -> &[CardId] {
+        self.hands.removed()
     }
 
     /// The committed board — never the speculative one. This is what a
@@ -326,12 +401,14 @@ impl Game {
 
     /// Takes `id` from the active side's hand, making it the
     /// [`Game::card_in_play`] whose ops value the next [`Game::begin`]
-    /// spends — nothing about the card's text or event happens here, only
-    /// its ops. Refused if a card is already in play
-    /// ([`GameError::CardInPlay`]), an operation is open (opening one
-    /// implies a card was already played), the card has no ops to spend
-    /// ([`GameError::ScoringCard`]), or it isn't actually available to the
-    /// active side ([`GameError::NotInHand`]/[`GameError::ChinaCardFaceDown`]).
+    /// spends, or whose event the next [`Game::play_event`] resolves —
+    /// nothing about the card's text or event happens *here*, for either
+    /// path; this only ever moves the card out of the hand. Refused if a
+    /// card is already in play ([`GameError::CardInPlay`]), an operation
+    /// is open (opening one implies a card was already played), the game
+    /// is already over ([`GameError::GameOver`]), or it isn't actually
+    /// available to the active side
+    /// ([`GameError::NotInHand`]/[`GameError::ChinaCardFaceDown`]).
     /// Writes nothing to the log by itself: the log is a record of the
     /// actual game, not of application-level steps, and a card that's
     /// merely selected can still be taken back with no trace, via
@@ -347,6 +424,9 @@ impl Game {
     /// can't play it again until the next turn flips it back up
     /// ([`Game::advance`]).
     pub fn play_card(&mut self, cards: &CardCatalog, id: CardId) -> Result<(), GameError> {
+        if self.winner.is_some() {
+            return Err(GameError::GameOver);
+        }
         if let Some(card) = self.card {
             return Err(GameError::CardInPlay { card: card.id });
         }
@@ -355,9 +435,6 @@ impl Game {
         }
         let side = self.status.active;
         let card = cards.card(id);
-        if card.scoring {
-            return Err(GameError::ScoringCard);
-        }
         let hand_index = if id == CHINA_CARD {
             if self.status.china_card != side {
                 return Err(GameError::NotInHand);
@@ -369,7 +446,7 @@ impl Game {
         } else {
             Some(self.hands.remove(side, id).ok_or(GameError::NotInHand)?)
         };
-        self.card = Some(PlayedCard { id, ops: card.ops, hand_index, logged: false });
+        self.card = Some(PlayedCard { id, ops: card.ops, hand_index, logged: false, scoring: card.scoring });
         Ok(())
     }
 
@@ -393,13 +470,20 @@ impl Game {
     /// whichever card is currently in play. This is the entire enforcement
     /// mechanism beyond the card itself: there is no argument through which
     /// a caller could name the wrong side or the wrong ops count. Refused
-    /// if an operation is already open, or if no card has been played yet
-    /// ([`GameError::NoCard`] — [`Game::play_card`] first).
+    /// if an operation is already open, if no card has been played yet
+    /// ([`GameError::NoCard`] — [`Game::play_card`] first), or if the
+    /// played card is a scoring card ([`GameError::ScoringCard`] — it has
+    /// no ops to spend; [`Game::play_event`] is the only thing it can
+    /// fund).
     pub fn begin(&mut self, kind: OperationKind) -> Result<(), GameError> {
         if let Some(op) = &self.op {
             return Err(GameError::OperationOpen { verb: op.verb(), remaining: op.remaining(), total: op.ops_total() });
         }
-        let ops = self.card.ok_or(GameError::NoCard)?.ops;
+        let card = self.card.ok_or(GameError::NoCard)?;
+        if card.scoring {
+            return Err(GameError::ScoringCard);
+        }
+        let ops = card.ops;
         let side = self.status.active;
         self.op = Some(match kind {
             OperationKind::Influence => Operation::Influence(InfluencePlacement::new(side, ops, &self.board)),
@@ -528,10 +612,14 @@ impl Game {
     }
 
     /// Forfeits the active side's turn without opening an operation.
-    /// Refused if one is already open — cancel it first — or if a card is
-    /// in play: once a card's been taken from the hand, there's nothing
-    /// left to "pass" on, so [`Game::return_card`] is the way out instead.
+    /// Refused if one is already open — cancel it first — if a card is
+    /// in play (once a card's been taken from the hand, there's nothing
+    /// left to "pass" on, so [`Game::return_card`] is the way out instead),
+    /// or if the game is already over ([`GameError::GameOver`]).
     pub fn pass(&mut self) -> Result<(), GameError> {
+        if self.winner.is_some() {
+            return Err(GameError::GameOver);
+        }
         if let Some(op) = &self.op {
             return Err(GameError::OperationOpen { verb: op.verb(), remaining: op.remaining(), total: op.ops_total() });
         }
@@ -546,6 +634,95 @@ impl Game {
         });
         self.advance();
         Ok(())
+    }
+
+    /// Resolves the event text of whichever card is currently in play —
+    /// the other thing a played card can fund, alongside [`Game::begin`].
+    /// Only a scoring card's event is implemented so far
+    /// ([`crate::events::is_implemented`]); refused otherwise with
+    /// [`GameError::EventNotImplemented`]. Also refused with no card in
+    /// play ([`GameError::NoCard`]), while an operation is open
+    /// ([`GameError::OperationOpen`] — nothing currently implemented
+    /// needs this, since every scoring card has 0 ops and so can never
+    /// get an operation open in the first place, but a later ops-and-event
+    /// card will), or once the game is already over
+    /// ([`GameError::GameOver`]).
+    ///
+    /// Applies the event's own VP swing (clamped to ±20) and sets
+    /// [`Game::winner`] if that reaches it or the event is an outright
+    /// win (Europe Scoring's Control tier) — in either case, nothing
+    /// resets `active`/`turn`/`action_round` any further, so a human or
+    /// AI reading [`Game::winner`] after this call sees the game exactly
+    /// as it ended. Otherwise discards the card (or, for a
+    /// `removed_after_event` card, removes it from the game entirely —
+    /// see [`crate::cards::Hands::remove_from_game`]) and hands the turn
+    /// to the other side, same as [`Game::confirm`]/[`Game::cancel`].
+    pub fn play_event(&mut self, map: &WorldMap, cards: &CardCatalog) -> Result<EventOutcome, GameError> {
+        if self.winner.is_some() {
+            return Err(GameError::GameOver);
+        }
+        if let Some(op) = &self.op {
+            return Err(GameError::OperationOpen { verb: op.verb(), remaining: op.remaining(), total: op.ops_total() });
+        }
+        let card = self.card.ok_or(GameError::NoCard)?;
+        if !events::is_implemented(card.id) {
+            return Err(GameError::EventNotImplemented { card: card.id });
+        }
+        let outcome = events::resolve(map, &self.board, card.id).expect("is_implemented checked above");
+        self.log_card_selected();
+
+        match &outcome {
+            EventOutcome::Scoring(result) => {
+                self.apply_vp(result.vp_delta);
+                if let Some(side) = result.automatic_victory {
+                    self.set_winner(side, VictoryReason::EuropeControl);
+                }
+                let vp_after = self.status.vp;
+                self.log.push(LogEntry {
+                    turn: self.status.turn,
+                    action_round: self.status.action_round,
+                    side: Some(self.status.active),
+                    event: Event::Scored { result: result.clone(), vp_after },
+                });
+                if let Some(victory) = self.winner {
+                    self.log.push(LogEntry {
+                        turn: self.status.turn,
+                        action_round: self.status.action_round,
+                        side: Some(self.status.active),
+                        event: Event::GameOver(victory),
+                    });
+                }
+            }
+        }
+
+        self.discard_or_remove_event_card(cards);
+        if self.winner.is_none() {
+            self.advance();
+        }
+        Ok(outcome)
+    }
+
+    /// Adds `delta` to the VP track, clamped to ±20 (rule 5.5's cap —
+    /// nothing above this reads a VP outside that range), and sets
+    /// [`Game::winner`] if it lands exactly on either end.
+    fn apply_vp(&mut self, delta: i8) {
+        let new_vp = (self.status.vp as i16 + delta as i16).clamp(-20, 20) as i8;
+        self.status.vp = new_vp;
+        if new_vp >= 20 {
+            self.set_winner(Superpower::Us, VictoryReason::Vp);
+        } else if new_vp <= -20 {
+            self.set_winner(Superpower::Ussr, VictoryReason::Vp);
+        }
+    }
+
+    /// Sets [`Game::winner`] — a no-op if one's already set, so the
+    /// *first* way the game ends is the one that sticks (relevant only
+    /// to a contrived board where a VP cap and a Europe automatic
+    /// victory would otherwise race on the same call).
+    fn set_winner(&mut self, side: Superpower, reason: VictoryReason) {
+        if self.winner.is_none() {
+            self.winner = Some(Victory { side, reason });
+        }
     }
 
     /// Pushes [`Event::Selected`] for the card currently in play, if it
@@ -631,6 +808,20 @@ impl Game {
         }
     }
 
+    /// [`Game::discard_played_card`]'s counterpart for
+    /// [`Game::play_event`]: sends the card to the removed-from-play pile
+    /// instead of the discard pile if its *event* is
+    /// `removed_after_event` (rule 4.4) — never the China Card, since
+    /// none of the cards [`events::is_implemented`] recognises is it.
+    fn discard_or_remove_event_card(&mut self, cards: &CardCatalog) {
+        let Some(card) = self.card.take() else { return };
+        if cards.card(card.id).removed_after_event {
+            self.hands.remove_from_game(card.id);
+        } else {
+            self.hands.discard(card.id);
+        }
+    }
+
     /// Hands the turn to the other side: USSR to USA, or USA to USSR —
     /// which also completes an action round, so it increments
     /// `action_round`, rolling `turn` over (and flipping the China Card
@@ -696,6 +887,19 @@ mod tests {
     /// overriding the defaults, plus the same standard hands.
     fn scenario_with_status(map: &WorldMap, cards: &CardCatalog, status_json: &str) -> Scenario {
         let json = format!(r#"{{"status":{status_json},{HANDS_JSON}}}"#);
+        Scenario::from_json(map, cards, &json).unwrap()
+    }
+
+    /// A scenario like [`scenario`], but with `extra` prepended to
+    /// `side`'s hand — for tests that need a scoring card (or any other
+    /// third card) available without losing the two ordinary cards every
+    /// other test here already relies on.
+    fn scenario_with_extra_card(map: &WorldMap, cards: &CardCatalog, side: Superpower, extra: &str) -> Scenario {
+        let (us_hand, ussr_hand) = match side {
+            Superpower::Us => (format!(r#""{extra}","Duck and Cover","Five Year Plan""#), r#""Socialist Governments","Fidel""#.to_string()),
+            Superpower::Ussr => (r#""Duck and Cover","Five Year Plan""#.to_string(), format!(r#""{extra}","Socialist Governments","Fidel""#)),
+        };
+        let json = format!(r#"{{"hands":{{"us":[{us_hand}],"ussr":[{ussr_hand}]}}}}"#);
         Scenario::from_json(map, cards, &json).unwrap()
     }
 
@@ -1238,12 +1442,17 @@ mod tests {
     }
 
     #[test]
-    fn a_scoring_card_cannot_be_played() {
+    fn a_scoring_card_can_be_played_but_not_spent_on_an_operation() {
         let map = map();
         let cards = cards();
-        let mut game = Game::from_scenario(&scenario(&map, &cards));
+        let scenario = scenario_with_extra_card(&map, &cards, Ussr, "Europe Scoring");
+        let mut game = Game::from_scenario(&scenario);
         let scoring = cards.id_by_name("Europe Scoring").unwrap();
-        assert!(matches!(game.play_card(&cards, scoring), Err(GameError::ScoringCard)));
+        game.play_card(&cards, scoring).unwrap();
+        assert_eq!(game.card_in_play(), Some(scoring));
+        assert!(matches!(game.begin(OperationKind::Influence), Err(GameError::ScoringCard)));
+        // Still a free undo, same as any other played-but-unspent card.
+        assert_eq!(game.return_card().unwrap(), scoring);
     }
 
     #[test]
@@ -1333,5 +1542,177 @@ mod tests {
         game.pass().unwrap(); // Us -> Ussr, rolls the turn over
         assert_eq!(game.status().turn, 2);
         assert!(game.status().china_card_face_up, "the turn rollover should flip it back up");
+    }
+
+    /// A scenario where the USSR controls every Europe battleground plus
+    /// the UK — Europe Scoring's Control tier (rule 10.1) — with "Europe
+    /// Scoring" in its hand, for the handful of tests below that need
+    /// the game to actually end.
+    fn europe_control_scenario(map: &WorldMap, cards: &CardCatalog) -> Scenario {
+        let json = r#"{
+            "hands":{"us":["Duck and Cover","Five Year Plan"],"ussr":["Europe Scoring","Fidel"]},
+            "influence":{
+                "France":[0,10],"West Germany":[0,10],"East Germany":[0,10],
+                "Poland":[0,10],"Italy":[0,10],"UK":[0,10]
+            }
+        }"#;
+        Scenario::from_json(map, cards, json).unwrap()
+    }
+
+    #[test]
+    fn a_scoring_card_event_applies_vp_and_discards_the_card() {
+        let map = map();
+        let cards = cards();
+        let json = r#"{
+            "hands":{"us":["Duck and Cover","Five Year Plan"],"ussr":["Middle East Scoring","Fidel"]},
+            "influence":{"Jordan":[0,5]}
+        }"#;
+        let scenario = Scenario::from_json(&map, &cards, json).unwrap();
+        let mut game = Game::from_scenario(&scenario);
+        let me_scoring = cards.id_by_name("Middle East Scoring").unwrap();
+
+        game.play_card(&cards, me_scoring).unwrap();
+        let outcome = game.play_event(&map, &cards).unwrap();
+        match outcome {
+            EventOutcome::Scoring(result) => assert_eq!(result.vp_delta, -3),
+        }
+        assert_eq!(game.status().vp, -3, "presence-only USSR should cost the US side 3 VP");
+        assert_eq!(game.card_in_play(), None, "the event should discard the card that funded it");
+        assert!(game.discards().contains(&me_scoring));
+        assert_eq!(game.active(), Us, "closing the event should hand the turn over, same as confirm/cancel");
+    }
+
+    #[test]
+    fn southeast_asia_scoring_removes_the_card_from_the_game_instead_of_discarding_it() {
+        let map = map();
+        let cards = cards();
+        let json = r#"{"hands":{"us":["Duck and Cover","Five Year Plan"],"ussr":["Southeast Asia Scoring","Fidel"]}}"#;
+        let scenario = Scenario::from_json(&map, &cards, json).unwrap();
+        let mut game = Game::from_scenario(&scenario);
+        let se_asia = cards.id_by_name("Southeast Asia Scoring").unwrap();
+
+        game.play_card(&cards, se_asia).unwrap();
+        game.play_event(&map, &cards).unwrap();
+        assert!(game.removed_from_game().contains(&se_asia));
+        assert!(!game.discards().contains(&se_asia));
+    }
+
+    #[test]
+    fn play_event_refuses_a_card_whose_event_is_not_implemented_yet() {
+        let map = map();
+        let cards = cards();
+        let mut game = Game::from_scenario(&scenario(&map, &cards));
+        let sg = play(&mut game, &cards, "Socialist Governments");
+        assert!(matches!(
+            game.play_event(&map, &cards),
+            Err(GameError::EventNotImplemented { card }) if card == sg
+        ));
+        // Refusing to resolve the event shouldn't have consumed it —
+        // it's still exactly as playable for ops as before.
+        game.begin(OperationKind::Influence).unwrap();
+    }
+
+    #[test]
+    fn reaching_plus_20_vp_clamps_and_sets_the_us_as_winner() {
+        let map = map();
+        let cards = cards();
+        let json = r#"{
+            "status":{"vp":18},
+            "hands":{"us":["Duck and Cover","Five Year Plan"],"ussr":["Southeast Asia Scoring","Fidel"]},
+            "influence":{
+                "Thailand":[5,0],"Burma":[5,0],"Laos/Cambodia":[5,0],"Vietnam":[5,0],
+                "Malaysia":[5,0],"Indonesia":[5,0],"Philippines":[5,0]
+            }
+        }"#;
+        let scenario = Scenario::from_json(&map, &cards, json).unwrap();
+        let mut game = Game::from_scenario(&scenario);
+        let se_asia = cards.id_by_name("Southeast Asia Scoring").unwrap();
+
+        game.play_card(&cards, se_asia).unwrap();
+        game.play_event(&map, &cards).unwrap();
+        assert_eq!(game.status().vp, 20, "VP should clamp at +20, not overshoot to 26");
+        assert_eq!(game.winner(), Some(Victory { side: Us, reason: VictoryReason::Vp }));
+    }
+
+    #[test]
+    fn reaching_minus_20_vp_clamps_and_sets_the_ussr_as_winner() {
+        let map = map();
+        let cards = cards();
+        let json = r#"{
+            "status":{"vp":-18},
+            "hands":{"us":["Duck and Cover","Five Year Plan"],"ussr":["Southeast Asia Scoring","Fidel"]},
+            "influence":{
+                "Thailand":[0,5],"Burma":[0,5],"Laos/Cambodia":[0,5],"Vietnam":[0,5],
+                "Malaysia":[0,5],"Indonesia":[0,5],"Philippines":[0,5]
+            }
+        }"#;
+        let scenario = Scenario::from_json(&map, &cards, json).unwrap();
+        let mut game = Game::from_scenario(&scenario);
+        let se_asia = cards.id_by_name("Southeast Asia Scoring").unwrap();
+
+        game.play_card(&cards, se_asia).unwrap();
+        game.play_event(&map, &cards).unwrap();
+        assert_eq!(game.status().vp, -20, "VP should clamp at -20, not overshoot to -26");
+        assert_eq!(game.winner(), Some(Victory { side: Ussr, reason: VictoryReason::Vp }));
+    }
+
+    #[test]
+    fn europe_scoring_control_wins_the_game_outright() {
+        let map = map();
+        let cards = cards();
+        let scenario = europe_control_scenario(&map, &cards);
+        let mut game = Game::from_scenario(&scenario);
+        let europe_scoring = cards.id_by_name("Europe Scoring").unwrap();
+
+        game.play_card(&cards, europe_scoring).unwrap();
+        game.play_event(&map, &cards).unwrap();
+        assert_eq!(game.winner(), Some(Victory { side: Ussr, reason: VictoryReason::EuropeControl }));
+    }
+
+    #[test]
+    fn once_the_game_is_won_further_actions_are_refused_and_the_turn_does_not_advance() {
+        let map = map();
+        let cards = cards();
+        let scenario = europe_control_scenario(&map, &cards);
+        let mut game = Game::from_scenario(&scenario);
+        let europe_scoring = cards.id_by_name("Europe Scoring").unwrap();
+        game.play_card(&cards, europe_scoring).unwrap();
+        game.play_event(&map, &cards).unwrap();
+        let active_before = game.active();
+
+        assert!(matches!(game.play_card(&cards, cards.id_by_name("Fidel").unwrap()), Err(GameError::GameOver)));
+        assert!(matches!(game.pass(), Err(GameError::GameOver)));
+        assert_eq!(game.active(), active_before, "the turn should not advance once the game is over");
+    }
+
+    #[test]
+    fn the_log_order_is_selected_then_scored_then_gameover_when_the_event_wins() {
+        let map = map();
+        let cards = cards();
+        let scenario = europe_control_scenario(&map, &cards);
+        let mut game = Game::from_scenario(&scenario);
+        let europe_scoring = cards.id_by_name("Europe Scoring").unwrap();
+        game.play_card(&cards, europe_scoring).unwrap();
+        game.play_event(&map, &cards).unwrap();
+
+        let events: Vec<&Event> = game.log().entries().iter().map(|e| &e.event).collect();
+        assert_eq!(events.len(), 3, "expected exactly Selected, Scored, GameOver: {events:?}");
+        assert!(matches!(events[0], Event::Selected { .. }));
+        assert!(matches!(events[1], Event::Scored { .. }));
+        assert!(matches!(events[2], Event::GameOver(_)));
+    }
+
+    #[test]
+    fn lookahead_carries_the_winner() {
+        let map = map();
+        let cards = cards();
+        let scenario = europe_control_scenario(&map, &cards);
+        let mut game = Game::from_scenario(&scenario);
+        let europe_scoring = cards.id_by_name("Europe Scoring").unwrap();
+        game.play_card(&cards, europe_scoring).unwrap();
+        game.play_event(&map, &cards).unwrap();
+
+        let ahead = game.lookahead();
+        assert_eq!(ahead.winner(), game.winner());
     }
 }
