@@ -222,7 +222,7 @@ uniformly random legal moves.
   #18 Captured Nazi Scientist and #80 One Small Step use `Ctx::advance_space`
   and report `EffectResult::space`. Views: `render/space.rs`
   (`render_space_track`, `render_space_result`), a `Space n-m` label and perk
-  entries in the status bar, `s` in interactive mode (opens `Modal::SpaceConfirm`, `render_space_confirm`: the next box, the roll needed and why a roll is unavailable if it is — Enter rolls only when `Game::can_space`, Esc cancels for free; shown even when the roll is refused), `space`/`spacerace`/
+  entries in the status bar, `t` in interactive mode shows the track as an info-only modal (`Modal::SpaceTrack`); `s` (opens `Modal::SpaceConfirm`, `render_space_confirm`: the next box, the roll needed and why a roll is unavailable if it is — Enter rolls only when `Game::can_space`, Esc cancels for free; shown even when the roll is refused), `space`/`spacerace`/
   debug `track us|ussr <n>` in the REPL; test states in `data/states/space.json`.
 - **`ops`** (`src/ops/`) — the game's ops-spending operations, plus (as
   `Operation::Event`) a choice card's event in progress. Four kinds

@@ -14,7 +14,7 @@ use crossterm::{execute, queue};
 
 use twilight_struggle::render::{
     log_entry_line, operation_abandoned_line, operation_closed_line, operation_header, render_card, render_country, render_hand,
-    render_event_result, render_space_confirm, render_space_result, render_war_result, render_region, render_roll_result, render_scoring_result, render_status_bar, render_world_map, Canvas, RollReport, HAND_ROWS,
+    render_event_result, render_space_confirm, render_space_result, render_space_track_with_hint, render_war_result, render_region, render_roll_result, render_scoring_result, render_status_bar, render_world_map, Canvas, RollReport, HAND_ROWS,
 };
 use twilight_struggle::events::{EffectResult, ScoringResult, WarResult};
 use twilight_struggle::game::Victory;
@@ -53,6 +53,9 @@ enum Modal {
     /// it's drawn live from the card in play and the status, and Enter
     /// rolls only if [`Game::can_space`].
     SpaceConfirm,
+    /// `t`: the space race track, for information only — drawn live from
+    /// the status, dismissed with Enter, Esc or `t` again.
+    SpaceTrack,
 }
 
 /// Which screen is currently showing.
@@ -259,6 +262,9 @@ pub fn run(
                         KeyCode::Enter | KeyCode::Esc => {
                             modal.pop_front();
                         }
+                        KeyCode::Char('t') | KeyCode::Backspace if matches!(modal.front(), Some(Modal::SpaceTrack)) => {
+                            modal.pop_front();
+                        }
                         KeyCode::Char('q') => return Ok(()),
                         _ => {}
                     }
@@ -303,6 +309,10 @@ pub fn run(
                     KeyCode::Char('i') => message = begin(game, OperationKind::Influence),
                     KeyCode::Char('a') => message = begin(game, OperationKind::Realign),
                     KeyCode::Char('o') => message = begin(game, OperationKind::Coup),
+                    KeyCode::Char('t') => {
+                        zoomed = false;
+                        modal.push_back(Modal::SpaceTrack);
+                    }
                     // A space-race refusal (too few ops, attempt used, …) still
                     // opens the confirmation, which explains it; only having
                     // no card in play, an open operation, or a finished game
@@ -883,6 +893,7 @@ fn draw(
             Modal::Event(result, vp_after, winner) => render_event_result(map, cards, result, *vp_after, *winner, queue_pos),
             Modal::War(result, vp_after, winner) => render_war_result(map, cards, result, *vp_after, *winner, queue_pos),
             Modal::Space(result, vp_after, winner) => render_space_result(cards, result, *vp_after, *winner, queue_pos),
+            Modal::SpaceTrack => render_space_track_with_hint(game.status(), "Enter/Esc/⌫/t close"),
             Modal::SpaceConfirm => match game.card_in_play() {
                 Some(id) => render_space_confirm(game.status(), cards.card(id)),
                 None => Canvas::new(0, 0),

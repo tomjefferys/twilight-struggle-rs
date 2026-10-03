@@ -30,7 +30,7 @@ pub use log::{log_entry_line, log_text, render_log};
 pub use region::render_region;
 pub use roll::{render_roll_result, RollReport};
 pub use score::render_scoring_result;
-pub use space::{render_space_confirm, render_space_result, render_space_track};
+pub use space::{render_space_confirm, render_space_result, render_space_track, render_space_track_with_hint};
 pub use statusbar::{render_status_bar, STATUS_BAR_ROWS};
 pub use war::render_war_result;
 pub use world::render_world;
@@ -776,4 +776,4 @@ pub(crate) fn vp_line(vp: i8) -> String {
 /// steps rather than two different hints the caller would have to choose
 /// between. The status bar (which does know) uses its own three-state
 /// wording instead — see `statusbar.rs`.
-pub(crate) const BEGIN_HINT: &str = "space play card · i/a/o influence/realign/coup · s space race · e event · p pass";
+pub(crate) const BEGIN_HINT: &str = "space play card · i/a/o influence/realign/coup · s space race · t space track · e event · p pass";

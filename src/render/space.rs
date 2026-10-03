@@ -38,6 +38,12 @@ pub fn perk_line(status: &GameStatus, perk: Perk) -> (String, Color) {
 /// The whole track: box 0 to 8 with ops and die needed, VP for first and
 /// second in, each side's marker and each perk's current holder.
 pub fn render_space_track(status: &GameStatus) -> Canvas {
+    render_space_track_with_hint(status, "")
+}
+
+/// [`render_space_track`] with a right-aligned key hint on an extra row
+/// below it (the interactive modal's "Esc close"); empty adds no row.
+pub fn render_space_track_with_hint(status: &GameStatus, hint: &str) -> Canvas {
     let mut rows: Vec<(String, Style, Option<u8>)> = Vec::new();
     rows.push(("Start".to_string(), Style::default(), Some(0)));
     for (i, b) in TRACK.iter().enumerate() {
@@ -48,7 +54,7 @@ pub fn render_space_track(status: &GameStatus) -> Canvas {
             rows.push((format!("     {text}"), Style::color(color), None));
         }
     }
-    let height = rows.len() + 4;
+    let height = rows.len() + 4 + (!hint.is_empty()) as usize;
     let mut canvas = Canvas::new(TRACK_WIDTH, height);
     canvas.draw_box(0, 0, TRACK_WIDTH, height, Style::default());
     put_border_title(&mut canvas, 0, 0, "Space Race", Style::default().bold(), "", Style::default(), TRACK_WIDTH);
@@ -67,7 +73,12 @@ pub fn render_space_track(status: &GameStatus) -> Canvas {
             }
         }
     }
-    canvas.put(height - 2, 1 + PADDING, &format!("Attempts this turn: USA {}/{}  USSR {}/{}",
+    if !hint.is_empty() {
+        let width = TRACK_WIDTH - 2 - 2 * PADDING;
+        canvas.put(height - 2, 1 + PADDING, &format!("{hint:>width$}"), Style::color(Color::Muted));
+    }
+    let attempts_row = height - 2 - (!hint.is_empty()) as usize;
+    canvas.put(attempts_row, 1 + PADDING, &format!("Attempts this turn: USA {}/{}  USSR {}/{}",
         space::attempts_used(status, Superpower::Us), space::attempts_allowed(status, Superpower::Us),
         space::attempts_used(status, Superpower::Ussr), space::attempts_allowed(status, Superpower::Ussr)), Style::color(Color::Muted));
     canvas
