@@ -64,7 +64,8 @@ pub enum Action {
     /// Close the open operation, committing whatever it did, and hand the
     /// turn to the other side — [`Game::confirm`].
     Confirm,
-    /// Forfeit the turn with no card played — [`Game::pass`].
+    /// Forfeit the turn with no card played — [`Game::pass`] — or, after a
+    /// card's event, skip the operation it allowed.
     Pass,
 }
 
@@ -149,7 +150,15 @@ impl Game {
                 actions.push(Action::Confirm);
             }
             None => {
-                if let Some(id) = self.card_in_play() {
+                if let Some(grant) = self.ops_after_event() {
+                    // The event is done; only the operation it allowed (or skipping it) is left.
+                    for kind in [OperationKind::Influence, OperationKind::Realign, OperationKind::Coup] {
+                        if grant.allows(kind) {
+                            actions.push(Action::Begin(kind));
+                        }
+                    }
+                    actions.push(Action::Pass);
+                } else if let Some(id) = self.card_in_play() {
                     if events::is_implemented(id) && events::blocked(id, self.removed_from_game()).is_none() {
                         actions.push(Action::Event);
                     }

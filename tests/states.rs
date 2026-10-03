@@ -400,7 +400,7 @@ fn every_implemented_event_plays_through_game() {
             let mut ai = twilight_struggle::RandomAi::from_seed(7);
             let mut dice = twilight_struggle::Dice::from_seed(7);
             for _ in 0..3 {
-                if game.operation().is_some() {
+                if game.operation().is_some() || game.ops_after_event().is_some() {
                     twilight_struggle::play_turn(&mut ai, &mut game, &map, &cards, &mut dice)
                         .unwrap_or_else(|e| panic!("{} ({side}): AI could not finish the event: {e}", card.name));
                 }
@@ -2087,5 +2087,157 @@ mod batch_one {
         game.play_card(&cards, cards.id_by_name("Wargames").unwrap()).unwrap();
         assert!(matches!(game.play_event(&map, &cards).unwrap(), EventOutcome::Effect(_)), "resolves on the spot");
         assert_eq!((game.status().vp, game.winner(), game.active()), (0, None, Superpower::Us));
+    }
+}
+
+mod event_then_ops {
+    use super::*;
+    use twilight_struggle::game::GameError;
+    use twilight_struggle::{Action, CountryId, OperationKind};
+
+    fn id(map: &WorldMap, name: &str) -> CountryId {
+        map.id_by_name(name).unwrap_or_else(|| panic!("no country {name}"))
+    }
+
+    /// Loads `events/<name>`, plays `card` and resolves its event.
+    fn played(name: &str, card: &str) -> (WorldMap, CardCatalog, Game) {
+        let (map, cards, lib) = fixtures();
+        let (scenario, _) = lib.load(&map, &cards, &format!("events/{name}")).unwrap_or_else(|e| panic!("{name}: {e}"));
+        let mut game = Game::from_scenario(&scenario);
+        game.play_card(&cards, cards.id_by_name(card).unwrap()).unwrap();
+        assert!(matches!(game.play_event(&map, &cards).unwrap(), EventOutcome::Effect(_)));
+        (map, cards, game)
+    }
+
+    #[test]
+    fn abm_treaty_improves_defcon_then_leaves_the_card_in_play_for_any_operation() {
+        let (map, cards, mut game) = played("abm-treaty", "ABM Treaty");
+        assert_eq!(game.status().defcon, 4);
+        assert_eq!(game.active(), Superpower::Ussr, "the turn doesn't pass until the ops are done");
+        assert!(game.ops_after_event().is_some());
+        assert!(game.discards().is_empty() && game.removed_from_game().is_empty(), "still in play");
+        game.begin(OperationKind::Influence).unwrap();
+        game.place(&map, id(&map, "Poland")).unwrap();
+        game.confirm().unwrap();
+        assert_eq!(game.board().influence(id(&map, "Poland"), Superpower::Ussr), 2);
+        assert_eq!(game.active(), Superpower::Us);
+        assert!(game.discards().contains(&cards.id_by_name("ABM Treaty").unwrap()), "ABM Treaty isn't removed after its event");
+    }
+
+    #[test]
+    fn the_ops_of_a_played_event_can_be_skipped_with_pass() {
+        let (_, cards, mut game) = played("abm-treaty", "ABM Treaty");
+        game.pass().unwrap();
+        assert_eq!(game.active(), Superpower::Us);
+        assert!(game.card_in_play().is_none());
+        assert!(game.discards().contains(&cards.id_by_name("ABM Treaty").unwrap()));
+    }
+
+    #[test]
+    fn a_played_event_cannot_be_replayed_returned_or_spaced() {
+        let (map, cards, mut game) = played("abm-treaty", "ABM Treaty");
+        assert!(matches!(game.play_event(&map, &cards), Err(GameError::EventPlayed { .. })));
+        assert!(matches!(game.return_card(), Err(GameError::EventPlayed { .. })));
+        assert!(!game.can_space());
+        let legal = game.legal_actions(&map, &cards);
+        assert!(!legal.contains(&Action::Event) && !legal.contains(&Action::Space));
+        assert!(legal.contains(&Action::Pass) && legal.contains(&Action::Begin(OperationKind::Coup)));
+    }
+
+    #[test]
+    fn a_placement_can_be_abandoned_and_swapped_for_another_kind() {
+        let (_, _, mut game) = played("abm-treaty", "ABM Treaty");
+        game.begin(OperationKind::Influence).unwrap();
+        game.abandon().unwrap();
+        game.begin(OperationKind::Realign).unwrap();
+        game.cancel().unwrap();
+        assert_eq!(game.active(), Superpower::Us);
+    }
+
+    #[test]
+    fn kal_007_drops_defcon_pays_the_us_and_allows_everything_but_a_coup_with_south_korea_controlled() {
+        let (map, cards, mut game) = played("kal-007-south-korea-us-controlled", "Soviets Shoot Down KAL-007");
+        assert_eq!((game.status().defcon, game.status().vp), (3, 2));
+        assert!(matches!(game.begin(OperationKind::Coup), Err(GameError::OpsNotGranted { .. })));
+        let legal = game.legal_actions(&map, &cards);
+        assert!(!legal.contains(&Action::Begin(OperationKind::Coup)));
+        assert!(legal.contains(&Action::Begin(OperationKind::Influence)) && legal.contains(&Action::Begin(OperationKind::Realign)));
+        game.begin(OperationKind::Influence).unwrap();
+        game.place(&map, id(&map, "Japan")).unwrap();
+        game.confirm().unwrap();
+        assert!(game.removed_from_game().contains(&cards.id_by_name("Soviets Shoot Down KAL-007").unwrap()), "KAL-007 leaves the game after its event");
+        assert!(game.discards().is_empty());
+    }
+
+    #[test]
+    fn kal_007_without_a_us_controlled_south_korea_just_hands_the_turn_over() {
+        let (map, cards, lib) = fixtures();
+        let game = play_effect_state(&map, &cards, &lib, "kal-007-south-korea-not-controlled", "Soviets Shoot Down KAL-007");
+        assert_eq!((game.status().defcon, game.status().vp, game.active()), (3, 2, Superpower::Ussr));
+        assert!(game.ops_after_event().is_none());
+    }
+
+    #[test]
+    fn only_the_cards_own_side_gets_the_operation() {
+        let (map, cards, lib) = fixtures();
+        let game = play_effect_state(&map, &cards, &lib, "kal-007-played-by-ussr", "Soviets Shoot Down KAL-007");
+        assert_eq!((game.status().defcon, game.status().vp, game.active()), (3, 2, Superpower::Us), "the event's VP and DEFCON still apply");
+        assert!(game.ops_after_event().is_none());
+    }
+
+    #[test]
+    fn glasnost_needs_the_reformer_for_its_operation() {
+        let (map, cards, mut game) = played("glasnost-reformer-played", "Glasnost");
+        assert_eq!((game.status().defcon, game.status().vp), (4, -2));
+        assert!(matches!(game.begin(OperationKind::Coup), Err(GameError::OpsNotGranted { .. })));
+        game.begin(OperationKind::Influence).unwrap();
+        game.place(&map, id(&map, "Poland")).unwrap();
+        game.confirm().unwrap();
+        assert!(game.removed_from_game().contains(&cards.id_by_name("Glasnost").unwrap()));
+
+        let game = play_effect_state(&map, &cards, &fixtures().2, "glasnost-reformer-not-played", "Glasnost");
+        assert_eq!((game.status().defcon, game.status().vp, game.active()), (4, -2, Superpower::Us));
+    }
+
+    #[test]
+    fn cia_created_and_lone_gunman_reveal_the_hand_then_allow_any_operation() {
+        let (map, cards, lib) = fixtures();
+        let (scenario, _) = lib.load(&map, &cards, "events/cia-created").unwrap();
+        let mut game = Game::from_scenario(&scenario);
+        game.play_card(&cards, cards.id_by_name("CIA Created").unwrap()).unwrap();
+        let EventOutcome::Effect(returned) = game.play_event(&map, &cards).unwrap() else { panic!("a fixed effect") };
+        assert_eq!(
+            returned.reveals.map(|r| r.cards),
+            Some(vec![cards.id_by_name("Fidel").unwrap(), cards.id_by_name("Nasser").unwrap()]),
+            "the result returned to the caller (and shown in the modal) lists the hand too"
+        );
+        assert!(game.ops_after_event().is_some_and(|g| g.coup));
+        let Some(twilight_struggle::Event::EventResolved { result, .. }) = game.log().entries().iter().rev().find_map(|e| match &e.event {
+            e @ twilight_struggle::Event::EventResolved { .. } => Some(e.clone()),
+            _ => None,
+        }) else {
+            panic!("the event is logged")
+        };
+        let reveal = result.reveals.expect("the hand is revealed");
+        assert_eq!(reveal.side, Superpower::Ussr);
+        assert_eq!(reveal.cards, vec![cards.id_by_name("Fidel").unwrap(), cards.id_by_name("Nasser").unwrap()]);
+
+        let (_, cards, mut game) = played("lone-gunman", "“Lone Gunman”");
+        assert!(game.ops_after_event().is_some());
+        game.begin(OperationKind::Coup).unwrap();
+        game.cancel().unwrap();
+        assert!(game.removed_from_game().contains(&cards.id_by_name("“Lone Gunman”").unwrap()));
+        let _ = map;
+    }
+
+    #[test]
+    fn an_ordinary_ops_play_of_these_cards_is_unaffected() {
+        let (map, cards, lib) = fixtures();
+        let (scenario, _) = lib.load(&map, &cards, "events/abm-treaty").unwrap();
+        let mut game = Game::from_scenario(&scenario);
+        game.play_card(&cards, cards.id_by_name("ABM Treaty").unwrap()).unwrap();
+        game.begin(OperationKind::Influence).unwrap();
+        game.confirm().unwrap();
+        assert_eq!(game.status().defcon, 3, "no event");
     }
 }

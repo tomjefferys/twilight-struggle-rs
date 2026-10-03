@@ -68,6 +68,23 @@ pub fn render_status_bar(
     winner: Option<Victory>,
     width: usize,
 ) -> Canvas {
+    render_status_bar_with(layout, board, status, card, op, winner, None, width)
+}
+
+/// [`render_status_bar`] for a game whose card in play has already had its
+/// event resolved and is waiting for the operation `after_event` allows
+/// ([`crate::game::Game::ops_after_event`]).
+#[allow(clippy::too_many_arguments)]
+pub fn render_status_bar_with(
+    layout: &MapLayout,
+    board: &Board,
+    status: &GameStatus,
+    card: Option<&Card>,
+    op: Option<&Operation>,
+    winner: Option<Victory>,
+    after_event: Option<crate::events::OpsGrant>,
+    width: usize,
+) -> Canvas {
     // An open event's chooser (the card's own side) is who's really to
     // act, even when the other side is phasing.
     let to_act = match op {
@@ -105,6 +122,14 @@ pub fn render_status_bar(
             (_, Some(operation)) => {
                 let name = card.map(|c| c.name.as_str()).unwrap_or("?");
                 (format!("{name} · {}", operation_balance_line(layout, board, operation)), Style::color(Color::Selected))
+            }
+            (Some(card), None) if after_event.is_some() => {
+                let grant = after_event.expect("guard checked");
+                let keys = if grant.coup { "i influence · a realign · o coup" } else { "i influence · a realign" };
+                (
+                    format!("{} event played ({}) — {keys} · p skip the ops", card.name, ops_text(status, card)),
+                    Style::color(Color::Selected),
+                )
             }
             (Some(card), None) if card.scoring => {
                 (format!("playing {} — e score · ⌫ return card", card.name), Style::color(Color::Selected))

@@ -41,6 +41,15 @@ pub struct ChinaTransfer {
     pub face_up: bool,
 }
 
+/// A hand an event makes its owner show (CIA Created, "Lone Gunman"):
+/// whose, and — filled in by `Game` once the event applies, since the
+/// effect itself never sees the hands — which cards.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Reveal {
+    pub side: Superpower,
+    pub cards: Vec<CardId>,
+}
+
 /// What resolving a fixed-effect card produced. `vp_delta` follows
 /// [`GameStatus::vp`]'s convention (positive favours the US); `defcon` is
 /// `(before, after)`, already clamped to the track, and `None` for a card
@@ -67,6 +76,8 @@ pub struct EffectResult {
     pub mil_ops: i8,
     /// The event ends the game outright, the VP leader winning (Wargames).
     pub ends_game: bool,
+    /// A hand the event reveals.
+    pub reveals: Option<Reveal>,
 }
 
 /// What one card's effect function sees and mutates: the board as it was
@@ -90,6 +101,7 @@ struct Ctx<'a> {
     cancels: Option<LastingEffect>,
     china: Option<ChinaTransfer>,
     space: Option<(Superpower, u8, u8)>,
+    reveals: Option<Reveal>,
 }
 
 impl Ctx<'_> {
@@ -181,6 +193,11 @@ impl Ctx<'_> {
         self.space = Some((side, from, to));
     }
 
+    /// Makes `side` show their hand.
+    fn reveal_hand(&mut self, side: Superpower) {
+        self.reveals = Some(Reveal { side, cards: Vec::new() });
+    }
+
     /// Whether `side` controlled `name` when the event was played.
     fn controls(&self, name: &str, side: Superpower) -> bool {
         self.before.is_controlled_by(self.map, self.id(name), side)
@@ -223,6 +240,7 @@ const EFFECTS: &[(u8, Effect)] = &[
     (17, de_gaulle_leads_france),
     (18, captured_nazi_scientist),
     (21, nato),
+    (26, cia_created),
     (25, containment),
     (31, red_scare_purge),
     (27, us_japan_mutual_defense_pact),
@@ -237,10 +255,12 @@ const EFFECTS: &[(u8, Effect)] = &[
     (52, portuguese_empire_crumbles),
     (54, allende),
     (55, willy_brandt),
+    (57, abm_treaty),
     (58, cultural_revolution),
     (59, flower_power),
     (60, u2_incident),
     (61, opec),
+    (62, lone_gunman),
     (64, panama_canal_returned),
     (65, camp_david_accords),
     (68, john_paul_ii_elected_pope),
@@ -253,6 +273,8 @@ const EFFECTS: &[(u8, Effect)] = &[
     (84, reagan_bombs_libya),
     (73, shuttle_diplomacy),
     (86, north_sea_oil),
+    (89, soviets_shoot_down_kal_007),
+    (90, glasnost),
     (93, iran_contra_scandal),
     (97, an_evil_empire),
     (101, solidarity),
@@ -274,9 +296,9 @@ pub fn is_effect_card(card: CardId) -> bool {
 /// name the map doesn't know, which `tests` below pins for every card.
 pub fn resolve(map: &WorldMap, board: &Board, status: &GameStatus, card: CardId) -> Option<EffectResult> {
     let effect = effect_for(card)?;
-    let mut ctx = Ctx { map, before: board, working: board.clone(), status, changes: Vec::new(), vp_delta: 0, defcon: None, ongoing: None, lasting: None, cancels: None, china: None, space: None };
+    let mut ctx = Ctx { map, before: board, working: board.clone(), status, changes: Vec::new(), vp_delta: 0, defcon: None, ongoing: None, lasting: None, cancels: None, china: None, space: None, reveals: None };
     effect(&mut ctx);
-    Some(EffectResult { card, player: status.active, influence: ctx.changes, vp_delta: ctx.vp_delta, defcon: ctx.defcon, ongoing: ctx.ongoing, lasting: ctx.lasting, cancels: ctx.cancels, china: ctx.china, space: ctx.space, mil_ops: 0, ends_game: false })
+    Some(EffectResult { card, player: status.active, influence: ctx.changes, vp_delta: ctx.vp_delta, defcon: ctx.defcon, ongoing: ctx.ongoing, lasting: ctx.lasting, cancels: ctx.cancels, china: ctx.china, space: ctx.space, mil_ops: 0, ends_game: false, reveals: ctx.reveals })
 }
 
 // ---- the cards, in printed-number order ----
@@ -341,6 +363,11 @@ fn one_small_step(c: &mut Ctx) {
 fn red_scare_purge(c: &mut Ctx) {
     let penalised = c.player().opponent();
     c.start(OngoingEffect::RedScare { penalised });
+}
+
+/// #26 CIA Created: the USSR reveals its hand; the US may then use the card's ops (`events::ops_grant`).
+fn cia_created(c: &mut Ctx) {
+    c.reveal_hand(Superpower::Ussr);
 }
 
 /// #34 Nuclear Test Ban: the player receives VP from the *current* level, then improves it by 2.
@@ -408,11 +435,21 @@ fn opec(c: &mut Ctx) {
     c.award_vp(Superpower::Ussr, n as i8);
 }
 
+/// #62 “Lone Gunman”: the US reveals its hand; the USSR may then use the card's ops.
+fn lone_gunman(c: &mut Ctx) {
+    c.reveal_hand(Superpower::Us);
+}
+
 /// #64 Panama Canal Returned
 fn panama_canal_returned(c: &mut Ctx) {
     for name in ["Panama", "Costa Rica", "Venezuela"] {
         c.add(name, Superpower::Us, 1);
     }
+}
+
+/// #57 ABM Treaty: improve DEFCON by 1; the player may then conduct operations with the card.
+fn abm_treaty(c: &mut Ctx) {
+    c.set_defcon(c.status.defcon + 1);
 }
 
 /// #58 Cultural Revolution: the US gives up the China Card (face up); if the USSR already holds it, +1 VP.
@@ -487,6 +524,20 @@ fn reagan_bombs_libya(c: &mut Ctx) {
 /// #86 North Sea Oil: the US plays an eighth action round this turn.
 fn north_sea_oil(c: &mut Ctx) {
     c.start(OngoingEffect::NorthSeaOil);
+}
+
+/// #89 Soviets Shoot Down KAL-007: DEFCON -1 and 2 VP to the US; with South Korea
+/// US-controlled the US may then place influence or realign with the card.
+fn soviets_shoot_down_kal_007(c: &mut Ctx) {
+    c.set_defcon(c.status.defcon.saturating_sub(1));
+    c.award_vp(Superpower::Us, 2);
+}
+
+/// #90 Glasnost: DEFCON +1 and 2 VP to the USSR; once The Reformer has been played the
+/// USSR may then place influence or realign with the card.
+fn glasnost(c: &mut Ctx) {
+    c.set_defcon(c.status.defcon + 1);
+    c.award_vp(Superpower::Ussr, 2);
 }
 
 /// #93 Iran-Contra Scandal: US realignment rolls get -1 for the rest of the turn.

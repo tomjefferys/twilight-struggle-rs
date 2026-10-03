@@ -753,6 +753,7 @@ impl EventChoice {
             space: None,
             mil_ops: extra.mil_ops,
             ends_game: extra.ends_game,
+            reveals: None,
         }
     }
 

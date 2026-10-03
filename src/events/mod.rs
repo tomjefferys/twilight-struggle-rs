@@ -27,7 +27,7 @@ pub mod scoring;
 pub mod war;
 
 pub use choice::EventChoice;
-pub use effects::{ChinaTransfer, EffectResult};
+pub use effects::{ChinaTransfer, EffectResult, Reveal};
 pub use scoring::ScoringResult;
 pub use war::{War, WarResult};
 
@@ -52,6 +52,53 @@ pub enum EventOutcome {
 /// offering `Action::Event` for a card in play.
 pub fn is_implemented(card: CardId) -> bool {
     scoring::is_scoring_card(card) || effects::is_effect_card(card) || choice::is_choice_card(card) || war::is_war_card(card)
+}
+
+/// The operations a card's event also lets its player conduct with the
+/// card's own ops value, once the event has resolved (ABM Treaty, KAL-007,
+/// Glasnost, CIA Created, "Lone Gunman"). The card stays in play until
+/// they're done — or skipped with `Game::pass`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct OpsGrant {
+    pub influence: bool,
+    pub realign: bool,
+    pub coup: bool,
+}
+
+impl OpsGrant {
+    /// Any operation.
+    pub const ANY: OpsGrant = OpsGrant { influence: true, realign: true, coup: true };
+    /// Influence or realignment only (KAL-007, Glasnost).
+    pub const NO_COUP: OpsGrant = OpsGrant { influence: true, realign: true, coup: false };
+
+    pub fn allows(self, kind: crate::game::OperationKind) -> bool {
+        match kind {
+            crate::game::OperationKind::Influence => self.influence,
+            crate::game::OperationKind::Realign => self.realign,
+            crate::game::OperationKind::Coup => self.coup,
+        }
+    }
+
+    /// What may be done, for a message.
+    pub fn describe(self) -> &'static str {
+        if self.coup { "any operation" } else { "placing influence or realigning" }
+    }
+}
+
+/// The operations `card`'s event grants `player` after it resolves, if any.
+/// Judged against the board as it stood when the event was played; only the
+/// card's own side gets them (the VP/DEFCON text applies whoever plays it,
+/// but "the US may place influence…" does not).
+pub fn ops_grant(map: &WorldMap, board: &Board, removed: &[CardId], card: CardId, player: crate::country::Superpower) -> Option<OpsGrant> {
+    use crate::country::Superpower::{Us, Ussr};
+    match card.0 {
+        57 => Some(OpsGrant::ANY),
+        26 if player == Us => Some(OpsGrant::ANY),
+        62 if player == Ussr => Some(OpsGrant::ANY),
+        89 if player == Us && map.id_by_name("South Korea").is_some_and(|id| board.is_controlled_by(map, id, Us)) => Some(OpsGrant::NO_COUP),
+        90 if player == Ussr && removed.contains(&CardId(87)) => Some(OpsGrant::NO_COUP),
+        _ => None,
+    }
 }
 
 /// Why a card's event can't be played right now.

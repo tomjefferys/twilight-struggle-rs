@@ -51,7 +51,7 @@ use crate::country::{CountryId, Region, Superpower};
 use crate::dice::Dice;
 use crate::events::choice::{EventChoiceError, Sign};
 use crate::events::EventChoice;
-use crate::events::{self, war, EffectResult, EventOutcome, WarResult};
+use crate::events::{self, war, EffectResult, EventOutcome, OpsGrant, WarResult};
 use crate::log::{CoupAftermath, Event, GameLog, LogEntry};
 use crate::map::WorldMap;
 use crate::ongoing::{LastingEffect, TurnEffects};
@@ -163,6 +163,12 @@ pub enum GameError {
     EventPrevented { card: CardId, by: CardId },
     /// The card's event needs one of `any_of`'s to have happened first.
     EventRequires { card: CardId, any_of: &'static [CardId] },
+    /// The card in play has already had its event resolved and is only
+    /// waiting for the operation that event allows — it can't be played as
+    /// an event again, returned to the hand, or spent on a space attempt.
+    EventPlayed { card: CardId },
+    /// [`Game::begin`] refused: the card's event only allows `allowed`.
+    OpsNotGranted { allowed: &'static str },
     /// [`Game::confirm`]/[`Game::cancel`] refused a war: it ends only by
     /// rolling on a target ([`Game::roll`]) or being abandoned.
     WarNotRolled,
@@ -202,6 +208,8 @@ impl fmt::Display for GameError {
                 let names: Vec<String> = any_of.iter().map(|c| format!("#{c}")).collect();
                 write!(f, "card #{card}'s event needs {}'s to have happened first", names.join(" or "))
             }
+            GameError::EventPlayed { card } => write!(f, "card #{card}'s event has already been played — conduct its operation, or pass to skip it"),
+            GameError::OpsNotGranted { allowed } => write!(f, "this card's event only allows {allowed}"),
             GameError::WarNotRolled => write!(f, "a war ends when it's rolled on a target (roll <country>), or abandoned"),
             GameError::War(e) => write!(f, "{e}"),
             GameError::Event(e) => write!(f, "{e}"),
@@ -274,6 +282,11 @@ struct PlayedCard {
     /// Cached from the catalog the same way: whether playing this card's
     /// *event* removes it from the game (rule 4.4) instead of discarding it.
     removed_after_event: bool,
+    /// Set once this card's event has resolved and allowed an operation
+    /// with the card's own ops (ABM Treaty, KAL-007, …): the card stays in
+    /// play, restricted to these kinds, until that operation closes or is
+    /// skipped.
+    ops_after_event: Option<OpsGrant>,
 }
 
 /// The live game: status (including whose turn it is), the committed
@@ -487,6 +500,12 @@ impl Game {
         self.card.map(|c| (c.id, c.hand_index))
     }
 
+    /// The operations the card in play's already-resolved event still
+    /// allows, if it has one pending — `None` otherwise.
+    pub fn ops_after_event(&self) -> Option<OpsGrant> {
+        self.card.and_then(|c| c.ops_after_event)
+    }
+
     pub fn operation(&self) -> Option<&Operation> {
         self.op.as_ref()
     }
@@ -560,7 +579,7 @@ impl Game {
         } else {
             Some(self.hands.remove(side, id).ok_or(GameError::NotInHand)?)
         };
-        self.card = Some(PlayedCard { id, ops: card.ops, hand_index, logged: false, scoring: card.scoring, removed_after_event: card.removed_after_event });
+        self.card = Some(PlayedCard { id, ops: card.ops, hand_index, logged: false, scoring: card.scoring, removed_after_event: card.removed_after_event, ops_after_event: None });
         Ok(())
     }
 
@@ -572,6 +591,9 @@ impl Game {
     pub fn return_card(&mut self) -> Result<CardId, GameError> {
         if let Some(op) = &self.op {
             return Err(GameError::OperationOpen { verb: op.verb(), remaining: op.remaining(), total: op.ops_total() });
+        }
+        if let Some(card) = self.card.filter(|c| c.ops_after_event.is_some()) {
+            return Err(GameError::EventPlayed { card: card.id });
         }
         let card = self.card.take().ok_or(GameError::NoCard)?;
         if let Some(index) = card.hand_index {
@@ -596,6 +618,11 @@ impl Game {
         let card = self.card.ok_or(GameError::NoCard)?;
         if card.scoring {
             return Err(GameError::ScoringCard);
+        }
+        if let Some(grant) = card.ops_after_event
+            && !grant.allows(kind)
+        {
+            return Err(GameError::OpsNotGranted { allowed: grant.describe() });
         }
         let side = self.status.active;
         let effects = self.status.effects;
@@ -770,7 +797,7 @@ impl Game {
             let op = self.op.take().expect("checked Some above");
             let Operation::Event(e) = &op else { unreachable!() };
             let result = e.into_result(&self.status);
-            self.finish_effect(result);
+            self.finish_effect(result, None);
             return Ok(op);
         }
         if matches!(self.op, Some(Operation::War(_))) {
@@ -919,6 +946,9 @@ impl Game {
             return Err(GameError::OperationOpen { verb: op.verb(), remaining: op.remaining(), total: op.ops_total() });
         }
         let card = self.card.ok_or(GameError::NoCard)?;
+        if card.ops_after_event.is_some() {
+            return Err(GameError::EventPlayed { card: card.id });
+        }
         let side = self.status.active;
         let ops = self.status.effects.card_ops(card.ops, side).0;
         Ok(space::check(&self.status, side, card.id == CHINA_CARD, card.scoring, ops)?)
@@ -937,7 +967,11 @@ impl Game {
             return Err(GameError::OperationOpen { verb: op.verb(), remaining: op.remaining(), total: op.ops_total() });
         }
         if let Some(card) = self.card {
-            return Err(GameError::CardInPlay { card: card.id });
+            // After its event, a card that allowed an operation can be
+            // passed on: the operation is simply skipped.
+            if card.ops_after_event.is_none() {
+                return Err(GameError::CardInPlay { card: card.id });
+            }
         }
         self.log.push(LogEntry {
             turn: self.status.turn,
@@ -945,6 +979,7 @@ impl Game {
             side: Some(self.status.active),
             event: Event::Pass,
         });
+        self.discard_played_card();
         self.advance();
         Ok(())
     }
@@ -980,6 +1015,9 @@ impl Game {
             return Err(GameError::OperationOpen { verb: op.verb(), remaining: op.remaining(), total: op.ops_total() });
         }
         let card = self.card.ok_or(GameError::NoCard)?;
+        if card.ops_after_event.is_some() {
+            return Err(GameError::EventPlayed { card: card.id });
+        }
         if !events::is_implemented(card.id) {
             return Err(GameError::EventNotImplemented { card: card.id });
         }
@@ -1004,7 +1042,7 @@ impl Game {
         if let Some(choice) = EventChoice::new(map, &self.board, &self.status, card.id) {
             if choice.resolves_immediately(map) {
                 let result = choice.into_result(&self.status);
-                self.finish_effect(result.clone());
+                self.finish_effect(result.clone(), None);
                 return Ok(EventOutcome::Effect(result));
             }
             let chooser = choice.chooser();
@@ -1012,7 +1050,13 @@ impl Game {
             return Ok(EventOutcome::Pending { card: card.id, chooser });
         }
 
-        let outcome = events::resolve(map, &self.board, &self.status, card.id).expect("is_implemented checked above");
+        let mut outcome = events::resolve(map, &self.board, &self.status, card.id).expect("is_implemented checked above");
+        // Fill in a revealed hand now, so the result handed back to the caller (and its modal) lists the cards too.
+        if let EventOutcome::Effect(result) = &mut outcome
+            && let Some(reveal) = &mut result.reveals
+        {
+            reveal.cards = self.hands.hand(reveal.side).to_vec();
+        }
 
         match &outcome {
             EventOutcome::Scoring(result) => {
@@ -1039,7 +1083,10 @@ impl Game {
                     self.advance();
                 }
             }
-            EventOutcome::Effect(result) => self.finish_effect(result.clone()),
+            EventOutcome::Effect(result) => {
+                let grant = events::ops_grant(map, &self.board, self.hands.removed(), card.id, self.status.active);
+                self.finish_effect(result.clone(), grant);
+            }
             EventOutcome::Pending { .. } => unreachable!("wars and choice cards are handled above"),
         }
         Ok(outcome)
@@ -1050,8 +1097,11 @@ impl Game {
     /// hands the turn over unless that ended the game. The one path both
     /// [`Game::play_event`] (fixed effects) and [`Game::confirm`] (a
     /// finished choice) use.
-    fn finish_effect(&mut self, result: EffectResult) {
+    fn finish_effect(&mut self, mut result: EffectResult, grant: Option<OpsGrant>) {
         self.log_card_selected();
+        if let Some(reveal) = &mut result.reveals {
+            reveal.cards = self.hands.hand(reveal.side).to_vec();
+        }
         for change in &result.influence {
             self.board.set_influence(change.country, change.side, change.after);
         }
@@ -1100,6 +1150,11 @@ impl Game {
             event: Event::EventResolved { result, vp_after },
         });
         self.log_game_over();
+        // A card whose event allows an operation stays in play for it.
+        if let (None, Some(grant), Some(card)) = (self.winner, grant, self.card.as_mut()) {
+            card.ops_after_event = Some(grant);
+            return;
+        }
         self.discard_or_remove_event_card();
         if self.winner.is_none() {
             self.advance();
@@ -1267,6 +1322,9 @@ impl Game {
         if card.id == CHINA_CARD {
             self.status.china_card = self.status.active.opponent();
             self.status.china_card_face_up = false;
+        } else if card.ops_after_event.is_some() && card.removed_after_event {
+            // Its event was played (before the operation), so it leaves the game.
+            self.hands.remove_from_game(card.id);
         } else {
             self.hands.discard(card.id);
         }

@@ -14,7 +14,7 @@ use crossterm::{execute, queue};
 
 use twilight_struggle::render::{
     log_entry_line, operation_abandoned_line, operation_closed_line, operation_header, render_card, render_country, render_hand,
-    render_event_result, render_space_confirm, render_space_result, render_space_track_with_hint, render_war_result, render_region, render_roll_result, render_scoring_result, render_status_bar, render_world_map, Canvas, RollReport, HAND_ROWS,
+    render_event_result, render_space_confirm, render_space_result, render_space_track_with_hint, render_war_result, render_region, render_roll_result, render_scoring_result, render_status_bar_with, render_world_map, Canvas, RollReport, HAND_ROWS,
 };
 use twilight_struggle::events::{EffectResult, ScoringResult, WarResult};
 use twilight_struggle::game::Victory;
@@ -903,7 +903,7 @@ fn draw(
     }
 
     let card_in_play = game.card_in_play().map(|id| cards.card(id));
-    let bar = render_status_bar(layout, board, game.status(), card_in_play, op, game.winner(), canvas.width());
+    let bar = render_status_bar_with(layout, board, game.status(), card_in_play, op, game.winner(), game.ops_after_event(), canvas.width());
 
     let rows = terminal::size().map(|(_, h)| h as usize).unwrap_or(bar.height() + canvas.height() + HAND_ROWS);
     let view_budget = rows.saturating_sub(bar.height() + message.is_some() as usize + HAND_ROWS);

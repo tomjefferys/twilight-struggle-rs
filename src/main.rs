@@ -961,6 +961,9 @@ fn run_event_command(session: &mut Session) {
             let winner = session.game.winner();
             let canvas = render_event_result(&session.map, &session.cards, &result, vp_after, winner, None);
             println!("{}", canvas.render(session.color));
+            if let Some(grant) = session.game.ops_after_event() {
+                println!("{} may now conduct {} with this card's ops — or pass to skip them", session.game.active(), grant.describe());
+            }
         }
         Ok(EventOutcome::Pending { .. }) => print_event_prompt(session),
         Err(e) => println!("{e}"),

@@ -4,7 +4,7 @@ Which of the 110 cards have their **event** implemented (`events::is_implemented
 Every card can already be played for its ops value; this tracks the event text only.
 `tests/cards_progress.rs` fails if a ✅ here disagrees with the code, so update both together.
 
-**Implemented: 81 / 110**
+**Implemented: 86 / 110**
 
 - `events::scoring` — the seven scoring cards.
 - `events::effects` — fixed influence / VP / DEFCON effects with no choices or die rolls.
@@ -40,7 +40,7 @@ Every card can already be played for its ops value; this tracks the event text o
 | 23 | Marshall Plan | US | ✅ | Choice; enables #21 (modelled) |
 | 24 | Indo-Pakistani War | Both | ✅ | War (choose India/Pakistan) |
 | 25 | Containment | US | ✅ | Turn-long: US ops +1 (max 4) |
-| 26 | CIA Created | US |  |  |
+| 26 | CIA Created | US | ✅ | Reveals the USSR hand, then the US may use the card's ops for any operation (`Game::ops_after_event`) |
 | 27 | US/Japan Mutual Defense Pact | US | ✅ | Lasting: US takes control of Japan; USSR can't coup/realign it |
 | 28 | Suez Crisis | USSR | ✅ | Choice |
 | 29 | East European Unrest | US | ✅ | Choice; 2 per country from turn 8 (Late War) |
@@ -71,12 +71,12 @@ Every card can already be played for its ops value; this tracks the event text o
 | 54 | Allende | USSR | ✅ |  |
 | 55 | Willy Brandt | USSR | ✅ | USSR +1 VP, +1 West Germany; NATO exempts West Germany; 'cancelled by #96' pending |
 | 56 | Muslim Revolution | USSR | ✅ | Choice; prevented by #110 (modelled) |
-| 57 | ABM Treaty | Both |  |  |
+| 57 | ABM Treaty | Both | ✅ | DEFCON +1, then the player may conduct any operation with the card |
 | 58 | Cultural Revolution | USSR | ✅ | US holds China Card → USSR gets it face up; else +1 VP (`EffectResult::china`) |
 | 59 | Flower Power | USSR | ✅ | Lasting: USSR +2 VP per US war card (ops or event); cancelled by #97 |
 | 60 | U2 Incident | USSR | ✅ | USSR +1 VP; the extra VP if #32 follows pending #32 |
 | 61 | OPEC | USSR | ✅ | USSR +1 VP per controlled oil producer; barred after #86 (modelled) |
-| 62 | “Lone Gunman” | USSR |  |  |
+| 62 | “Lone Gunman” | USSR | ✅ | Reveals the US hand, then the USSR may use the card's ops for any operation |
 | 63 | Colonial Rear Guards | US | ✅ | Choice |
 | 64 | Panama Canal Returned | US | ✅ |  |
 | 65 | Camp David Accords | US | ✅ | 'prevents #13' clause modelled |
@@ -103,8 +103,8 @@ Every card can already be played for its ops value; this tracks the event text o
 | 86 | North Sea Oil | US | ✅ | Turn-long: US plays an 8th action round; prevents #61 (modelled) |
 | 87 | The Reformer | USSR | ✅ | Choice; USSR can't coup in Europe afterwards (modelled) |
 | 88 | Marine Barracks Bombing | USSR | ✅ | Choice; Lebanon cleared up front |
-| 89 | Soviets Shoot Down KAL-007 | US |  |  |
-| 90 | Glasnost | USSR |  |  |
+| 89 | Soviets Shoot Down KAL-007 | US | ✅ | DEFCON −1, US +2 VP; then, if South Korea is US-controlled, the US may place influence or realign |
+| 90 | Glasnost | USSR | ✅ | DEFCON +1, USSR +2 VP; then, if #87 has been played, the USSR may place influence or realign |
 | 91 | Ortega Elected in Nicaragua | USSR |  |  |
 | 92 | Terrorism | Both |  |  |
 | 93 | Iran-Contra Scandal | USSR | ✅ | Turn-long: US realignment rolls -1 |
