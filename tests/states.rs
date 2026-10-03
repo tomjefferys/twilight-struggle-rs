@@ -358,3 +358,46 @@ fn an_implemented_non_scoring_card_offers_both_its_event_and_its_ops() {
     assert!(legal.contains(&Action::Event));
     assert!(legal.contains(&Action::Begin(OperationKind::Coup)));
 }
+
+#[test]
+fn central_america_scoring_pays_control_and_battlegrounds() {
+    let (map, cards, lib) = fixtures();
+    let (game, outcome) = play_scoring_state(&map, &cards, &lib, "scoring/central-america-us-control");
+    assert_eq!(vp_delta(&outcome), 8);
+    assert_eq!(game.status().vp, 8);
+    assert_eq!(game.winner(), None);
+}
+
+/// A backstop for every implemented card, present and future: from a blank
+/// board, playing it as an event through a real `Game` (for each side
+/// holding it) must succeed, discard or remove it, and hand the turn over.
+/// Not a substitute for a card's own state and assertions — just
+/// guarantees none is ever implemented without at least running.
+#[test]
+fn every_implemented_event_plays_through_game() {
+    use twilight_struggle::{events, Scenario};
+    let (map, cards, _) = fixtures();
+    let mut played = 0;
+    for card in cards.iter() {
+        let id = cards.id_by_name(&card.name).unwrap();
+        if !events::is_implemented(id) {
+            continue;
+        }
+        for side in [Superpower::Us, Superpower::Ussr] {
+            let mut scenario = Scenario::blank(&map);
+            scenario.status.active = side;
+            let mut game = Game::from_scenario(&scenario);
+            game.hands_mut().push_to_hand(side, id);
+            game.play_card(&cards, id).unwrap_or_else(|e| panic!("{} ({side}): play_card: {e}", card.name));
+            game.play_event(&map, &cards).unwrap_or_else(|e| panic!("{} ({side}): play_event: {e}", card.name));
+            assert!(
+                game.discards().contains(&id) || game.removed_from_game().contains(&id),
+                "{} ({side}) should end up discarded or removed",
+                card.name
+            );
+            assert!(game.winner().is_some() || game.active() != side, "{} ({side}) should hand the turn over", card.name);
+            played += 1;
+        }
+    }
+    assert!(played >= 2 * 26, "expected every implemented card to be exercised, only {played} runs");
+}
