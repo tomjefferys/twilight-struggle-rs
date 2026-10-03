@@ -99,13 +99,13 @@ impl ChipGrid {
         let (row, col) = self.pos(cell);
         let country = map.country(id);
         let tint = Style::color(region_color(country.region));
-        // While an event's choices are open, every chip says whether the
+        // While an event's choices (or a war's targets) are open, every chip says whether the
         // chooser can act on it: an eligible one gets a bold double-line
         // border in its own region's tint (the chooser is named by the
         // footer and status bar already), an ineligible one is muted all
         // over (frame, name, numbers) so the live ones stand out at a glance.
         let event = match op {
-            Some(operation @ Operation::Event(_)) => Some(operation.is_legal_target(map, board, id)),
+            Some(operation @ (Operation::Event(_) | Operation::War(_))) => Some(operation.is_legal_target(map, board, id)),
             _ => None,
         };
         let ineligible = event == Some(false);

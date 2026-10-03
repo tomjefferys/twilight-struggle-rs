@@ -345,7 +345,7 @@ fn draw_chip(
     // An open event: a country its chooser can act on is bold, anything
     // else is muted, so the live ones stand out on the overview.
     let event_eligible = match op {
-        Some(operation @ Operation::Event(_)) => Some(operation.is_legal_target(map, board, id)),
+        Some(operation @ (Operation::Event(_) | Operation::War(_))) => Some(operation.is_legal_target(map, board, id)),
         _ => None,
     };
     match event_eligible {

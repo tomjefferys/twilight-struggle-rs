@@ -37,6 +37,7 @@ const COUP_HINT: &str = "←→↑↓ select · Enter target · ⌫ abandon · c
 /// Shown while an event's choices are open: `+`/`-` act on the selected
 /// country, `1`/`2` pick a mode on a card that has two.
 /// What the small marks on a chip mean while an event's choices are open.
+const WAR_LEGEND: &str = "double border: can be attacked · grey: not a target";
 const EVENT_LEGEND: &str = "double border: can act here · dim: not eligible · ↑N/↓N: can add/remove N · +N/-N: staged";
 const EVENT_HINT: &str = "←→↑↓ select · Enter open · + add · - remove · u undo · 1-9 mode · ⌫ abandon · c done";
 
@@ -256,6 +257,9 @@ fn build_footer_lines(
             ));
             lines.push((coup_odds_line(coup.side(), &odds), Style::color(Color::Muted)));
         }
+    }
+    if let Some(Operation::War(_)) = op {
+        lines.push((WAR_LEGEND.to_string(), Style::color(Color::Muted)));
     }
     if let Some(Operation::Event(_)) = op {
         lines.push((EVENT_LEGEND.to_string(), Style::color(Color::Muted)));
