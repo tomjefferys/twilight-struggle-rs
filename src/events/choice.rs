@@ -37,6 +37,7 @@ use crate::board::Board;
 use crate::cards::CardId;
 use crate::country::{CountryId, Region, SubRegion, Superpower};
 use crate::map::WorldMap;
+use crate::ongoing::OngoingEffect;
 use crate::status::GameStatus;
 
 /// "No limit" for a budget field.
@@ -202,6 +203,8 @@ pub struct Mode {
     pub label: String,
     fixed: Vec<Fixed>,
     rule: Option<Rule>,
+    /// A turn-long effect choosing this mode starts (Chernobyl's region).
+    ongoing: Option<OngoingEffect>,
 }
 
 /// A card's whole choice: who chooses, whether they must finish, and the
@@ -216,7 +219,7 @@ pub struct Spec {
 
 impl Spec {
     fn single(chooser: Superpower, label: impl Into<String>, rule: Rule) -> Self {
-        Spec { chooser, optional: false, modes: vec![Mode { label: label.into(), fixed: Vec::new(), rule: Some(rule) }] }
+        Spec { chooser, optional: false, modes: vec![Mode { ongoing: None, label: label.into(), fixed: Vec::new(), rule: Some(rule) }] }
     }
 
     fn optional(mut self) -> Self {
@@ -367,6 +370,20 @@ impl EventChoice {
             return Err(EventChoiceError::ModeLocked);
         }
         self.select(map, i);
+        Ok(())
+    }
+
+    /// Un-chooses the mode (back to "choose a mode"), if nothing's been
+    /// picked yet — the step back from a chosen region/mode that comes
+    /// before abandoning the whole event.
+    pub fn clear_mode(&mut self, map: &WorldMap) -> Result<(), EventChoiceError> {
+        if !self.history.is_empty() {
+            return Err(EventChoiceError::ModeLocked);
+        }
+        self.board = self.base.clone();
+        self.fixed_ids.clear();
+        self.mode = None;
+        self.refresh(map);
         Ok(())
     }
 
@@ -614,6 +631,15 @@ impl EventChoice {
     /// What the chooser is being asked to do — the chosen mode's label, or
     /// the numbered list of modes while none is chosen yet.
     pub fn prompt(&self) -> String {
+        if self.is_designation() {
+            return match self.mode {
+                Some(i) => format!("the USSR can't add influence in {} with ops · 1-{} to change", self.modes[i].label, self.modes.len()),
+                None => format!(
+                    "designate a region: {}",
+                    self.modes.iter().enumerate().map(|(i, m)| format!("{}) {}", i + 1, m.label)).collect::<Vec<_>>().join("  ")
+                ),
+            };
+        }
         match self.mode {
             Some(i) => self.modes[i].label.clone(),
             None => self.modes.iter().enumerate().map(|(i, m)| format!("{}) {}", i + 1, m.label)).collect::<Vec<_>>().join("  or  "),
@@ -622,6 +648,9 @@ impl EventChoice {
 
     /// What's left to spend, e.g. `2/4 countries · 2/5 points`.
     pub fn progress(&self) -> String {
+        if self.is_designation() {
+            return if self.mode.is_some() { "region chosen".into() } else { "choose a region".into() };
+        }
         let Some(rule) = self.rule() else { return "choose a mode".into() };
         let mut parts = Vec::new();
         if rule.countries != ANY && rule.kind != Kind::Reallocate {
@@ -653,6 +682,9 @@ impl EventChoice {
 
     /// What `+`/`-` would do on `id` right now, for the map's footer.
     pub fn hint(&self, map: &WorldMap, id: CountryId) -> String {
+        if self.is_designation() {
+            return format!("digits 1-{} pick the region · c confirms", self.modes.len());
+        }
         let Some(rule) = self.rule() else { return "choose a mode first".into() };
         let mut parts = Vec::new();
         for (sign, key, verb) in [(Sign::Plus, '+', "add"), (Sign::Minus, '-', "remove")] {
@@ -672,7 +704,23 @@ impl EventChoice {
     /// The finished event as the same [`EffectResult`] a fixed-effect card
     /// produces, so applying and logging it is one shared code path.
     pub fn into_result(&self, status: &GameStatus) -> EffectResult {
-        EffectResult { card: self.card, player: status.active, influence: self.changes.clone(), vp_delta: 0, defcon: None }
+        let ongoing = self.mode.and_then(|i| self.modes[i].ongoing);
+        EffectResult { card: self.card, player: status.active, influence: self.changes.clone(), vp_delta: 0, defcon: None, ongoing }
+    }
+
+    /// The region a region-designating event (Chernobyl) has been set to
+    /// so far, for the views to highlight.
+    pub fn designated_region(&self) -> Option<Region> {
+        match self.mode.and_then(|i| self.modes[i].ongoing)? {
+            OngoingEffect::Chernobyl { region } => Some(region),
+            _ => None,
+        }
+    }
+
+    /// Whether this event only designates something (no countries to
+    /// pick), so the map views have nothing to mark as live.
+    pub fn is_designation(&self) -> bool {
+        self.modes.iter().all(|m| m.rule.is_none())
     }
 }
 
@@ -701,6 +749,7 @@ const CHOICES: &[(u8, SpecFn)] = &[
     (75, liberation_theology),
     (87, the_reformer),
     (88, marine_barracks_bombing),
+    (94, chernobyl),
     (105, special_relationship),
 ];
 
@@ -743,12 +792,12 @@ fn warsaw_pact_formed(_: &WorldMap, _: &Board, _: &GameStatus) -> Spec {
         optional: false,
         modes: vec![
             Mode {
-                label: "remove all US influence from 4 Eastern European countries".into(),
+                ongoing: None, label: "remove all US influence from 4 Eastern European countries".into(),
                 fixed: Vec::new(),
                 rule: Some(Rule::remove(Us, Eligible::new(EASTERN), ANY, ANY, 4).chunk(Chunk::All)),
             },
             Mode {
-                label: "add 5 USSR influence to Eastern Europe (max 2 per country)".into(),
+                ongoing: None, label: "add 5 USSR influence to Eastern Europe (max 2 per country)".into(),
                 fixed: Vec::new(),
                 rule: Some(Rule::add(Ussr, Eligible::new(EASTERN), 5, 2, ANY)),
             },
@@ -843,12 +892,12 @@ fn south_african_unrest(_: &WorldMap, _: &Board, _: &GameStatus) -> Spec {
         optional: false,
         modes: vec![
             Mode {
-                label: "add 2 USSR influence to South Africa".into(),
+                ongoing: None, label: "add 2 USSR influence to South Africa".into(),
                 fixed: vec![Fixed { country: "South Africa", side: Ussr, op: FixedOp::Add(2) }],
                 rule: None,
             },
             Mode {
-                label: "add 1 USSR influence to South Africa and 2 to one adjacent country".into(),
+                ongoing: None, label: "add 1 USSR influence to South Africa and 2 to one adjacent country".into(),
                 fixed: vec![Fixed { country: "South Africa", side: Ussr, op: FixedOp::Add(1) }],
                 rule: Some(Rule::add(Ussr, Eligible::new(Where::AdjacentTo("South Africa")), ANY, 2, 1).chunk(Chunk::Fixed(2))),
             },
@@ -926,10 +975,28 @@ fn marine_barracks_bombing(_: &WorldMap, _: &Board, _: &GameStatus) -> Spec {
         chooser: Ussr,
         optional: false,
         modes: vec![Mode {
-            label: "remove 2 more US influence from the Middle East (Lebanon's is already gone)".into(),
+            ongoing: None, label: "remove 2 more US influence from the Middle East (Lebanon's is already gone)".into(),
             fixed: vec![Fixed { country: "Lebanon", side: Us, op: FixedOp::Clear }],
             rule: Some(Rule::remove(Us, Eligible::new(Where::Region(Region::MiddleEast)), 2, ANY, ANY)),
         }],
+    }
+}
+
+/// #94 Chernobyl: the US designates the region the USSR can't place ops
+/// influence in. One mode per region, in the world map's own order.
+fn chernobyl(_: &WorldMap, _: &Board, _: &GameStatus) -> Spec {
+    Spec {
+        chooser: Us,
+        optional: false,
+        modes: Region::ALL
+            .iter()
+            .map(|&region| Mode {
+                label: region.to_string(),
+                fixed: Vec::new(),
+                rule: None,
+                ongoing: Some(OngoingEffect::Chernobyl { region }),
+            })
+            .collect(),
     }
 }
 

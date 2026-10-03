@@ -6,7 +6,7 @@ use rustyline::history::DefaultHistory;
 use rustyline::Editor;
 
 use twilight_struggle::render::{
-    coup_result_line, game_over_line, log_entry_line, log_text, operation_abandoned_line, operation_balance_line, render_card,
+    coup_result_line, game_over_line, log_entry_line, log_text, ongoing_effect_line, operation_abandoned_line, operation_balance_line, render_card,
     render_country, render_event_result, render_hand, render_log, render_region, render_scoring_result, render_world, render_world_map, roll_result_line,
 };
 use twilight_struggle::{
@@ -943,7 +943,11 @@ fn print_event_prompt(session: &Session) {
     let card = session.game.card_in_play().map(|id| session.cards.card(id).name.as_str()).unwrap_or("?");
     println!("{card} — {} chooses: {}", e.chooser(), e.prompt());
     if e.mode().is_none() {
-        println!("pick a mode with: mode <n>");
+        println!("pick a {} with: mode <n|name>", if e.is_designation() { "region" } else { "mode" });
+        return;
+    }
+    if e.is_designation() {
+        println!("change it with: mode <n|name> — confirm to finish");
         return;
     }
     let steps = e.forward_steps(&session.map);
@@ -1024,10 +1028,17 @@ fn operation_touched_summary(session: &Session, id: twilight_struggle::CountryId
     }
 }
 
-/// `mode <n>`: chooses which way to play an open multi-mode event (1-based).
+/// `mode <n|name>`: chooses which way to play an open multi-mode event
+/// (1-based, or by the start of its label).
 fn run_mode_command(session: &mut Session, words: &[&str]) {
-    let Some(n) = words.get(1).and_then(|s| s.parse::<usize>().ok()).filter(|&n| n >= 1) else {
-        println!("usage: mode <n>   (1-based)");
+    let query = words[1..].join(" ").to_lowercase();
+    // A number, or a mode's own label (`mode europe` for a region pick).
+    let by_label = match session.game.operation() {
+        Some(Operation::Event(e)) if !query.is_empty() => e.modes().iter().position(|m| m.label.to_lowercase().starts_with(&query)),
+        _ => None,
+    };
+    let Some(n) = query.parse::<usize>().ok().filter(|&n| n >= 1).or(by_label.map(|i| i + 1)) else {
+        println!("usage: mode <n|name>   (1-based)");
         return;
     };
     match session.game.choose_mode(&session.map, n - 1) {
@@ -1146,7 +1157,22 @@ fn run_roll_command(session: &mut Session, words: &[&str]) {
     let side = session.game.active();
     match session.game.roll(&session.map, id, &mut session.dice) {
         Ok(RollOutcome::Realign(result)) => println!("{}", roll_result_line(&session.map, side, &result)),
-        Ok(RollOutcome::Coup(result)) => println!("{}", coup_result_line(&session.map, side, &result)),
+        Ok(RollOutcome::Coup(result)) => {
+            println!("{}", coup_result_line(&session.map, side, &result));
+            // Whatever the coup set off (DEFCON, Yuri and Samantha's VP).
+            if let Some(aftermath) = session.game.last_coup_aftermath() {
+                let entry = twilight_struggle::LogEntry {
+                    turn: session.game.status().turn,
+                    action_round: session.game.status().action_round,
+                    side: Some(side),
+                    event: twilight_struggle::Event::CoupAftermath(aftermath),
+                };
+                println!("{}", log_entry_line(&session.map, &session.cards, &entry));
+            }
+            if let Some(victory) = session.game.winner() {
+                println!("{}", game_over_line(victory));
+            }
+        }
         Err(GameError::Realign(e)) => println!("cannot roll in {}: {e}", session.map.country(id).name),
         Err(GameError::Coup(e)) => println!("cannot coup {}: {e}", session.map.country(id).name),
         Err(GameError::WrongKind { open }) => {
@@ -1314,7 +1340,9 @@ fn run_cancel_command(session: &mut Session) {
 /// one's been made) — leaving the card in play. With no operation open but
 /// a card in play, it puts the card back in the hand instead.
 fn run_abandon_command(session: &mut Session) {
-    if session.game.operation().is_some() {
+    if session.game.clear_event_mode(&session.map) {
+        println!("mode cleared — choose again with `mode`, or `abandon` again to back out of the event");
+    } else if session.game.operation().is_some() {
         match session.game.abandon() {
             Ok(op) => println!("{}", operation_abandoned_line(&op)),
             Err(e) => println!("{e}"),
@@ -1338,14 +1366,16 @@ fn run_status_command(session: &Session) {
         Some(id) => format!("{} in play", session.cards.card(id).name),
         None => "no card in play".to_string(),
     };
-    println!(
-        "TURN {}   AR {}/{}   {} to act   {card}   {} ops available",
-        status.turn,
-        status.action_round,
-        status.action_rounds_per_turn,
-        session.game.active(),
-        session.game.ops_available(),
-    );
+    let extra = status.action_round.saturating_sub(status.action_rounds_per_turn);
+    let ar = if extra > 0 {
+        format!("{}/{}+{extra}", status.action_round, status.action_rounds_per_turn)
+    } else {
+        format!("{}/{}", status.action_round, status.action_rounds_per_turn)
+    };
+    println!("TURN {}   AR {ar}   {} to act   {card}   {} ops available", status.turn, session.game.active(), session.game.ops_available());
+    for effect in status.effects.active() {
+        println!("in effect this turn: {}", ongoing_effect_line(&effect));
+    }
     print_operation_banner(session);
     if let Some(victory) = session.game.winner() {
         println!("{}", game_over_line(victory));

@@ -287,6 +287,18 @@ pub fn run(
                         Ok(EventOutcome::Pending { .. }) => {
                             zoomed = false;
                             message = None;
+                            // A region designation (Chernobyl) is made on the
+                            // world map: go straight there, keeping the region
+                            // we were looking at highlighted (and remembered).
+                            if designating(game) {
+                                match &screen {
+                                    Screen::Region { region, selected } | Screen::Country { region, selected } => {
+                                        last_selected.insert(*region, *selected);
+                                        screen = Screen::World { selected: *region };
+                                    }
+                                    Screen::World { .. } => {}
+                                }
+                            }
                         }
                         Err(e) => message = Some(e.to_string()),
                     },
@@ -336,7 +348,9 @@ pub fn run(
                         // closes first (leaving the card in play), and
                         // only once none is open does the card itself go
                         // back to the hand.
-                        message = Some(if game.operation().is_some() {
+                        message = Some(if game.clear_event_mode(map) {
+                            "mode cleared — choose again, or ⌫ to abandon the event".to_string()
+                        } else if game.operation().is_some() {
                             match game.abandon() {
                                 Ok(op) => operation_abandoned_line(&op),
                                 Err(e) => e.to_string(),
@@ -358,6 +372,15 @@ pub fn run(
                             KeyCode::Right => *selected = selected.step(Direction::Right).unwrap_or(*selected),
                             KeyCode::Up => *selected = selected.step(Direction::Up).unwrap_or(*selected),
                             KeyCode::Down => *selected = selected.step(Direction::Down).unwrap_or(*selected),
+                            // Chernobyl-style designation: Enter picks the
+                            // highlighted region instead of opening it.
+                            KeyCode::Enter if designating(game) => {
+                                let region = *selected;
+                                let mode = Region::ALL.iter().position(|&r| r == region).expect("every region is in ALL");
+                                if let Err(e) = game.choose_mode(map, mode) {
+                                    message = Some(e.to_string());
+                                }
+                            }
                             KeyCode::Enter => {
                                 let region = *selected;
                                 let country = last_selected
@@ -415,7 +438,10 @@ pub fn run(
                                 let side = game.active();
                                 let before = (game.board().influence(*selected, Superpower::Us), game.board().influence(*selected, Superpower::Ussr));
                                 match game.roll(map, *selected, dice) {
-                                    Ok(outcome) => modal.push_back(Modal::Roll(RollReport { side, outcome, before })),
+                                    Ok(outcome) => {
+                                        let aftermath = if matches!(outcome, RollOutcome::Coup(_)) { game.last_coup_aftermath() } else { None };
+                                        modal.push_back(Modal::Roll(RollReport { side, outcome, before, aftermath }))
+                                    }
                                     Err(GameError::Realign(e)) => message = Some(format!("{}: {e}", map.country(*selected).name)),
                                     Err(GameError::Coup(e)) => message = Some(format!("{}: {e}", map.country(*selected).name)),
                                     Err(_) => {}
@@ -491,6 +517,13 @@ fn maybe_run_ai_turn(
     }
 }
 
+/// Whether an open event only designates a region (Chernobyl), so the
+/// world map's Enter should pick the highlighted region rather than zoom
+/// into it.
+fn designating(game: &Game) -> bool {
+    matches!(game.operation(), Some(Operation::Event(e)) if e.is_designation())
+}
+
 /// Rebuilds a [`RollReport`] for every [`Event::Realign`]/[`Event::Coup`]
 /// entry in `entries` (one AI turn's worth of newly-pushed log lines),
 /// each needing the target country's influence the instant *before* that
@@ -507,8 +540,15 @@ fn maybe_run_ai_turn(
 fn reconstruct_roll_reports(board: &Board, entries: &[LogEntry]) -> Vec<RollReport> {
     let mut state: HashMap<CountryId, (u8, u8)> = HashMap::new();
     let mut reports = VecDeque::new();
+    // Walking in reverse, a coup's aftermath entry comes just before the
+    // coup entry it belongs to.
+    let mut aftermath = None;
     for entry in entries.iter().rev() {
         let (side, target, outcome) = match &entry.event {
+            Event::CoupAftermath(a) => {
+                aftermath = Some(*a);
+                continue;
+            }
             Event::Realign(result) => (entry.side.expect("a realignment roll always belongs to a side"), result.target, RollOutcome::Realign(*result)),
             Event::Coup(result) => (entry.side.expect("a coup attempt always belongs to a side"), result.target, RollOutcome::Coup(*result)),
             _ => continue,
@@ -540,7 +580,8 @@ fn reconstruct_roll_reports(board: &Board, entries: &[LogEntry]) -> Vec<RollRepo
             }
         };
         state.insert(target, before);
-        reports.push_front(RollReport { side, outcome, before });
+        let aftermath = if matches!(outcome, RollOutcome::Coup(_)) { aftermath.take() } else { None };
+        reports.push_front(RollReport { side, outcome, before, aftermath });
     }
     reports.into_iter().collect()
 }

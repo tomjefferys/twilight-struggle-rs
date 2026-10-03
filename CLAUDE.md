@@ -6,11 +6,15 @@ ops-spending actions (influence placement, realignment, coups), enforced
 alternating turns, playing a card from each side's hand for its ops
 value, and — the first slices of card *events* — the seven scoring cards
 nineteen fixed-effect cards (influence/VP/DEFCON only, no choices or
-rolls), and nineteen *choice* cards (the card's own side picks the
-countries to add/remove influence in, whoever is phasing), which can end the game outright (VP reaching ±20, DEFCON
+rolls), twenty *choice* cards (the card's own side picks the
+countries to add/remove influence in, whoever is phasing), and ten
+*turn-long* effects ("for the remainder of this turn" — Containment,
+Chernobyl, …, held in `GameStatus::effects` until the turn rolls over),
+which can end the game outright (VP reaching ±20, DEFCON
 reaching 1, or Europe Scoring's Control tier). `CARDS.md` tracks which of
 the 110 cards have their event implemented (`tests/cards_progress.rs`
-keeps it honest). Every other card's text, DEFCON *degradation rules*, Military Operations, and
+keeps it honest). Every other card's text, DEFCON degradation *other than a battleground
+coup's* (rule 6.3.4), Military Operations, and
 redealing are still out of scope, as is the headline phase and an
 opponent's card's ops-and-event dual use. A first AI opponent plays
 uniformly random legal moves.
@@ -161,6 +165,34 @@ uniformly random legal moves.
   second thing (an in-progress game's own save, log included) doesn't
   exist yet, and is deliberately a different type when it does, rather
   than this one growing an optional log.
+- **`ongoing`** (`src/ongoing.rs`) — card events that last "for the
+  remainder of this turn" (#9 Vietnam Revolts, #25 Containment, #31 Red
+  Scare/Purge, #41 Nuclear Subs, #51 Brezhnev Doctrine, #69 Latin American
+  Death Squads, #86 North Sea Oil, #93 Iran-Contra, #94 Chernobyl, #109
+  Yuri and Samantha). `OngoingEffect` is one card's effect as played (what
+  an `EffectResult::ongoing` carries); `TurnEffects` is what's in force —
+  plain `Copy` data (one bool/`Option` per card) that is a field of
+  `GameStatus` (`#[serde(default, skip_serializing_if = is_empty)]`, so a
+  scenario/state file only mentions it when something's active) and is
+  reset by `Game::advance` when the turn rolls over. It holds no rules
+  beyond small pure queries the ops code asks: `card_ops` (Containment /
+  Brezhnev +1, Red Scare −1: the modifiers are *summed*, then clamped to
+  1–4, so Containment and Red Scare on the US cancel; also returns each
+  card's contribution so a view can itemise it), `coup_roll_mod`,
+  `realign_roll_mod`, `placement_banned`, `sub_region_bonus` (Vietnam),
+  `spares_defcon`, `coup_vp`, `extra_rounds`. `Game::begin` reads them
+  once and hands each operation what it needs, so views reading an
+  `Operation` never need the status: `InfluencePlacement::with_banned_region`
+  (Chernobyl; `PlacementError::Banned`, and `is_legal_target` is false so
+  the existing dimming works) and `with_bonus`, `Realignment::with_effects`
+  (`Modifiers::iran_contra`, shown in `reasons`), `Coup::with_effects`
+  (`CoupResult::modifier`; `coup_resolve_with`/`coup_odds_with`). The
+  Vietnam Revolts bonus op is **dynamic**: `ops_total()` is the card's
+  value until something's been spent, then +1 only while *every* point/roll
+  has been inside Southeast Asia (a coup: if the target is) — so
+  `remaining()` and the AI must ask `InfluencePlacement::can_place` /
+  `Realignment::can_afford`, never compare `cost` to `remaining` themselves.
+  `Operation::pending_bonus` is what headers hint at.
 - **`ops`** (`src/ops/`) — the game's ops-spending operations, plus (as
   `Operation::Event`) a choice card's event in progress. Four kinds
   so far, sharing the `Operation` enum (`src/ops/mod.rs`) as the seam the
@@ -203,8 +235,14 @@ uniformly random legal moves.
     opposing influence and, if there isn't enough opposing influence to
     absorb the whole margin, adding the rest as friendly influence (rule
     6.3.3). No presence is required (rule 6.3.1) and, like realignment's
-    6.1.3 carve-out, DEFCON degradation and Military Operations (rule
-    6.3.4) are out of scope for now. `coup_resolve`/`coup_odds` are free
+    6.1.3 carve-out, Military Operations (rule 6.3.4) are out of scope.
+    The *DEFCON degradation* half of 6.3.4 is not done here but in
+    `Game::roll` (`Game::coup_aftermath`, see `Game` below), since it
+    touches the status, not the board. A coup's die can also carry an
+    ongoing event's modifier (`CoupResult::modifier`, Death Squads) and
+    its ops a Southeast Asia bonus (`Coup::ops_for`).
+    `coup_resolve`/`coup_odds` (and their `_with` variants taking the
+    modifier) are free
     functions mirroring realignment's `resolve`/`odds`, just over one die
     (sixths) instead of two (36ths). `Coup::attempt` shares `Realignment`'s
     `&mut Dice` and its `roll <country>` REPL command / `r` interactive
@@ -259,11 +297,21 @@ uniformly random legal moves.
     step is still legal, except "may" cards (which only need a
     reallocation balanced). A single-mode card with nothing it can do
     (`resolves_immediately`) never opens a session. A multi-mode card's
-    mode is chosen with `1`/`2` (`mode <n>`), changeable until the first
+    mode is chosen with the digits (`mode <n>`, or `mode europe` by label), changeable until the first
     pick. `into_result` produces the same `EffectResult` a fixed-effect
     card does, so `Game::finish_effect` applies and logs both. Clauses
     about other cards (prevents/allows #N, NATO) aren't modelled;
     Special Relationship (#105) only has its "NATO not in effect" branch.
+    **Chernobyl (#94)** is the one *designation* (`EventChoice::is_designation`):
+    no countries are picked — each of its six modes is a `Region`
+    (`Mode::ongoing` carries the `OngoingEffect::Chernobyl { region }` that
+    `into_result` hands to `finish_effect`), so it uses the same `1`-`6` /
+    `mode <name>` picker as any multi-mode card and is complete as soon as a
+    mode is chosen (changeable until `confirm`). While it's open,
+    `Operation::is_legal_target` makes every country live until a region is
+    chosen and then only that region's, so the existing double-border /
+    muting shows the designation; the world map's flag slot stays plain
+    (no `+`/`-`) and its legend says "digit: designate that region".
   - `events::effects` (the second stage) resolves nineteen cards whose text only moves
     influence, VP, or DEFCON by fixed amounts (see `CARDS.md`) into an
     `EffectResult` — `influence: Vec<InfluenceChange>` (country, side,
@@ -283,7 +331,7 @@ uniformly random legal moves.
     whoever is playing the action round, not the card's side
     (`VictoryReason::Defcon`); DEFCON is applied before VP, so that
     loss outranks any VP the same card awards. A new card of this kind
-    adds one function (`fn(&mut Ctx)`, reading as the card's rules text through `Ctx`'s `add`/`remove`/`set`/`take_control`/`award_vp`/`set_defcon` helpers) and one line in `effects`'s `EFFECTS` table — `is_effect_card` and `resolve` both read it, so there's no second list — a state in
+    adds one function (`fn(&mut Ctx)`, reading as the card's rules text through `Ctx`'s `add`/`remove`/`set`/`take_control`/`award_vp`/`set_defcon` helpers, plus `start` for a turn-long effect — `EffectResult::ongoing`, see `ongoing` above) and one line in `effects`'s `EFFECTS` table — `is_effect_card` and `resolve` both read it, so there's no second list — a state in
     `data/states/events.json` with a test in `tests/states.rs`, and a ✅
     in `CARDS.md`.
   - `events::scoring` (rule 10.1) resolves any of the seven scoring cards
@@ -345,7 +393,8 @@ uniformly random legal moves.
   or — for the China Card — passing it face down to the opponent instead,
   via the private `discard_played_card`) and hand the turn to the other
   side via the private `advance` (USSR → USA; USA → USSR plus
-  `action_round += 1`, rolling `turn` over — and flipping the China Card
+  `action_round += 1`, rolling `turn` over — clearing `GameStatus::effects`
+  (every "remainder of the turn" event ends there), and flipping the China Card
   face up again, wherever it's landed — once `action_round` exceeds
   `action_rounds_per_turn`). **Events are the exception to "one operation
   spends the card"**: a choice card's `play_event` opens `Operation::Event`
@@ -427,6 +476,24 @@ uniformly random legal moves.
   either path sets it (a `Victory { side, reason }`, `reason` one of
   `VictoryReason::Vp`/`EuropeControl`) — never clears, and from then on
   `play_card`/`begin`/`pass` all refuse with `GameError::GameOver`.
+  **Turn-long effects** (see `ongoing` above) touch `Game` in four places.
+  `finish_effect` records an `EffectResult::ongoing` into
+  `status.effects` (Chernobyl arrives via `confirm` of its choice session
+  like any choice card). `begin` reads `TurnEffects::card_ops` for the
+  card's real ops and builds the operation with the matching hooks.
+  `roll` calls the private `coup_aftermath` after a coup attempt: a coup
+  in a **battleground** lowers DEFCON by 1 (rule 6.3.4 — reaching 1 loses
+  the game for the *phasing* side via `apply_defcon`) unless Nuclear Subs
+  spares a US one, and Yuri and Samantha pays the USSR 1 VP per US coup;
+  DEFCON is applied before VP, and the result is one
+  `Event::CoupAftermath(CoupAftermath)` right after the coup's own log
+  entry (not logged when nothing happened), readable as
+  `Game::last_coup_aftermath`. `advance` implements North Sea Oil: when
+  the US finishes the last action round with it in force, the round
+  counter goes one past `action_rounds_per_turn` with the US still
+  active (the USSR sits it out) and `GameStatus::validate` accepts exactly
+  that status; the turn rolls over after that extra round. "Prevents
+  #61 OPEC" is not modelled.
 - **`action`** (`src/action.rs`) — the surface an AI opponent drives
   instead of calling `Game`'s own methods directly: `Action`, one legal
   forward move (`PlayCard`/`Begin`/`Event`/`Place`/`Roll`/`Confirm`/`Pass`),
@@ -644,7 +711,10 @@ uniformly random legal moves.
     the DEFCON move, the VP swing and new total, and a game-over line if
     it ended the game (`winner` is passed in, since the result alone
     can't say). Same `(n, total)` queue position as the other modals.
-  - `statusbar.rs` — the two-row turn/operation bar `interactive.rs` draws
+  - `statusbar.rs` — the turn/operation bar (turn row, card/operation row,
+    then a row listing the turn-long effects in force — each in its
+    beneficiary's colour via `ongoing_effect_line`, or a muted "no turn
+    effects" so the height never moves — and the rule below) `interactive.rs` draws
     above every map screen: turn/AR/active side (its own colour)/DEFCON/
     VP, then one of four states for the card/operation row — a set
     `Game::winner`, which replaces the row entirely with
@@ -661,7 +731,7 @@ uniformly random legal moves.
     compact line rather than the dashboard's (already clipped at width
     104) — the two share only `vp_line`'s
     wording, extracted so they can't drift. Always exactly
-    `STATUS_BAR_ROWS` (3) regardless of whether an operation is open, so
+    `STATUS_BAR_ROWS` (4) regardless of whether an operation is open, so
     the view drawn below it never shifts; takes `width` as a minimum and
     grows to fit its own content instead of clipping.
   - `hand.rs` — `render_hand`, a side's hand as a strip of mini-card boxes
@@ -943,7 +1013,7 @@ uniformly random legal moves.
   country screen carries the same selection back to `Region` on `Esc`.
   `run` takes `&mut Game` (not a bare `Board`/`Option<Operation>`), so
   every key handler goes through it and turns stay enforced here too, and
-  a two-row status bar (`render::render_status_bar`) is drawn above
+  a status bar (`render::render_status_bar`) is drawn above
   whichever screen is showing — turn/AR/active side (in its own colour)/
   DEFCON/VP, then one of its four states for the card/operation row (see
   `statusbar.rs` above) — since a keypress alone carries no "USSR" the way
@@ -1110,7 +1180,7 @@ deliberate exception, for debug-mode test states specifically.
 - `backup/` — earlier full snapshots of the world map, kept in case a
   future change needs to compare against or revert to an earlier version.
 - `states/` — named test states (`src/states.rs`'s own `StateLibrary`),
-  one JSON file per topic (`scoring.json` is the first, then `events.json` for the fixed-effect cards and `choices.json` for the choice cards), each holding a
+  one JSON file per topic (`scoring.json` is the first, then `events.json` for the fixed-effect cards, `choices.json` for the choice cards and `turn-effects.json` for the turn-long ones — each card's own event, plus `*-active` states with an effect already in force), each holding a
   `{"states": [...]}` array of several named `Scenario` snapshots. Read
   from disk at runtime, not `include_str!`-embedded — see `states.rs`'s
   own doc above for why.

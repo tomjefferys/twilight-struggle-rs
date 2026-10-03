@@ -95,7 +95,7 @@ impl Game {
         match self.operation() {
             Some(Operation::Influence(p)) => {
                 for (id, _) in map.iter() {
-                    if p.is_legal_target(map, id) && p.cost(map, id) <= p.remaining() {
+                    if p.can_place(map, id) {
                         actions.push(Action::Place(id));
                     }
                 }
@@ -122,11 +122,9 @@ impl Game {
                 }
             }
             Some(Operation::Realign(r)) => {
-                if r.remaining() > 0 {
-                    for (id, _) in map.iter() {
-                        if r.is_legal_target(map, self.board(), id) {
-                            actions.push(Action::Roll(id));
-                        }
+                for (id, _) in map.iter() {
+                    if r.can_afford(map, id) && r.is_legal_target(map, self.board(), id) {
+                        actions.push(Action::Roll(id));
                     }
                 }
                 actions.push(Action::Confirm);

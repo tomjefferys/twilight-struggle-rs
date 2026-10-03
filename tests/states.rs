@@ -956,3 +956,335 @@ mod choices {
         assert!(game.operation().is_none());
     }
 }
+
+// ---------------------------------------------------------------------
+// Turn-long effects (`ongoing`, `data/states/turn-effects.json`): cards
+// whose event holds "for the remainder of the turn". The `<card>` states
+// start from the card in hand; the `*-active` ones start with the effect
+// already in force, as it would be in a later action round.
+
+mod turn_effects {
+    use super::*;
+    use twilight_struggle::game::GameError;
+    use twilight_struggle::ops::Operation;
+    use twilight_struggle::{CountryId, Dice, Event, OperationKind, PlacementError, Region, RollOutcome};
+
+    fn load(name: &str) -> (WorldMap, CardCatalog, Game) {
+        let (map, cards, lib) = fixtures();
+        let (scenario, _) = lib.load(&map, &cards, &format!("turn-effects/{name}")).unwrap_or_else(|e| panic!("{name}: {e}"));
+        (map, cards, Game::from_scenario(&scenario))
+    }
+
+    fn id(map: &WorldMap, name: &str) -> CountryId {
+        map.id_by_name(name).unwrap_or_else(|| panic!("no country {name}"))
+    }
+
+    fn play(game: &mut Game, cards: &CardCatalog, name: &str) {
+        game.play_card(cards, cards.id_by_name(name).unwrap_or_else(|| panic!("no card {name}"))).unwrap_or_else(|e| panic!("play {name}: {e}"));
+    }
+
+    fn in_force(game: &Game) -> Vec<u8> {
+        game.status().effects.active().iter().map(|e| e.card().number()).collect()
+    }
+
+    #[test]
+    fn every_turn_long_card_starts_its_effect_and_hands_over_the_turn() {
+        for (state, card, number) in [
+            ("containment", "Containment", 25),
+            ("red-scare", "Red Scare/Purge", 31),
+            ("nuclear-subs", "Nuclear Subs", 41),
+            ("brezhnev-doctrine", "Brezhnev Doctrine", 51),
+            ("latin-american-death-squads", "Latin American Death Squads", 69),
+            ("north-sea-oil", "North Sea Oil", 86),
+            ("iran-contra-scandal", "Iran-Contra Scandal", 93),
+            ("yuri-and-samantha", "Yuri and Samantha", 109),
+            ("vietnam-revolts", "Vietnam Revolts", 9),
+        ] {
+            let (map, cards, mut game) = load(state);
+            let side = game.active();
+            assert!(in_force(&game).is_empty(), "{state}: starts with nothing in force");
+            play(&mut game, &cards, card);
+            game.play_event(&map, &cards).unwrap_or_else(|e| panic!("{state}: {e}"));
+            assert_eq!(in_force(&game), vec![number], "{state}");
+            assert!(game.operation().is_none(), "{state}: resolves at once");
+            if state != "north-sea-oil" {
+                assert_ne!(game.active(), side, "{state}: the turn passes");
+            }
+        }
+    }
+
+    #[test]
+    fn red_scare_and_death_squads_favour_the_side_that_played_them() {
+        let (map, cards, mut game) = load("red-scare");
+        play(&mut game, &cards, "Red Scare/Purge");
+        game.play_event(&map, &cards).unwrap();
+        assert_eq!(game.status().effects.red_scare, Some(Superpower::Us), "the USSR played it: the US is penalised");
+
+        let (map, cards, mut game) = load("latin-american-death-squads");
+        play(&mut game, &cards, "Latin American Death Squads");
+        game.play_event(&map, &cards).unwrap();
+        assert_eq!(game.status().effects.death_squads, Some(Superpower::Ussr));
+    }
+
+    #[test]
+    fn vietnam_revolts_adds_two_ussr_influence_to_vietnam() {
+        let (map, cards, mut game) = load("vietnam-revolts");
+        play(&mut game, &cards, "Vietnam Revolts");
+        game.play_event(&map, &cards).unwrap();
+        assert_eq!(game.board().influence(id(&map, "Vietnam"), Superpower::Ussr), 2);
+    }
+
+    #[test]
+    fn chernobyl_is_designated_by_mode_and_bars_the_ussr_for_the_rest_of_the_turn() {
+        let (map, cards, mut game) = load("chernobyl");
+        play(&mut game, &cards, "Chernobyl");
+        let outcome = game.play_event(&map, &cards).unwrap();
+        assert!(matches!(outcome, EventOutcome::Pending { chooser: Superpower::Us, .. }));
+        assert!(game.confirm().is_err(), "no region picked yet");
+        let europe = Region::ALL.iter().position(|&r| r == Region::Europe).unwrap();
+        game.choose_mode(&map, europe).unwrap();
+        // Changing her mind is fine until confirmed.
+        game.choose_mode(&map, (europe + 1) % 6).unwrap();
+        game.choose_mode(&map, europe).unwrap();
+        game.confirm().unwrap();
+        assert_eq!(game.status().effects.chernobyl, Some(Region::Europe));
+        assert_eq!(game.active(), Superpower::Ussr);
+    }
+
+    #[test]
+    fn backspace_first_clears_a_chosen_region_then_abandons_the_event() {
+        let (map, cards, mut game) = load("chernobyl");
+        play(&mut game, &cards, "Chernobyl");
+        game.play_event(&map, &cards).unwrap();
+        assert!(!game.clear_event_mode(&map), "nothing chosen yet: fall through to abandon");
+        game.choose_mode(&map, 2).unwrap();
+        assert!(game.clear_event_mode(&map));
+        let Some(Operation::Event(e)) = game.operation() else { panic!("the event stays open") };
+        assert_eq!((e.mode(), e.designated_region()), (None, None));
+        assert!(game.confirm().is_err());
+        game.abandon().expect("a second step backs out of the event");
+        assert!(game.operation().is_none() && game.card_in_play().is_some(), "card still in play");
+    }
+
+    #[test]
+    fn chernobyl_refuses_ussr_placement_in_the_region_but_not_elsewhere() {
+        let (map, cards, mut game) = load("chernobyl-europe-active");
+        play(&mut game, &cards, "Fidel");
+        game.begin(OperationKind::Influence).unwrap();
+        let op = game.operation().unwrap();
+        assert!(!op.is_legal_target(&map, game.board(), id(&map, "Poland")), "dimmed on the map");
+        assert!(op.is_legal_target(&map, game.board(), id(&map, "Egypt")));
+        assert!(matches!(game.place(&map, id(&map, "Poland")), Err(GameError::Placement(PlacementError::Banned { .. }))));
+        game.place(&map, id(&map, "Egypt")).unwrap();
+    }
+
+    #[test]
+    fn chernobyl_does_not_stop_a_coup_or_the_us() {
+        let (map, cards, mut game) = load("chernobyl-europe-active");
+        game.board_mut().set_influence(id(&map, "Poland"), Superpower::Us, 1);
+        play(&mut game, &cards, "Fidel");
+        game.begin(OperationKind::Coup).unwrap();
+        game.roll(&map, id(&map, "Poland"), &mut Dice::from_seed(1)).expect("coups aren't influence placement");
+    }
+
+    #[test]
+    fn containment_adds_one_op_capped_at_four() {
+        let (map, cards, mut game) = load("containment-active");
+        let _ = &map;
+        play(&mut game, &cards, "Truman Doctrine");
+        assert_eq!(game.ops_available(), 2, "1 op +1");
+        game.begin(OperationKind::Influence).unwrap();
+        assert_eq!(game.operation().unwrap().ops_total(), 2);
+
+        let (_, cards, mut game) = load("containment-active");
+        play(&mut game, &cards, "Marshall Plan");
+        assert_eq!(game.ops_available(), 4, "already 4: capped");
+    }
+
+    #[test]
+    fn red_scare_takes_one_op_with_a_floor_of_one() {
+        let (_, cards, mut game) = load("red-scare-active");
+        play(&mut game, &cards, "Truman Doctrine");
+        assert_eq!(game.ops_available(), 1);
+        let (_, cards, mut game) = load("red-scare-active");
+        play(&mut game, &cards, "Marshall Plan");
+        assert_eq!(game.ops_available(), 3);
+    }
+
+    #[test]
+    fn containment_and_red_scare_cancel() {
+        let (_, cards, mut game) = load("containment-and-red-scare-active");
+        play(&mut game, &cards, "Marshall Plan");
+        assert_eq!(game.ops_available(), 4);
+    }
+
+    #[test]
+    fn vietnam_revolts_gives_a_bonus_op_only_for_a_card_spent_wholly_in_southeast_asia() {
+        let (map, cards, mut game) = load("vietnam-revolts-active");
+        play(&mut game, &cards, "Fidel");
+        game.begin(OperationKind::Influence).unwrap();
+        assert!(game.operation().unwrap().pending_bonus().is_some());
+        for _ in 0..3 {
+            game.place(&map, id(&map, "Vietnam")).expect("2 ops + the bonus = 3 points");
+        }
+        assert!(game.place(&map, id(&map, "Vietnam")).is_err(), "a fourth would exceed it");
+        assert_eq!(game.operation().unwrap().ops_total(), 3);
+
+        // Placing outside Southeast Asia forfeits the bonus.
+        let (map, cards, mut game) = load("vietnam-revolts-active");
+        play(&mut game, &cards, "Fidel");
+        game.begin(OperationKind::Influence).unwrap();
+        game.place(&map, id(&map, "Vietnam")).unwrap();
+        game.place(&map, id(&map, "Poland")).unwrap();
+        assert_eq!(game.operation().unwrap().ops_total(), 2);
+        assert!(game.place(&map, id(&map, "Vietnam")).is_err());
+        // ...and undoing the outsider gives it back.
+        game.unplace(&map, id(&map, "Poland")).unwrap();
+        game.place(&map, id(&map, "Thailand")).unwrap();
+        assert_eq!(game.operation().unwrap().ops_total(), 3);
+    }
+
+    #[test]
+    fn vietnam_revolts_bonus_applies_to_a_coup_in_southeast_asia() {
+        let (map, cards, mut game) = load("vietnam-revolts-active");
+        game.board_mut().set_influence(id(&map, "Thailand"), Superpower::Us, 2);
+        game.board_mut().set_influence(id(&map, "Italy"), Superpower::Us, 2);
+        play(&mut game, &cards, "Fidel");
+        game.begin(OperationKind::Coup).unwrap();
+        let Some(Operation::Coup(c)) = game.operation() else { panic!() };
+        assert_eq!(c.ops_for(&map, id(&map, "Thailand")), 3);
+        assert_eq!(c.ops_for(&map, id(&map, "Italy")), 2);
+        let RollOutcome::Coup(result) = game.roll(&map, id(&map, "Thailand"), &mut Dice::from_seed(3)).unwrap() else { panic!() };
+        assert_eq!(result.ops, 3);
+        assert_eq!(game.operation().unwrap().ops_total(), 3);
+    }
+
+    fn coup_modifier(state: &str, card: &str, target: &str) -> i8 {
+        let (map, cards, mut game) = load(state);
+        play(&mut game, &cards, card);
+        game.begin(OperationKind::Coup).unwrap();
+        let RollOutcome::Coup(result) = game.roll(&map, id(&map, target), &mut Dice::from_seed(5)).unwrap() else { panic!() };
+        result.modifier
+    }
+
+    #[test]
+    fn death_squads_help_the_beneficiary_hurt_the_other_and_only_in_the_americas() {
+        assert_eq!(coup_modifier("death-squads-active", "Fidel", "Colombia"), 1);
+        assert_eq!(coup_modifier("death-squads-active", "Fidel", "Italy"), 0);
+        assert_eq!(coup_modifier("death-squads-against-active", "Marshall Plan", "Colombia"), -1);
+    }
+
+    #[test]
+    fn iran_contra_penalises_us_realignment_rolls_only() {
+        let (map, cards, mut game) = load("iran-contra-active");
+        play(&mut game, &cards, "Marshall Plan");
+        game.begin(OperationKind::Realign).unwrap();
+        let Some(Operation::Realign(r)) = game.operation() else { panic!() };
+        let (acting, opposing, _) = r.preview(&map, game.board(), id(&map, "Italy"));
+        assert!(acting.iran_contra && !opposing.iran_contra);
+        assert!(acting.reasons().iter().any(|s| s.contains("Iran-Contra")));
+        let RollOutcome::Realign(result) = game.roll(&map, id(&map, "Italy"), &mut Dice::from_seed(2)).unwrap() else { panic!() };
+        assert!(result.acting_mods.iran_contra);
+    }
+
+    fn aftermath_of_us_coup(state: &str) -> (Game, Option<twilight_struggle::CoupAftermath>) {
+        let (map, cards, mut game) = load(state);
+        let card = if game.active() == Superpower::Us { "Truman Doctrine" } else { "Fidel" };
+        play(&mut game, &cards, card);
+        game.begin(OperationKind::Coup).unwrap();
+        let target = match state {
+            "yuri-active" => "Czechoslovakia",
+            "battleground-coup-defcon-2" => "West Germany",
+            _ => "Poland",
+        };
+        game.roll(&map, id(&map, target), &mut Dice::from_seed(4)).unwrap();
+        let aftermath = game.log().entries().iter().find_map(|e| match e.event {
+            Event::CoupAftermath(a) => Some(a),
+            _ => None,
+        });
+        (game, aftermath)
+    }
+
+    #[test]
+    fn a_battleground_coup_degrades_defcon_but_nuclear_subs_spares_a_us_one() {
+        let (game, aftermath) = aftermath_of_us_coup("us-battleground-coup");
+        assert_eq!(game.status().defcon, 3);
+        assert_eq!(aftermath.unwrap().defcon, Some((4, 3)));
+
+        let (game, aftermath) = aftermath_of_us_coup("nuclear-subs-active");
+        assert_eq!(game.status().defcon, 4);
+        assert!(aftermath.unwrap().defcon_spared);
+    }
+
+    #[test]
+    fn a_coup_taking_defcon_to_1_loses_for_the_phasing_player() {
+        let (game, _) = aftermath_of_us_coup("battleground-coup-defcon-2");
+        assert_eq!(game.status().defcon, 1);
+        assert_eq!(game.winner(), Some(Victory { side: Superpower::Us, reason: VictoryReason::Defcon }));
+    }
+
+    #[test]
+    fn a_non_battleground_coup_leaves_defcon_alone() {
+        let (game, aftermath) = aftermath_of_us_coup("yuri-active");
+        assert_eq!(game.status().defcon, 5);
+        assert!(aftermath.is_some_and(|a| a.defcon.is_none() && !a.defcon_spared));
+    }
+
+    #[test]
+    fn yuri_and_samantha_pays_the_ussr_one_vp_per_us_coup() {
+        let (game, aftermath) = aftermath_of_us_coup("yuri-active");
+        assert_eq!(game.status().vp, -1);
+        assert_eq!(aftermath.unwrap().vp, Some((-1, -1)));
+    }
+
+    #[test]
+    fn north_sea_oil_gives_the_us_an_extra_round_then_everything_expires_with_the_turn() {
+        let (map, cards, mut game) = load("north-sea-oil-final-round");
+        let _ = &map;
+        assert_eq!((game.status().turn, game.status().action_round), (3, 6));
+        play(&mut game, &cards, "Truman Doctrine");
+        game.begin(OperationKind::Influence).unwrap();
+        game.confirm().unwrap();
+        // The US goes again, alone, in an extra 7th round of a 6-round turn.
+        assert_eq!((game.status().turn, game.status().action_round, game.active()), (3, 7, Superpower::Us));
+        assert_eq!(in_force(&game), vec![86]);
+        game.status().validate().expect("the extra round is a valid status");
+        play(&mut game, &cards, "Marshall Plan");
+        game.begin(OperationKind::Influence).unwrap();
+        game.confirm().unwrap();
+        assert_eq!((game.status().turn, game.status().action_round, game.active()), (4, 1, Superpower::Ussr));
+        assert!(in_force(&game).is_empty(), "the turn's effects end with it");
+    }
+
+    #[test]
+    fn effects_survive_between_rounds_of_a_turn_and_clear_at_its_end() {
+        let (_, cards, mut game) = load("containment-active");
+        play(&mut game, &cards, "Truman Doctrine");
+        game.begin(OperationKind::Influence).unwrap();
+        game.confirm().unwrap();
+        assert_eq!(in_force(&game), vec![25], "still in force after the next side acts");
+        game.status_mut().action_round = game.status().action_rounds_per_turn;
+        game.status_mut().active = Superpower::Us;
+        play(&mut game, &cards, "Marshall Plan");
+        game.begin(OperationKind::Influence).unwrap();
+        game.confirm().unwrap();
+        assert!(in_force(&game).is_empty());
+    }
+
+    #[test]
+    fn a_random_walk_through_every_active_state_always_finishes() {
+        let (map, cards, lib) = fixtures();
+        for entry in lib.list().unwrap().iter().filter(|e| e.file == "turn-effects") {
+            let (scenario, _) = lib.load(&map, &cards, &entry.reference()).unwrap();
+            let mut game = Game::from_scenario(&scenario);
+            let mut ai = twilight_struggle::RandomAi::from_seed(11);
+            let mut dice = Dice::from_seed(11);
+            for _ in 0..40 {
+                if game.winner().is_some() || game.hand(game.decider()).is_empty() && game.card_in_play().is_none() {
+                    break;
+                }
+                twilight_struggle::play_turn(&mut ai, &mut game, &map, &cards, &mut dice).unwrap_or_else(|e| panic!("{}: {e}", entry.reference()));
+            }
+        }
+    }
+}

@@ -52,8 +52,9 @@ use crate::dice::Dice;
 use crate::events::choice::{EventChoiceError, Sign};
 use crate::events::EventChoice;
 use crate::events::{self, EffectResult, EventOutcome};
-use crate::log::{Event, GameLog, LogEntry};
+use crate::log::{CoupAftermath, Event, GameLog, LogEntry};
 use crate::map::WorldMap;
+use crate::ongoing::TurnEffects;
 use crate::ops::{
     CoupError, InfluencePlacement, Operation, PlacementError, RealignError, Realignment, RollResult,
 };
@@ -428,7 +429,7 @@ impl Game {
     /// play but no operation's open yet, else 0 — there's no ops to spend
     /// with nothing played.
     pub fn ops_available(&self) -> u8 {
-        self.op.as_ref().map(Operation::remaining).or(self.card.map(|c| c.ops)).unwrap_or(0)
+        self.op.as_ref().map(Operation::remaining).or(self.card.map(|c| self.status.effects.card_ops(c.ops, self.status.active).0)).unwrap_or(0)
     }
 
     /// The card currently in play, if any — taken from the active side's
@@ -561,16 +562,21 @@ impl Game {
         if card.scoring {
             return Err(GameError::ScoringCard);
         }
-        let ops = card.ops;
         let side = self.status.active;
+        let effects = self.status.effects;
+        let (ops, _) = effects.card_ops(card.ops, side);
         self.op = Some(match kind {
-            OperationKind::Influence => Operation::Influence(InfluencePlacement::new(side, ops, &self.board)),
-            OperationKind::Realign => Operation::Realign(Realignment::new(side, ops, &self.board)),
+            OperationKind::Influence => Operation::Influence(
+                InfluencePlacement::new(side, ops, &self.board)
+                    .with_banned_region(effects.placement_banned(side))
+                    .with_bonus(effects.sub_region_bonus(side)),
+            ),
+            OperationKind::Realign => Operation::Realign(Realignment::new(side, ops, &self.board).with_effects(effects)),
             OperationKind::Coup => {
                 // The Reformer (#87), once played, bars the USSR from coups
                 // in Europe for the rest of the game.
                 let banned = if side == Superpower::Ussr && self.hands.removed().contains(&CardId(87)) { vec![Region::Europe] } else { Vec::new() };
-                Operation::Coup(Coup::new(side, ops, &self.board).with_banned_regions(banned))
+                Operation::Coup(Coup::new(side, ops, &self.board).with_banned_regions(banned).with_effects(effects))
             }
         });
         Ok(())
@@ -635,7 +641,54 @@ impl Game {
             RollOutcome::Coup(result) => Event::Coup(result),
         };
         self.log.push(LogEntry { turn: self.status.turn, action_round: self.status.action_round, side: Some(side), event });
+        if let RollOutcome::Coup(result) = outcome {
+            self.coup_aftermath(map, side, result.target);
+        }
         Ok(outcome)
+    }
+
+    /// The aftermath of the coup just resolved, if it set anything off —
+    /// read from the log, where it sits right after the coup's own entry
+    /// (and before a game-over entry it may have caused).
+    pub fn last_coup_aftermath(&self) -> Option<CoupAftermath> {
+        self.log.entries().iter().rev().take(2).find_map(|e| match e.event {
+            Event::CoupAftermath(a) => Some(a),
+            _ => None,
+        })
+    }
+
+    /// What a coup attempt on `target` sets off beyond its own result
+    /// (rule 6.3.4 and the turn-long events): a battleground coup degrades
+    /// DEFCON by 1 — reaching 1 loses the game for the phasing side —
+    /// unless Nuclear Subs spares a US one, and Yuri and Samantha pays the
+    /// USSR 1 VP per US coup. DEFCON is applied before VP, so a DEFCON loss
+    /// outranks any VP. Logged as one [`Event::CoupAftermath`] after the
+    /// coup's own entry, or not at all if nothing happened.
+    fn coup_aftermath(&mut self, map: &WorldMap, side: Superpower, target: CountryId) {
+        let mut aftermath = CoupAftermath::default();
+        if map.country(target).battleground {
+            if self.status.effects.spares_defcon(side) {
+                aftermath.defcon_spared = true;
+            } else {
+                let before = self.status.defcon;
+                self.apply_defcon(before.saturating_sub(1));
+                aftermath.defcon = Some((before, self.status.defcon));
+            }
+        }
+        if let Some((_, beneficiary, n)) = self.status.effects.coup_vp(side) {
+            let delta = if beneficiary == Superpower::Us { n as i8 } else { -(n as i8) };
+            self.apply_vp(delta);
+            aftermath.vp = Some((delta, self.status.vp));
+        }
+        if !aftermath.is_empty() {
+            self.log.push(LogEntry {
+                turn: self.status.turn,
+                action_round: self.status.action_round,
+                side: Some(side),
+                event: Event::CoupAftermath(aftermath),
+            });
+        }
+        self.log_game_over();
     }
 
     /// Takes back the single most recently placed influence point,
@@ -737,6 +790,22 @@ impl Game {
                 }
                 Ok(self.op.take().expect("checked Some above"))
             }
+        }
+    }
+
+    /// The step back *before* [`Game::abandon`]: with a multi-mode event
+    /// open and a mode chosen but nothing picked, un-chooses the mode
+    /// (Chernobyl's region) and returns `true`, leaving the event open
+    /// awaiting a choice. `false` — and nothing changed — otherwise, so a
+    /// caller falls through to `abandon`. Like `abandon`, only the side
+    /// that played the card may back out.
+    pub fn clear_event_mode(&mut self, map: &WorldMap) -> bool {
+        let active = self.status.active;
+        match &mut self.op {
+            Some(Operation::Event(e)) if e.modes().len() > 1 && e.mode().is_some() && e.is_pristine() && e.chooser() == active => {
+                e.clear_mode(map).is_ok()
+            }
+            _ => false,
         }
     }
 
@@ -859,6 +928,9 @@ impl Game {
             self.apply_defcon(after);
         }
         self.apply_vp(result.vp_delta);
+        if let Some(effect) = result.ongoing {
+            self.status.effects.apply(effect);
+        }
         let vp_after = self.status.vp;
         self.log.push(LogEntry {
             turn: self.status.turn,
@@ -1027,12 +1099,20 @@ impl Game {
         match self.status.active {
             Superpower::Ussr => self.status.active = Superpower::Us,
             Superpower::Us => {
+                // North Sea Oil: the US plays one more action round this
+                // turn, on its own — the USSR sits it out.
+                if self.status.action_round == self.status.action_rounds_per_turn && self.status.effects.extra_rounds(Superpower::Us) > 0 {
+                    self.status.action_round += 1;
+                    return;
+                }
                 self.status.active = Superpower::Ussr;
                 self.status.action_round += 1;
                 if self.status.action_round > self.status.action_rounds_per_turn {
                     self.status.action_round = 1;
                     self.status.turn += 1;
                     self.status.china_card_face_up = true;
+                    // Every "for the remainder of the turn" effect ends here.
+                    self.status.effects = TurnEffects::default();
                 }
             }
         }
@@ -1359,8 +1439,9 @@ mod tests {
     fn a_card_is_logged_the_instant_its_first_roll_makes_it_irrevocable() {
         let map = map();
         let cards = cards();
-        let poland = id(&map, "Poland");
-        let mut game = Game::from_scenario(&scenario_with(&map, &cards, "Poland", 1, 0));
+        // Not a battleground, so the coup (rule 6.3.4) doesn't also log a DEFCON drop.
+        let poland = id(&map, "Czechoslovakia");
+        let mut game = Game::from_scenario(&scenario_with(&map, &cards, "Czechoslovakia", 1, 0));
         let fidel = play(&mut game, &cards, "Fidel");
         game.begin(OperationKind::Coup).unwrap();
         assert!(game.log().is_empty(), "playing a card and opening an operation shouldn't log anything yet");

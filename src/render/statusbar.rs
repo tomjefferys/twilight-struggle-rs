@@ -13,7 +13,8 @@ use crate::layout::MapLayout;
 use crate::ops::Operation;
 use crate::status::GameStatus;
 
-use super::{game_over_line, operation_balance_line, vp_line, Canvas, Color, Style};
+use super::{game_over_line, ongoing_effect_line, operation_balance_line, vp_line, Canvas, Color, Style};
+use crate::ongoing::{short_name, OngoingEffect};
 
 /// Row 1's wording when no card is in play yet — the status bar's own
 /// three-state hint (see [`render_status_bar`]'s own doc), distinct from
@@ -23,7 +24,7 @@ const PLAY_HINT: &str = "no card in play — [ ] select · space play · p pass"
 
 /// The bar's height, always — with or without an operation open — so the
 /// view drawn below it never shifts up or down as one opens or closes.
-pub const STATUS_BAR_ROWS: usize = 3;
+pub const STATUS_BAR_ROWS: usize = 4;
 
 /// Row 0: turn/AR/active side/DEFCON/VP. Row 1 is one of four states,
 /// depending on `winner`, `card` (the card currently in play, if any —
@@ -42,7 +43,11 @@ pub const STATUS_BAR_ROWS: usize = 3;
 ///   with the card's name — the only one of the three states that also
 ///   needed `board`.
 ///
-/// Row 2: a plain rule, separating the bar from whichever screen it sits
+/// Row 2: the turn-long card effects in force (see [`crate::ongoing`]),
+/// each in its beneficiary's colour — or a muted note that there are none,
+/// so the row (and the bar's height) never changes.
+///
+/// Row 3: a plain rule, separating the bar from whichever screen it sits
 /// above.
 ///
 /// `board` should be the caller's *committed* board, not a speculative
@@ -69,10 +74,9 @@ pub fn render_status_bar(
         _ => status.active,
     };
     let turn_line = format!(
-        "TURN {} · AR {}/{} · {} to act · DEFCON {} · VP {}",
+        "TURN {} · AR {} · {} to act · DEFCON {} · VP {}",
         status.turn,
-        status.action_round,
-        status.action_rounds_per_turn,
+        ar_label(status),
         to_act,
         status.defcon,
         vp_line(status.vp),
@@ -83,7 +87,13 @@ pub fn render_status_bar(
         match (card, op) {
             (_, Some(operation @ Operation::Event(e))) => {
                 let name = card.map(|c| c.name.as_str()).unwrap_or("?");
-                let keys = if e.mode().is_none() { "1/2 choose mode" } else { "+ add · - remove · u undo · c done" };
+                let n = e.modes().len();
+                let keys = match (e.mode(), e.is_designation()) {
+                    (None, true) => format!("Enter on world map or 1-{n} to choose region"),
+                    (None, false) => format!("1-{n} choose mode"),
+                    (Some(_), true) => format!("Enter/1-{n} change region · ⌫ clear · c done"),
+                    (Some(_), false) => "+ add · - remove · u undo · c done".to_string(),
+                };
                 (
                     format!("{name} · {} · {keys}", operation_balance_line(layout, board, operation)),
                     side_style(e.chooser()).bold(),
@@ -97,25 +107,78 @@ pub fn render_status_bar(
                 (format!("playing {} — e score · ⌫ return card", card.name), Style::color(Color::Selected))
             }
             (Some(card), None) if events::is_implemented(card.id) => (
-                format!("playing {} ({} ops) — e event · i influence · a realign · o coup · ⌫ return card", card.name, card.ops),
+                format!("playing {} ({}) — e event · i influence · a realign · o coup · ⌫ return card", card.name, ops_text(status, card)),
                 Style::color(Color::Selected),
             ),
             (Some(card), None) => (
-                format!("playing {} ({} ops) — i influence · a realign · o coup · ⌫ return card", card.name, card.ops),
+                format!("playing {} ({}) — i influence · a realign · o coup · ⌫ return card", card.name, ops_text(status, card)),
                 Style::color(Color::Selected),
             ),
             (None, None) => (PLAY_HINT.to_string(), Style::color(Color::Muted)),
         }
     };
 
-    let content_width = width.max(turn_line.chars().count()).max(op_line.chars().count()).max(1);
+    let effects = status.effects.active();
+    let effects_width = if effects.is_empty() {
+        NO_EFFECTS.chars().count()
+    } else {
+        EFFECTS_LABEL.chars().count() + effects.iter().map(|e| ongoing_effect_line(e).chars().count()).sum::<usize>() + EFFECT_SEP.chars().count() * (effects.len() - 1)
+    };
+    let content_width = width.max(turn_line.chars().count()).max(op_line.chars().count()).max(effects_width).max(1);
     let mut canvas = Canvas::new(content_width, STATUS_BAR_ROWS);
 
     draw_turn_line(&mut canvas, status, to_act);
     canvas.put(1, 0, &op_line, op_style);
-    canvas.put(2, 0, &"─".repeat(content_width), Style::color(Color::Muted));
+    draw_effects_line(&mut canvas, &effects);
+    canvas.put(3, 0, &"─".repeat(content_width), Style::color(Color::Muted));
 
     canvas
+}
+
+const NO_EFFECTS: &str = "no turn effects in force";
+const EFFECTS_LABEL: &str = "In effect: ";
+const EFFECT_SEP: &str = " · ";
+
+/// `3`, or `8/7+1` for the extra round North Sea Oil gives the US.
+fn ar_label(status: &GameStatus) -> String {
+    let (round, per_turn) = (status.action_round, status.action_rounds_per_turn);
+    if round > per_turn { format!("{round}/{per_turn}+{}", round - per_turn) } else { format!("{round}/{per_turn}") }
+}
+
+/// A card's ops as the active side would actually spend them, itemised
+/// when an event changes them — `3 ops: 2 +1 Brezhnev` — and noting a
+/// sub-region bonus on offer (Vietnam Revolts).
+fn ops_text(status: &GameStatus, card: &Card) -> String {
+    let (ops, mods) = status.effects.card_ops(card.ops, status.active);
+    let mut text = format!("{ops} ops");
+    if !mods.is_empty() {
+        let parts: Vec<String> = mods.iter().map(|&(id, m)| format!("{m:+} {}", short_name(id))).collect();
+        text.push_str(&format!(": {} {}", card.ops, parts.join(" ")));
+    }
+    if let Some((sub, n)) = status.effects.sub_region_bonus(status.active) {
+        text.push_str(&format!(", +{n} if all in {sub}"));
+    }
+    text
+}
+
+/// Row 2, drawn piecewise so each effect carries its beneficiary's colour.
+fn draw_effects_line(canvas: &mut Canvas, effects: &[OngoingEffect]) {
+    if effects.is_empty() {
+        canvas.put(2, 0, NO_EFFECTS, Style::color(Color::Muted));
+        return;
+    }
+    let mut col = 0;
+    canvas.put(2, col, EFFECTS_LABEL, Style::default());
+    col += EFFECTS_LABEL.chars().count();
+    for (i, effect) in effects.iter().enumerate() {
+        if i > 0 {
+            canvas.put(2, col, EFFECT_SEP, Style::color(Color::Muted));
+            col += EFFECT_SEP.chars().count();
+        }
+        let text = ongoing_effect_line(effect);
+        canvas.put(2, col, &text, side_style(effect.side()));
+        col += text.chars().count();
+    }
 }
 
 fn side_style(side: Superpower) -> Style {
@@ -135,7 +198,7 @@ fn draw_turn_line(canvas: &mut Canvas, status: &GameStatus, to_act: Superpower) 
         col += text.chars().count();
     };
 
-    put(canvas, &format!("TURN {} · AR {}/{} · ", status.turn, status.action_round, status.action_rounds_per_turn), Style::default());
+    put(canvas, &format!("TURN {} · AR {} · ", status.turn, ar_label(status)), Style::default());
     let side_style = match to_act {
         Superpower::Us => Style::color(Color::Us).bold(),
         Superpower::Ussr => Style::color(Color::Ussr).bold(),
@@ -307,5 +370,61 @@ mod tests {
         assert!(!first.contains("USA to act"), "{first}");
         assert!(text.contains("USSR chooses"), "{text}");
         assert!(text.contains("+ add · - remove"), "{text}");
+    }
+
+    // --- turn-long effects ---------------------------------------------------
+
+    use crate::ongoing::OngoingEffect;
+
+    fn with_effects(effects: &[OngoingEffect]) -> GameStatus {
+        let mut s = status();
+        for &e in effects {
+            s.effects.apply(e);
+        }
+        s
+    }
+
+    #[test]
+    fn the_effects_row_is_a_muted_note_when_nothing_is_in_force_and_never_changes_the_height() {
+        let (map, layout) = fixtures();
+        let board = Board::new(&map);
+        let none = render_status_bar(&layout, &board, &status(), None, None, None, 60);
+        let some = render_status_bar(&layout, &board, &with_effects(&[OngoingEffect::Containment]), None, None, None, 60);
+        assert_eq!(none.height(), some.height());
+        assert!(none.render(ColorMode::Never).lines().nth(2).unwrap().contains("no turn effects"));
+    }
+
+    #[test]
+    fn the_effects_row_lists_every_effect_in_force_in_card_order() {
+        let (map, layout) = fixtures();
+        let board = Board::new(&map);
+        let s = with_effects(&[OngoingEffect::Chernobyl { region: crate::country::Region::Asia }, OngoingEffect::Containment]);
+        let row = render_status_bar(&layout, &board, &s, None, None, None, 60).render(ColorMode::Never).lines().nth(2).unwrap().to_string();
+        assert!(row.starts_with("In effect: Containment"), "{row}");
+        assert!(row.contains("Chernobyl: USSR can't add influence in Asia"), "{row}");
+        assert!(row.find("Containment").unwrap() < row.find("Chernobyl").unwrap(), "{row}");
+    }
+
+    #[test]
+    fn a_card_in_play_shows_its_ops_as_modified_with_where_the_change_came_from() {
+        let (map, layout) = fixtures();
+        let board = Board::new(&map);
+        let cards = CardCatalog::standard().unwrap();
+        // The USSR is active in `status()`; Fidel is a 2-op card.
+        let s = with_effects(&[OngoingEffect::Brezhnev]);
+        let text = render_status_bar(&layout, &board, &s, Some(fidel(&cards)), None, None, 60).render(ColorMode::Never);
+        assert!(text.contains("3 ops: 2 +1 Brezhnev"), "{text}");
+        let s = with_effects(&[OngoingEffect::VietnamRevolts]);
+        let text = render_status_bar(&layout, &board, &s, Some(fidel(&cards)), None, None, 60).render(ColorMode::Never);
+        assert!(text.contains("+1 if all in Southeast Asia"), "{text}");
+    }
+
+    #[test]
+    fn the_extra_north_sea_oil_round_reads_as_eight_of_seven_plus_one() {
+        let (map, layout) = fixtures();
+        let board = Board::new(&map);
+        let s = GameStatus { action_round: 8, active: Superpower::Us, ..with_effects(&[OngoingEffect::NorthSeaOil]) };
+        let first = render_status_bar(&layout, &board, &s, None, None, None, 60).render(ColorMode::Never).lines().next().unwrap().to_string();
+        assert!(first.contains("AR 8/7+1"), "{first}");
     }
 }

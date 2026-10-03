@@ -18,7 +18,7 @@ mod coup;
 mod influence;
 mod realign;
 
-pub use coup::{coup_odds, coup_resolve, coup_target_number, Coup, CoupError, CoupOdds, CoupResult};
+pub use coup::{coup_odds, coup_odds_with, coup_resolve, coup_resolve_with, coup_target_number, Coup, CoupError, CoupOdds, CoupResult};
 pub use crate::events::choice::EventChoice;
 pub use influence::{InfluencePlacement, PlacementError};
 pub use realign::{modifiers, odds, resolve, Modifiers, Odds, RealignError, Realignment, RollResult};
@@ -64,6 +64,18 @@ impl Operation {
         }
     }
 
+    /// An extra op still on offer for spending the card wholly in one
+    /// sub-region (Vietnam Revolts), while nothing has yet been spent or
+    /// placed outside it — what a header hints at so it isn't a surprise.
+    pub fn pending_bonus(&self) -> Option<(crate::country::SubRegion, u8)> {
+        match self {
+            Operation::Influence(p) => p.bonus().filter(|_| p.is_empty()),
+            Operation::Realign(r) => r.sub_region_bonus().filter(|_| r.ops_spent() == 0),
+            Operation::Coup(c) => c.sub_region_bonus().filter(|_| c.ops_spent() == 0),
+            Operation::Event(_) => None,
+        }
+    }
+
     pub fn ops_spent(&self) -> u8 {
         match self {
             Operation::Influence(p) => p.ops_spent(),
@@ -105,6 +117,9 @@ impl Operation {
             Operation::Influence(p) => p.is_legal_target(map, id),
             Operation::Realign(r) => r.is_legal_target(map, board, id),
             Operation::Coup(c) => c.is_legal_target(map, board, id),
+            // A designation (Chernobyl) has no countries to pick: every
+            // region is a candidate until one is chosen, then only it.
+            Operation::Event(e) if e.is_designation() => e.designated_region().is_none_or(|r| map.country(id).region == r),
             Operation::Event(e) => {
                 e.can_forward(map, id, Sign::Plus).is_some()
                     || e.can_forward(map, id, Sign::Minus).is_some()

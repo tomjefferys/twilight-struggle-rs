@@ -31,9 +31,10 @@
 use std::fmt;
 
 use crate::board::Board;
-use crate::country::{CountryId, Superpower};
+use crate::country::{CountryId, SubRegion, Superpower};
 use crate::dice::Dice;
 use crate::map::WorldMap;
+use crate::ongoing::TurnEffects;
 
 /// One side's die-roll modifiers for one country, itemised rather than
 /// summed, so the UI can explain the number instead of just showing it.
@@ -47,11 +48,13 @@ pub struct Modifiers {
     pub more_influence: bool,
     /// +1 if this side's own superpower borders the target.
     pub superpower_adjacent: bool,
+    /// Iran-Contra Scandal: -1 to this side's roll.
+    pub iran_contra: bool,
 }
 
 impl Modifiers {
     pub fn total(&self) -> i8 {
-        self.adjacent_controlled as i8 + self.more_influence as i8 + self.superpower_adjacent as i8
+        self.adjacent_controlled as i8 + self.more_influence as i8 + self.superpower_adjacent as i8 - self.iran_contra as i8
     }
 
     /// A human-readable breakdown of what's contributing, in the order
@@ -68,6 +71,9 @@ impl Modifiers {
         if self.superpower_adjacent {
             reasons.push("superpower adjacent".to_string());
         }
+        if self.iran_contra {
+            reasons.push("Iran-Contra -1".to_string());
+        }
         reasons
     }
 }
@@ -75,6 +81,11 @@ impl Modifiers {
 /// `side`'s realignment modifiers for a roll on `id`, computed live
 /// against `board` — no session needs to be open to ask this.
 pub fn modifiers(map: &WorldMap, board: &Board, id: CountryId, side: Superpower) -> Modifiers {
+    modifiers_with(map, board, id, side, &TurnEffects::default())
+}
+
+/// [`modifiers`] under the turn-long events in `effects`.
+pub fn modifiers_with(map: &WorldMap, board: &Board, id: CountryId, side: Superpower, effects: &TurnEffects) -> Modifiers {
     let country = map.country(id);
     let opponent = side.opponent();
     let adjacent_controlled = country
@@ -84,7 +95,8 @@ pub fn modifiers(map: &WorldMap, board: &Board, id: CountryId, side: Superpower)
         .count() as u8;
     let more_influence = board.influence(id, side) > board.influence(id, opponent);
     let superpower_adjacent = country.borders_superpower(side);
-    Modifiers { adjacent_controlled, more_influence, superpower_adjacent }
+    let iran_contra = effects.realign_roll_mod(side).is_some();
+    Modifiers { adjacent_controlled, more_influence, superpower_adjacent, iran_contra }
 }
 
 /// Win/draw/loss odds for `side` rolling against `id` right now, counted
@@ -111,9 +123,14 @@ pub struct Odds {
 /// `side`'s odds rolling against `id` right now, enumerated over all 36
 /// die pairs.
 pub fn odds(map: &WorldMap, board: &Board, id: CountryId, side: Superpower) -> Odds {
+    odds_with(map, board, id, side, &TurnEffects::default())
+}
+
+/// [`odds`] under the turn-long events in `effects`.
+pub fn odds_with(map: &WorldMap, board: &Board, id: CountryId, side: Superpower, effects: &TurnEffects) -> Odds {
     let opponent = side.opponent();
-    let acting_mods = modifiers(map, board, id, side);
-    let opposing_mods = modifiers(map, board, id, opponent);
+    let acting_mods = modifiers_with(map, board, id, side, effects);
+    let opposing_mods = modifiers_with(map, board, id, opponent, effects);
 
     let mut result = Odds::default();
     for acting_die in 1..=6u8 {
@@ -221,6 +238,10 @@ pub struct Realignment {
     ops_total: u8,
     ops_spent: u8,
     history: Vec<RollResult>,
+    effects: TurnEffects,
+    /// Whether any roll so far targeted outside the sub-region Vietnam
+    /// Revolts' bonus needs — rolls can't be undone, so once set it stays.
+    outside_bonus_sub: bool,
     /// The board as it stood when this action started — display only.
     /// `delta` reads it; legality and the modifier/odds maths never do.
     base: Board,
@@ -228,15 +249,41 @@ pub struct Realignment {
 
 impl Realignment {
     pub fn new(side: Superpower, ops: u8, board: &Board) -> Self {
-        Realignment { side, ops_total: ops, ops_spent: 0, history: Vec::new(), base: board.clone() }
+        Realignment {
+            side,
+            ops_total: ops,
+            ops_spent: 0,
+            history: Vec::new(),
+            effects: TurnEffects::default(),
+            outside_bonus_sub: false,
+            base: board.clone(),
+        }
+    }
+
+    /// Applies the turn-long events in force (see [`crate::ongoing`]).
+    pub fn with_effects(mut self, effects: TurnEffects) -> Self {
+        self.effects = effects;
+        self
+    }
+
+    /// The Southeast Asia-style bonus op still available: only while every
+    /// roll so far has been inside its sub-region.
+    pub fn sub_region_bonus(&self) -> Option<(SubRegion, u8)> {
+        self.effects.sub_region_bonus(self.side).filter(|_| !self.outside_bonus_sub)
     }
 
     pub fn side(&self) -> Superpower {
         self.side
     }
 
+    /// The ops this action is worth so far: the card's, plus the
+    /// sub-region bonus once a roll has used it (and only while every
+    /// roll has stayed inside that sub-region).
     pub fn ops_total(&self) -> u8 {
-        self.ops_total
+        match self.sub_region_bonus() {
+            Some((_, n)) if self.ops_spent > 0 => self.ops_total + n,
+            _ => self.ops_total,
+        }
     }
 
     pub fn ops_spent(&self) -> u8 {
@@ -244,16 +291,27 @@ impl Realignment {
     }
 
     pub fn remaining(&self) -> u8 {
-        self.ops_total - self.ops_spent
+        self.ops_total() - self.ops_spent
+    }
+
+    /// Whether a roll in `id` fits in the ops left — counting the bonus
+    /// op only if this roll (and every earlier one) is in its sub-region.
+    pub fn can_afford(&self, map: &WorldMap, id: CountryId) -> bool {
+        let in_sub = |sub| map.country(id).is_in_sub_region(sub);
+        let bonus = match self.sub_region_bonus() {
+            Some((sub, n)) if in_sub(sub) => n,
+            _ => 0,
+        };
+        self.ops_spent < self.ops_total + bonus
     }
 
     /// Both sides' modifiers and the resulting odds for a roll on `id`
     /// right now — everything the UI needs to show before spending the
     /// op. `board` should be the caller's live board, not `base`.
     pub fn preview(&self, map: &WorldMap, board: &Board, id: CountryId) -> (Modifiers, Modifiers, Odds) {
-        let acting = modifiers(map, board, id, self.side);
-        let opposing = modifiers(map, board, id, self.side.opponent());
-        let odds = odds(map, board, id, self.side);
+        let acting = modifiers_with(map, board, id, self.side, &self.effects);
+        let opposing = modifiers_with(map, board, id, self.side.opponent(), &self.effects);
+        let odds = odds_with(map, board, id, self.side, &self.effects);
         (acting, opposing, odds)
     }
 
@@ -277,21 +335,26 @@ impl Realignment {
         id: CountryId,
         dice: &mut Dice,
     ) -> Result<RollResult, RealignError> {
-        if self.remaining() == 0 {
-            return Err(RealignError::InsufficientOps { country: map.country(id).name.clone(), remaining: 0 });
+        if !self.can_afford(map, id) {
+            return Err(RealignError::InsufficientOps { country: map.country(id).name.clone(), remaining: self.remaining() });
         }
         if !self.is_legal_target(map, board, id) {
             return Err(RealignError::NoOpponentInfluence { country: map.country(id).name.clone(), side: self.side });
         }
 
-        let acting_mods = modifiers(map, board, id, self.side);
-        let opposing_mods = modifiers(map, board, id, self.side.opponent());
+        let acting_mods = modifiers_with(map, board, id, self.side, &self.effects);
+        let opposing_mods = modifiers_with(map, board, id, self.side.opponent(), &self.effects);
         let acting_die = dice.roll();
         let opposing_die = dice.roll();
         let result = resolve(id, self.side, acting_die, acting_mods, opposing_die, opposing_mods, board);
 
         if let Some(loser) = result.loser {
             board.remove_influence(id, loser, result.removed);
+        }
+        if let Some((sub, _)) = self.effects.sub_region_bonus(self.side)
+            && !map.country(id).is_in_sub_region(sub)
+        {
+            self.outside_bonus_sub = true;
         }
         self.ops_spent += 1;
         self.history.push(result);
@@ -665,5 +728,57 @@ mod tests {
         board.set_influence(venezuela, Us, 1); // every win can remove at most 1
         let o = odds(&map, &board, venezuela, Ussr);
         assert_eq!(o.removed_36ths, o.win as u16, "every winning pair removes exactly the 1 point available");
+    }
+
+    // --- ongoing events ----------------------------------------------------
+
+    #[test]
+    fn iran_contra_subtracts_one_from_the_us_total_and_says_so() {
+        use crate::ongoing::{OngoingEffect, TurnEffects};
+        let map = map();
+        let board = Board::new(&map);
+        let italy = id(&map, "Italy");
+        let mut effects = TurnEffects::default();
+        effects.apply(OngoingEffect::IranContra);
+        let us = modifiers_with(&map, &board, italy, Us, &effects);
+        assert!(us.iran_contra);
+        assert_eq!(us.total(), modifiers(&map, &board, italy, Us).total() - 1);
+        assert!(us.reasons().iter().any(|r| r.contains("Iran-Contra")));
+        assert!(!modifiers_with(&map, &board, italy, Ussr, &effects).iran_contra);
+        // The odds shift against the US with the penalty.
+        let mut with_board = Board::new(&map);
+        with_board.set_influence(italy, Ussr, 2);
+        assert!(odds_with(&map, &with_board, italy, Us, &effects).win < odds(&map, &with_board, italy, Us).win);
+    }
+
+    #[test]
+    fn a_bonus_op_is_available_only_while_every_roll_stays_in_the_sub_region() {
+        use crate::ongoing::{OngoingEffect, TurnEffects};
+        let map = map();
+        let mut board = Board::new(&map);
+        for name in ["Thailand", "Vietnam", "Poland"] {
+            board.set_influence(id(&map, name), Us, 9);
+        }
+        let mut effects = TurnEffects::default();
+        effects.apply(OngoingEffect::VietnamRevolts);
+        let mut dice = Dice::from_seed(8);
+
+        let mut r = Realignment::new(Ussr, 2, &board).with_effects(effects);
+        assert!(r.sub_region_bonus().is_some());
+        let mut live = board.clone();
+        r.roll(&map, &mut live, id(&map, "Thailand"), &mut dice).unwrap();
+        r.roll(&map, &mut live, id(&map, "Vietnam"), &mut dice).unwrap();
+        assert!(r.can_afford(&map, id(&map, "Thailand")), "the bonus op");
+        assert!(!r.can_afford(&map, id(&map, "Poland")), "not outside the sub-region");
+        r.roll(&map, &mut live, id(&map, "Thailand"), &mut dice).unwrap();
+        assert_eq!((r.ops_total(), r.remaining()), (3, 0));
+
+        // One roll outside forfeits it for good.
+        let mut r = Realignment::new(Ussr, 2, &board).with_effects(effects);
+        let mut live = board.clone();
+        r.roll(&map, &mut live, id(&map, "Poland"), &mut dice).unwrap();
+        r.roll(&map, &mut live, id(&map, "Thailand"), &mut dice).unwrap();
+        assert!(r.sub_region_bonus().is_none());
+        assert_eq!((r.ops_total(), r.remaining()), (2, 0));
     }
 }
