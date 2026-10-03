@@ -41,8 +41,6 @@ use crate::status::GameStatus;
 pub enum EventOutcome {
     Scoring(ScoringResult),
     Effect(EffectResult),
-    /// A war card with a single possible target, rolled on the spot.
-    War(WarResult),
     /// A choice card's event has opened a session for `chooser` to work
     /// through — nothing has changed yet.
     Pending { card: CardId, chooser: crate::country::Superpower },

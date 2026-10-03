@@ -894,7 +894,7 @@ impl Game {
     /// `removed_after_event` card, removes it from the game entirely —
     /// see [`crate::cards::Hands::remove_from_game`]) and hands the turn
     /// to the other side, same as [`Game::confirm`]/[`Game::cancel`].
-    pub fn play_event(&mut self, map: &WorldMap, _cards: &CardCatalog, dice: &mut Dice) -> Result<EventOutcome, GameError> {
+    pub fn play_event(&mut self, map: &WorldMap, _cards: &CardCatalog) -> Result<EventOutcome, GameError> {
         if self.winner.is_some() {
             return Err(GameError::GameOver);
         }
@@ -909,15 +909,10 @@ impl Game {
             return Err(GameError::EventPrevented { card: card.id, by });
         }
 
-        // A war rolls: on the spot if it has one possible target, else it
-        // opens a session for the player to name one (`Game::roll`).
+        // A war opens a session; `Game::roll` on a target (the only one, for
+        // Korean War and Arab-Israeli War) resolves it.
         if war::is_war_card(card.id) {
             let player = self.status.active;
-            if let Some(target) = war::sole_target(map, card.id) {
-                let result = war::resolve(map, &self.board, card.id, target, player, dice.roll()).expect("a war card");
-                self.finish_war(result.clone());
-                return Ok(EventOutcome::War(result));
-            }
             self.op = Some(Operation::War(war::War::new(card.id, player)));
             return Ok(EventOutcome::Pending { card: card.id, chooser: player });
         }
@@ -960,7 +955,7 @@ impl Game {
                 }
             }
             EventOutcome::Effect(result) => self.finish_effect(result.clone()),
-            EventOutcome::War(_) | EventOutcome::Pending { .. } => unreachable!("wars and choice cards are handled above"),
+            EventOutcome::Pending { .. } => unreachable!("wars and choice cards are handled above"),
         }
         Ok(outcome)
     }
@@ -1929,10 +1924,10 @@ mod tests {
         let me_scoring = cards.id_by_name("Middle East Scoring").unwrap();
 
         game.play_card(&cards, me_scoring).unwrap();
-        let outcome = game.play_event(&map, &cards, &mut crate::dice::Dice::from_seed(1)).unwrap();
+        let outcome = game.play_event(&map, &cards).unwrap();
         match outcome {
             EventOutcome::Scoring(result) => assert_eq!(result.vp_delta, -3),
-            EventOutcome::Effect(_) | EventOutcome::War(_) | EventOutcome::Pending { .. } => panic!("a scoring card should resolve as a scoring event"),
+            EventOutcome::Effect(_) | EventOutcome::Pending { .. } => panic!("a scoring card should resolve as a scoring event"),
         }
         assert_eq!(game.status().vp, -3, "presence-only USSR should cost the US side 3 VP");
         assert_eq!(game.card_in_play(), None, "the event should discard the card that funded it");
@@ -1950,7 +1945,7 @@ mod tests {
         let se_asia = cards.id_by_name("Southeast Asia Scoring").unwrap();
 
         game.play_card(&cards, se_asia).unwrap();
-        game.play_event(&map, &cards, &mut crate::dice::Dice::from_seed(1)).unwrap();
+        game.play_event(&map, &cards).unwrap();
         assert!(game.removed_from_game().contains(&se_asia));
         assert!(!game.discards().contains(&se_asia));
     }
@@ -1962,7 +1957,7 @@ mod tests {
         let mut game = Game::from_scenario(&scenario_with_extra_card(&map, &cards, Ussr, "Blockade"));
         let sg = play(&mut game, &cards, "Blockade");
         assert!(matches!(
-            game.play_event(&map, &cards, &mut crate::dice::Dice::from_seed(1)),
+            game.play_event(&map, &cards),
             Err(GameError::EventNotImplemented { card }) if card == sg
         ));
         // Refusing to resolve the event shouldn't have consumed it —
@@ -1987,7 +1982,7 @@ mod tests {
         let se_asia = cards.id_by_name("Southeast Asia Scoring").unwrap();
 
         game.play_card(&cards, se_asia).unwrap();
-        game.play_event(&map, &cards, &mut crate::dice::Dice::from_seed(1)).unwrap();
+        game.play_event(&map, &cards).unwrap();
         assert_eq!(game.status().vp, 20, "VP should clamp at +20, not overshoot to 26");
         assert_eq!(game.winner(), Some(Victory { side: Us, reason: VictoryReason::Vp }));
     }
@@ -2009,7 +2004,7 @@ mod tests {
         let se_asia = cards.id_by_name("Southeast Asia Scoring").unwrap();
 
         game.play_card(&cards, se_asia).unwrap();
-        game.play_event(&map, &cards, &mut crate::dice::Dice::from_seed(1)).unwrap();
+        game.play_event(&map, &cards).unwrap();
         assert_eq!(game.status().vp, -20, "VP should clamp at -20, not overshoot to -26");
         assert_eq!(game.winner(), Some(Victory { side: Ussr, reason: VictoryReason::Vp }));
     }
@@ -2023,7 +2018,7 @@ mod tests {
         let europe_scoring = cards.id_by_name("Europe Scoring").unwrap();
 
         game.play_card(&cards, europe_scoring).unwrap();
-        game.play_event(&map, &cards, &mut crate::dice::Dice::from_seed(1)).unwrap();
+        game.play_event(&map, &cards).unwrap();
         assert_eq!(game.winner(), Some(Victory { side: Ussr, reason: VictoryReason::EuropeControl }));
     }
 
@@ -2035,7 +2030,7 @@ mod tests {
         let mut game = Game::from_scenario(&scenario);
         let europe_scoring = cards.id_by_name("Europe Scoring").unwrap();
         game.play_card(&cards, europe_scoring).unwrap();
-        game.play_event(&map, &cards, &mut crate::dice::Dice::from_seed(1)).unwrap();
+        game.play_event(&map, &cards).unwrap();
         let active_before = game.active();
 
         assert!(matches!(game.play_card(&cards, cards.id_by_name("Fidel").unwrap()), Err(GameError::GameOver)));
@@ -2051,7 +2046,7 @@ mod tests {
         let mut game = Game::from_scenario(&scenario);
         let europe_scoring = cards.id_by_name("Europe Scoring").unwrap();
         game.play_card(&cards, europe_scoring).unwrap();
-        game.play_event(&map, &cards, &mut crate::dice::Dice::from_seed(1)).unwrap();
+        game.play_event(&map, &cards).unwrap();
 
         let events: Vec<&Event> = game.log().entries().iter().map(|e| &e.event).collect();
         assert_eq!(events.len(), 3, "expected exactly Selected, Scored, GameOver: {events:?}");
@@ -2068,7 +2063,7 @@ mod tests {
         let mut game = Game::from_scenario(&scenario);
         let europe_scoring = cards.id_by_name("Europe Scoring").unwrap();
         game.play_card(&cards, europe_scoring).unwrap();
-        game.play_event(&map, &cards, &mut crate::dice::Dice::from_seed(1)).unwrap();
+        game.play_event(&map, &cards).unwrap();
 
         let ahead = game.lookahead();
         assert_eq!(ahead.winner(), game.winner());

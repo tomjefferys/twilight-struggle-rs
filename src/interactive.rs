@@ -274,7 +274,7 @@ pub fn run(
                     KeyCode::Char('i') => message = begin(game, OperationKind::Influence),
                     KeyCode::Char('a') => message = begin(game, OperationKind::Realign),
                     KeyCode::Char('o') => message = begin(game, OperationKind::Coup),
-                    KeyCode::Char('e') => match game.play_event(map, cards, dice) {
+                    KeyCode::Char('e') => match game.play_event(map, cards) {
                         Ok(EventOutcome::Scoring(result)) => {
                             let vp_after = game.status().vp;
                             zoomed = false;
@@ -285,16 +285,26 @@ pub fn run(
                             zoomed = false;
                             modal.push_back(Modal::Event(result, vp_after, game.winner()));
                         }
-                        Ok(EventOutcome::War(result)) => {
-                            let vp_after = game.status().vp;
-                            zoomed = false;
-                            modal.push_back(Modal::War(result, vp_after, game.winner()));
-                        }
                         // A choice card: the chooser's picks happen next, on
                         // the map — the status bar names who and what.
                         Ok(EventOutcome::Pending { .. }) => {
                             zoomed = false;
                             message = None;
+                            // A war: a lone target (Korean War) goes straight to
+                            // its country screen, ready for `r`; otherwise to a
+                            // region view where only the legal targets are live.
+                            if let Some(Operation::War(w)) = game.operation() {
+                                let targets = twilight_struggle::events::war::eligible_targets(map, w.card());
+                                let current = match &screen {
+                                    Screen::Region { region, .. } | Screen::Country { region, .. } => Some(*region),
+                                    Screen::World { .. } => None,
+                                };
+                                let first = targets.iter().copied().find(|&t| Some(map.country(t).region) == current).or(targets.first().copied());
+                                if let Some(target) = first {
+                                    let region = map.country(target).region;
+                                    screen = if targets.len() == 1 { Screen::Country { region, selected: target } } else { Screen::Region { region, selected: target } };
+                                }
+                            }
                             // A region designation (Chernobyl) is made on the
                             // world map: go straight there, keeping the region
                             // we were looking at highlighted (and remembered).

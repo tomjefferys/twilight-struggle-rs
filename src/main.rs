@@ -917,7 +917,7 @@ fn run_begin_command(session: &mut Session, kind: OperationKind, words: &[&str])
 /// same breakdown the interactive map's modal shows, and, if the event
 /// just won the game, [`game_over_line`] right after it.
 fn run_event_command(session: &mut Session) {
-    match session.game.play_event(&session.map, &session.cards, &mut session.dice) {
+    match session.game.play_event(&session.map, &session.cards) {
         Ok(EventOutcome::Scoring(result)) => {
             let vp_after = session.game.status().vp;
             let canvas = render_scoring_result(&session.map, &session.cards, &result, vp_after, None);
@@ -931,9 +931,6 @@ fn run_event_command(session: &mut Session) {
             let winner = session.game.winner();
             let canvas = render_event_result(&session.map, &session.cards, &result, vp_after, winner, None);
             println!("{}", canvas.render(session.color));
-        }
-        Ok(EventOutcome::War(result)) => {
-            print_war_result(session, &result);
         }
         Ok(EventOutcome::Pending { .. }) => print_event_prompt(session),
         Err(e) => println!("{e}"),

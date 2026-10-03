@@ -313,21 +313,22 @@ uniformly random legal moves.
     muting shows the designation; the world map's flag slot stays plain
     (no `+`/`-`) and its legend says "digit: designate that region".
   - `events::war` (`src/events/war.rs`) — the five war cards (#11, #13, #24,
-    #36, #102): the first events that **roll a die**, so `Game::play_event`
-    now takes `&mut Dice`. A `WarSpec` table (beneficiary — fixed or the
+    #36, #102): the first events that **roll a die**, so a `WarSpec` table (beneficiary — fixed or the
     player — target set, success threshold, VP, Military Ops, and whether
     the target itself lowers the roll) plus pure `resolve`/`modifier`/`odds`
-    free functions, like `ops::coup`'s. A card with one possible target
-    (Korean, Arab-Israeli) rolls on the spot (`EventOutcome::War`); the rest
-    open `Operation::War(War)` for the player, which `Game::roll` on a target
-    resolves *and closes* (`finish_war`: influence, VP, the beneficiary's
+    free functions, like `ops::coup`'s. Every war card opens
+    `Operation::War(War)` for the player (`EventOutcome::Pending`), which
+    `Game::roll` on a target resolves *and closes* (`finish_war`: influence, VP, the beneficiary's
     `military_ops_*` clamped 0–5, `Event::War`, discard/remove, hand the turn
     over — no `confirm`; `confirm`/`cancel` are refused with `WarNotRolled`,
     `abandon` is free before the roll). The AI sees it as `Action::Roll`
     per target. `events::is_prevented` is the first modelled "prevents"
     clause (Camp David in `Hands::removed` bars #13; `GameError::EventPrevented`,
     and `Action::Event` isn't offered). Brush War's NATO clause isn't modelled.
-    Views: `render::render_war_result` modal (`Modal::War`), `war_line` in
+    In interactive mode `e` jumps to the country screen of a lone
+    target (Korean, Arab-Israeli) or to the region view of the first target
+    (preferring the current region) with non-targets dimmed; `r` rolls on the
+    country screen. Views: `render::render_war_result` modal (`Modal::War`), `war_line` in
     the region footer/country panel, a `war` log line.
   - `events::effects` (the second stage) resolves nineteen cards whose text only moves
     influence, VP, or DEFCON by fixed amounts (see `CARDS.md`) into an

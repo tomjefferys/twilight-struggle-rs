@@ -185,7 +185,7 @@ impl Game {
         match action {
             Action::PlayCard(id) => self.play_card(cards, id),
             Action::Begin(kind) => self.begin(kind),
-            Action::Event => self.play_event(map, cards, dice).map(|_| ()),
+            Action::Event => self.play_event(map, cards).map(|_| ()),
             Action::Place(id) => self.place(map, id).map(|_| ()),
             Action::Unplace(id) => self.unplace(map, id),
             Action::ChooseMode(i) => self.choose_mode(map, i as usize),

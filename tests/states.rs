@@ -24,7 +24,7 @@ fn play_scoring_state(map: &WorldMap, cards: &CardCatalog, lib: &StateLibrary, r
     let side = game.active();
     let card = *game.hand(side).iter().find(|&&id| cards.card(id).scoring).unwrap_or_else(|| panic!("{reference}: active side's hand has no scoring card"));
     game.play_card(cards, card).unwrap_or_else(|e| panic!("{reference}: play_card: {e}"));
-    let outcome = game.play_event(map, cards, &mut twilight_struggle::Dice::from_seed(1)).unwrap_or_else(|e| panic!("{reference}: play_event: {e}"));
+    let outcome = game.play_event(map, cards).unwrap_or_else(|e| panic!("{reference}: play_event: {e}"));
     (game, outcome)
 }
 
@@ -34,7 +34,7 @@ fn region_tiers(outcome: &EventOutcome) -> (Tier, Tier) {
             ScoringKind::Region { us, ussr, .. } => (us.tier, ussr.tier),
             ScoringKind::SoutheastAsia { .. } => panic!("expected a region scoring result"),
         },
-        EventOutcome::Effect(_) | EventOutcome::War(_) | EventOutcome::Pending { .. } => panic!("expected a scoring outcome"),
+        EventOutcome::Effect(_) | EventOutcome::Pending { .. } => panic!("expected a scoring outcome"),
     }
 }
 
@@ -42,7 +42,6 @@ fn vp_delta(outcome: &EventOutcome) -> i8 {
     match outcome {
         EventOutcome::Scoring(result) => result.vp_delta,
         EventOutcome::Effect(result) => result.vp_delta,
-        EventOutcome::War(result) => result.vp_delta,
         EventOutcome::Pending { .. } => panic!("a pending event has no VP yet"),
     }
 }
@@ -141,7 +140,7 @@ fn southeast_asia_pays_per_country_and_is_removed_not_discarded() {
             ScoringKind::SoutheastAsia { controlled } => assert_eq!(controlled.len(), 4),
             ScoringKind::Region { .. } => panic!("expected a Southeast Asia result"),
         },
-        EventOutcome::Effect(_) | EventOutcome::War(_) | EventOutcome::Pending { .. } => panic!("expected a scoring outcome"),
+        EventOutcome::Effect(_) | EventOutcome::Pending { .. } => panic!("expected a scoring outcome"),
     }
     assert_eq!(vp_delta(&outcome), 1);
     let card = cards.id_by_name("Southeast Asia Scoring").unwrap();
@@ -187,7 +186,7 @@ fn play_effect_state(map: &WorldMap, cards: &CardCatalog, lib: &StateLibrary, na
     let mut game = Game::from_scenario(&scenario);
     let card = cards.id_by_name(card_name).unwrap_or_else(|| panic!("no card named {card_name}"));
     game.play_card(cards, card).unwrap_or_else(|e| panic!("{reference}: play_card: {e}"));
-    let outcome = game.play_event(map, cards, &mut twilight_struggle::Dice::from_seed(1)).unwrap_or_else(|e| panic!("{reference}: play_event: {e}"));
+    let outcome = game.play_event(map, cards).unwrap_or_else(|e| panic!("{reference}: play_event: {e}"));
     assert!(matches!(outcome, EventOutcome::Effect(_)), "{reference}: expected an effect outcome");
     game
 }
@@ -344,7 +343,7 @@ fn a_defcon_loss_goes_against_the_phasing_player_not_the_cards_side() {
     game.hands_mut().take(card);
     game.hands_mut().push_to_hand(Superpower::Ussr, card);
     game.play_card(&cards, card).unwrap();
-    game.play_event(&map, &cards, &mut twilight_struggle::Dice::from_seed(1)).unwrap();
+    game.play_event(&map, &cards).unwrap();
     assert_eq!(game.winner(), Some(Victory { side: Superpower::Us, reason: VictoryReason::Defcon }));
     assert_eq!(game.status().vp, 4, "Duck and Cover still pays the US 5-1 = 4 VP");
 }
@@ -391,7 +390,7 @@ fn every_implemented_event_plays_through_game() {
             let mut game = Game::from_scenario(&scenario);
             game.hands_mut().push_to_hand(side, id);
             game.play_card(&cards, id).unwrap_or_else(|e| panic!("{} ({side}): play_card: {e}", card.name));
-            game.play_event(&map, &cards, &mut twilight_struggle::Dice::from_seed(1)).unwrap_or_else(|e| panic!("{} ({side}): play_event: {e}", card.name));
+            game.play_event(&map, &cards).unwrap_or_else(|e| panic!("{} ({side}): play_event: {e}", card.name));
             // A choice card opens a session for its own side; let a random
             // chooser carry it out — every session must be finishable.
             let mut ai = twilight_struggle::RandomAi::from_seed(7);
@@ -441,7 +440,7 @@ mod choices {
         let side = game.active();
         let card = game.hand(side)[0];
         game.play_card(&cards, card).unwrap();
-        let outcome = game.play_event(&map, &cards, &mut twilight_struggle::Dice::from_seed(1)).unwrap_or_else(|e| panic!("{name}: play_event: {e}"));
+        let outcome = game.play_event(&map, &cards).unwrap_or_else(|e| panic!("{name}: play_event: {e}"));
         assert!(matches!(outcome, EventOutcome::Pending { chooser: c, .. } if c == chooser), "{name}: expected a pending session, got {outcome:?}");
         assert_eq!(game.decider(), chooser);
         (map, cards, game)
@@ -581,7 +580,7 @@ mod choices {
             let mut game = Game::from_scenario(&scenario);
             let card = game.hand(Superpower::Us)[0];
             game.play_card(&cards, card).unwrap();
-            let outcome = game.play_event(&map, &cards, &mut twilight_struggle::Dice::from_seed(1)).unwrap();
+            let outcome = game.play_event(&map, &cards).unwrap();
             assert!(matches!(outcome, EventOutcome::Effect(_)), "{name}");
             assert!(game.operation().is_none(), "{name}");
             assert_eq!(game.active(), Superpower::Ussr, "{name}");
@@ -802,7 +801,7 @@ mod choices {
         scenario.hands.push_to_hand(Superpower::Us, comecon);
         let mut game = Game::from_scenario(&scenario);
         game.play_card(&cards, comecon).unwrap();
-        game.play_event(&map, &cards, &mut twilight_struggle::Dice::from_seed(1)).unwrap();
+        game.play_event(&map, &cards).unwrap();
         assert_eq!(game.active(), Superpower::Us);
         assert_eq!(game.decider(), Superpower::Ussr, "the USSR places its own influence");
         assert!(matches!(game.abandon(), Err(GameError::CannotAbandonEvent)), "the USSR can't take back the US player's choice");
@@ -845,7 +844,7 @@ mod choices {
         scenario.hands.push_to_hand(active, id);
         let mut game = Game::from_scenario(&scenario);
         game.play_card(&cards, id).unwrap();
-        let outcome = game.play_event(&map, &cards, &mut twilight_struggle::Dice::from_seed(1)).unwrap();
+        let outcome = game.play_event(&map, &cards).unwrap();
         (map, game, outcome)
     }
 
@@ -1005,7 +1004,7 @@ mod turn_effects {
             let side = game.active();
             assert!(in_force(&game).is_empty(), "{state}: starts with nothing in force");
             play(&mut game, &cards, card);
-            game.play_event(&map, &cards, &mut twilight_struggle::Dice::from_seed(1)).unwrap_or_else(|e| panic!("{state}: {e}"));
+            game.play_event(&map, &cards).unwrap_or_else(|e| panic!("{state}: {e}"));
             assert_eq!(in_force(&game), vec![number], "{state}");
             assert!(game.operation().is_none(), "{state}: resolves at once");
             if state != "north-sea-oil" {
@@ -1018,12 +1017,12 @@ mod turn_effects {
     fn red_scare_and_death_squads_favour_the_side_that_played_them() {
         let (map, cards, mut game) = load("red-scare");
         play(&mut game, &cards, "Red Scare/Purge");
-        game.play_event(&map, &cards, &mut twilight_struggle::Dice::from_seed(1)).unwrap();
+        game.play_event(&map, &cards).unwrap();
         assert_eq!(game.status().effects.red_scare, Some(Superpower::Us), "the USSR played it: the US is penalised");
 
         let (map, cards, mut game) = load("latin-american-death-squads");
         play(&mut game, &cards, "Latin American Death Squads");
-        game.play_event(&map, &cards, &mut twilight_struggle::Dice::from_seed(1)).unwrap();
+        game.play_event(&map, &cards).unwrap();
         assert_eq!(game.status().effects.death_squads, Some(Superpower::Ussr));
     }
 
@@ -1031,7 +1030,7 @@ mod turn_effects {
     fn vietnam_revolts_adds_two_ussr_influence_to_vietnam() {
         let (map, cards, mut game) = load("vietnam-revolts");
         play(&mut game, &cards, "Vietnam Revolts");
-        game.play_event(&map, &cards, &mut twilight_struggle::Dice::from_seed(1)).unwrap();
+        game.play_event(&map, &cards).unwrap();
         assert_eq!(game.board().influence(id(&map, "Vietnam"), Superpower::Ussr), 2);
     }
 
@@ -1039,7 +1038,7 @@ mod turn_effects {
     fn chernobyl_is_designated_by_mode_and_bars_the_ussr_for_the_rest_of_the_turn() {
         let (map, cards, mut game) = load("chernobyl");
         play(&mut game, &cards, "Chernobyl");
-        let outcome = game.play_event(&map, &cards, &mut twilight_struggle::Dice::from_seed(1)).unwrap();
+        let outcome = game.play_event(&map, &cards).unwrap();
         assert!(matches!(outcome, EventOutcome::Pending { chooser: Superpower::Us, .. }));
         assert!(game.confirm().is_err(), "no region picked yet");
         let europe = Region::ALL.iter().position(|&r| r == Region::Europe).unwrap();
@@ -1056,7 +1055,7 @@ mod turn_effects {
     fn backspace_first_clears_a_chosen_region_then_abandons_the_event() {
         let (map, cards, mut game) = load("chernobyl");
         play(&mut game, &cards, "Chernobyl");
-        game.play_event(&map, &cards, &mut twilight_struggle::Dice::from_seed(1)).unwrap();
+        game.play_event(&map, &cards).unwrap();
         assert!(!game.clear_event_mode(&map), "nothing chosen yet: fall through to abandon");
         game.choose_mode(&map, 2).unwrap();
         assert!(game.clear_event_mode(&map));
@@ -1293,6 +1292,7 @@ mod turn_effects {
 // The five war cards (`data/states/wars.json`): the first events that roll.
 mod wars {
     use super::fixtures;
+    use twilight_struggle::events::WarResult;
     use twilight_struggle::{CardCatalog, CountryId, Dice, EventOutcome, Game, GameError, Operation, RollOutcome, Superpower, WorldMap};
 
     fn id(map: &WorldMap, name: &str) -> CountryId {
@@ -1312,11 +1312,18 @@ mod wars {
         (map, cards, game)
     }
 
+    /// Plays the card's event and rolls `die` on `target`, as `e` then `r` would.
+    fn declare(game: &mut Game, map: &WorldMap, cards: &CardCatalog, target: &str, die: u8) -> WarResult {
+        assert!(matches!(game.play_event(map, cards).unwrap(), EventOutcome::Pending { .. }));
+        let RollOutcome::War(result) = game.roll(map, id(map, target), &mut Dice::from_seed(seed_for(die))).unwrap() else { panic!() };
+        result
+    }
+
     #[test]
     fn korean_war_wins_on_a_modified_four_and_replaces_us_influence() {
         let (map, cards, mut game) = load("korean-war", "Korean War");
         // Japan is US-controlled: a 5 becomes a 4, which wins.
-        let EventOutcome::War(result) = game.play_event(&map, &cards, &mut Dice::from_seed(seed_for(5))).unwrap() else { panic!() };
+        let result = declare(&mut game, &map, &cards, "South Korea", 5);
         assert!(result.success);
         assert_eq!(result.modifier.total(), -1);
         let sk = id(&map, "South Korea");
@@ -1330,7 +1337,7 @@ mod wars {
     #[test]
     fn korean_war_fails_below_four_and_changes_nothing_but_the_track() {
         let (map, cards, mut game) = load("korean-war", "Korean War");
-        let EventOutcome::War(result) = game.play_event(&map, &cards, &mut Dice::from_seed(seed_for(4))).unwrap() else { panic!() };
+        let result = declare(&mut game, &map, &cards, "South Korea", 4);
         assert!(!result.success, "a 4 is a 3 after Japan");
         assert_eq!(game.status().vp, 0);
         let sk = id(&map, "South Korea");
@@ -1341,17 +1348,17 @@ mod wars {
     #[test]
     fn two_us_neighbours_need_a_six() {
         let (map, cards, mut game) = load("korean-war-two-us-neighbours", "Korean War");
-        let EventOutcome::War(result) = game.play_event(&map, &cards, &mut Dice::from_seed(seed_for(5))).unwrap() else { panic!() };
+        let result = declare(&mut game, &map, &cards, "South Korea", 5);
         assert!(!result.success);
         let (map, cards, mut game) = load("korean-war-two-us-neighbours", "Korean War");
-        let EventOutcome::War(result) = game.play_event(&map, &cards, &mut Dice::from_seed(seed_for(6))).unwrap() else { panic!() };
+        let result = declare(&mut game, &map, &cards, "South Korea", 6);
         assert!(result.success);
     }
 
     #[test]
     fn a_winning_war_can_end_the_game_on_vp() {
         let (map, cards, mut game) = load("korean-war-vp-win", "Korean War");
-        game.play_event(&map, &cards, &mut Dice::from_seed(seed_for(6))).unwrap();
+        declare(&mut game, &map, &cards, "South Korea", 6);
         assert_eq!(game.status().vp, -20);
         let victory = game.winner().expect("20 VP ends the game");
         assert_eq!(victory.side, Superpower::Ussr);
@@ -1361,7 +1368,7 @@ mod wars {
     #[test]
     fn arab_israeli_counts_a_us_controlled_israel() {
         let (map, cards, mut game) = load("arab-israeli-war", "Arab-Israeli War");
-        let EventOutcome::War(result) = game.play_event(&map, &cards, &mut Dice::from_seed(seed_for(4))).unwrap() else { panic!() };
+        let result = declare(&mut game, &map, &cards, "Israel", 4);
         assert!(result.modifier.target_itself);
         assert!(!result.success);
     }
@@ -1369,14 +1376,14 @@ mod wars {
     #[test]
     fn camp_david_prevents_arab_israeli_war() {
         let (map, cards, mut game) = load("arab-israeli-war-after-camp-david", "Arab-Israeli War");
-        assert!(matches!(game.play_event(&map, &cards, &mut Dice::from_seed(1)), Err(GameError::EventPrevented { .. })));
+        assert!(matches!(game.play_event(&map, &cards), Err(GameError::EventPrevented { .. })));
         assert!(!game.legal_actions(&map, &cards).contains(&twilight_struggle::Action::Event));
     }
 
     #[test]
     fn indo_pakistani_war_opens_a_session_the_player_can_back_out_of() {
         let (map, cards, mut game) = load("indo-pakistani-war-us", "Indo-Pakistani War");
-        assert!(matches!(game.play_event(&map, &cards, &mut Dice::from_seed(1)).unwrap(), EventOutcome::Pending { .. }));
+        assert!(matches!(game.play_event(&map, &cards).unwrap(), EventOutcome::Pending { .. }));
         assert!(matches!(game.operation(), Some(Operation::War(_))));
         assert!(matches!(game.confirm(), Err(GameError::WarNotRolled)));
         assert!(matches!(game.cancel(), Err(GameError::WarNotRolled)));
@@ -1391,7 +1398,7 @@ mod wars {
     #[test]
     fn rolling_on_the_chosen_target_resolves_and_closes_the_event() {
         let (map, cards, mut game) = load("indo-pakistani-war-us", "Indo-Pakistani War");
-        game.play_event(&map, &cards, &mut Dice::from_seed(1)).unwrap();
+        game.play_event(&map, &cards).unwrap();
         let india = id(&map, "India");
         // Pakistan is USSR-controlled, so attacking India is -1: a 5 wins.
         let RollOutcome::War(result) = game.roll(&map, india, &mut Dice::from_seed(seed_for(5))).unwrap() else { panic!() };
@@ -1407,7 +1414,7 @@ mod wars {
     #[test]
     fn brush_war_wins_on_three_for_one_vp_and_adds_three_mil_ops() {
         let (map, cards, mut game) = load("brush-war-ussr", "Brush War");
-        game.play_event(&map, &cards, &mut Dice::from_seed(1)).unwrap();
+        game.play_event(&map, &cards).unwrap();
         // Iran is US-controlled (-1): a 4 is a 3, which wins.
         let RollOutcome::War(result) = game.roll(&map, id(&map, "Afghanistan"), &mut Dice::from_seed(seed_for(4))).unwrap() else { panic!() };
         assert!(result.success);
@@ -1418,7 +1425,7 @@ mod wars {
     #[test]
     fn iran_iraq_war_is_removed_after_its_event() {
         let (map, cards, mut game) = load("iran-iraq-war-us", "Iran-Iraq War");
-        game.play_event(&map, &cards, &mut Dice::from_seed(1)).unwrap();
+        game.play_event(&map, &cards).unwrap();
         game.roll(&map, id(&map, "Iraq"), &mut Dice::from_seed(seed_for(6))).unwrap();
         assert!(game.removed_from_game().contains(&cards.id_by_name("Iran-Iraq War").unwrap()));
     }

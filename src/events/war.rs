@@ -143,15 +143,6 @@ pub fn eligible_targets(map: &WorldMap, card: CardId) -> Vec<CountryId> {
         .collect()
 }
 
-/// The target of a war with exactly one candidate (Korean War, Arab-Israeli
-/// War) — these roll as soon as they're played, with nothing to choose.
-pub fn sole_target(map: &WorldMap, card: CardId) -> Option<CountryId> {
-    match eligible_targets(map, card).as_slice() {
-        [only] => Some(*only),
-        _ => None,
-    }
-}
-
 /// What lowers the die roll: each enemy-controlled neighbour of the
 /// target, plus the target itself where the card says so.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -396,10 +387,4 @@ mod tests {
         assert_eq!(resolve(&map, &board, CardId(102), t, Superpower::Ussr, 6).unwrap().vp_delta, -2);
     }
 
-    #[test]
-    fn only_korean_and_arab_israeli_have_a_sole_target() {
-        let map = map();
-        let sole: Vec<u8> = WARS.iter().map(|&(n, _)| n).filter(|&n| sole_target(&map, CardId(n)).is_some()).collect();
-        assert_eq!(sole, vec![11, 13]);
-    }
 }
