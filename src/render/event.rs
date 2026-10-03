@@ -46,6 +46,9 @@ pub fn render_event_result(
     if let Some((before, after)) = result.defcon {
         lines.push((format!("DEFCON {before} → {after}"), Style::color(Color::Muted).bold()));
     }
+    if let Some(t) = &result.china {
+        lines.push((format!("China Card → {} ({})", t.to, if t.face_up { "face up" } else { "face down" }), Style::color(side_color(t.to)).bold()));
+    }
     if let Some(effect) = &result.ongoing {
         if !lines.is_empty() {
             lines.push((String::new(), Style::default()));
@@ -107,7 +110,7 @@ mod tests {
     use crate::render::ColorMode;
 
     fn result(ongoing: Option<OngoingEffect>, vp_delta: i8) -> EffectResult {
-        EffectResult { card: CardId(25), player: Superpower::Us, influence: Vec::new(), vp_delta, defcon: None, ongoing, lasting: None, cancels: None }
+        EffectResult { card: CardId(25), player: Superpower::Us, influence: Vec::new(), vp_delta, defcon: None, ongoing, lasting: None, cancels: None, china: None }
     }
 
     #[test]

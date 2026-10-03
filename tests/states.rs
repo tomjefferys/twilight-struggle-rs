@@ -1129,7 +1129,7 @@ mod turn_effects {
         let (map, cards, mut game) = load("vietnam-revolts-active");
         play(&mut game, &cards, "Fidel");
         game.begin(OperationKind::Influence).unwrap();
-        assert!(game.operation().unwrap().pending_bonus().is_some());
+        assert!(!game.operation().unwrap().pending_bonus().is_empty());
         for _ in 0..3 {
             game.place(&map, id(&map, "Vietnam")).expect("2 ops + the bonus = 3 points");
         }
@@ -1694,5 +1694,106 @@ mod lasting {
         game.confirm().unwrap();
         assert_eq!(game.status().vp, -3);
         assert!(game.status().lasting.we_will_bury_you.is_none());
+    }
+}
+
+mod china {
+    use super::*;
+    use twilight_struggle::game::GameError;
+    use twilight_struggle::{OperationKind, CHINA_CARD};
+
+    fn load(name: &str) -> (WorldMap, CardCatalog, Game) {
+        let (map, cards, lib) = fixtures();
+        let reference = format!("china/{name}");
+        let (scenario, _) = lib.load(&map, &cards, &reference).unwrap_or_else(|e| panic!("loading {reference}: {e}"));
+        (map, cards, Game::from_scenario(&scenario))
+    }
+
+    /// Loads `name`, plays `card` and resolves its event.
+    fn event(name: &str, card: &str) -> (WorldMap, CardCatalog, Game) {
+        let (map, cards, mut game) = load(name);
+        game.play_card(&cards, cards.id_by_name(card).unwrap()).unwrap();
+        game.play_event(&map, &cards).unwrap_or_else(|e| panic!("{name}: play_event: {e}"));
+        (map, cards, game)
+    }
+
+    #[test]
+    fn cultural_revolution_takes_the_china_card_for_the_ussr_face_up_or_pays_a_vp() {
+        let (_, cards, game) = event("cultural-revolution-us-holds", "Cultural Revolution");
+        assert_eq!((game.status().china_card, game.status().china_card_face_up), (Superpower::Ussr, true));
+        assert_eq!(game.status().vp, 0);
+        assert!(game.removed_from_game().contains(&cards.id_by_name("Cultural Revolution").unwrap()), "removed after its event");
+
+        let (_, _, game) = event("cultural-revolution-ussr-holds", "Cultural Revolution");
+        assert_eq!(game.status().china_card, Superpower::Ussr);
+        assert_eq!(game.status().vp, -1);
+    }
+
+    #[test]
+    fn nixon_gives_the_us_the_china_card_face_down_or_pays_two_vp() {
+        let (_, cards, mut game) = event("nixon-ussr-holds", "Nixon Plays the China Card");
+        assert_eq!((game.status().china_card, game.status().china_card_face_up), (Superpower::Us, false));
+        assert_eq!(game.status().vp, 0);
+        // It's the USSR's turn now; once the US is next to act, the face-down card can't be played.
+        game.status_mut().active = Superpower::Us;
+        assert!(matches!(game.play_card(&cards, CHINA_CARD), Err(GameError::ChinaCardFaceDown)));
+
+        let (_, _, game) = event("nixon-us-holds", "Nixon Plays the China Card");
+        assert_eq!(game.status().vp, 2);
+        assert_eq!(game.status().china_card, Superpower::Us);
+    }
+
+    #[test]
+    fn ussuri_takes_the_china_card_face_up_when_the_ussr_has_it() {
+        let (map, cards, mut game) = load("ussuri-ussr-holds");
+        game.play_card(&cards, cards.id_by_name("Ussuri River Skirmish").unwrap()).unwrap();
+        let outcome = game.play_event(&map, &cards).unwrap();
+        assert!(matches!(outcome, EventOutcome::Effect(_)), "nothing to choose, so it resolves on the spot");
+        assert_eq!((game.status().china_card, game.status().china_card_face_up), (Superpower::Us, true));
+    }
+
+    #[test]
+    fn ussuri_adds_four_us_influence_in_asia_when_the_us_already_has_it() {
+        let (map, cards, mut game) = load("ussuri-us-holds");
+        game.play_card(&cards, cards.id_by_name("Ussuri River Skirmish").unwrap()).unwrap();
+        let outcome = game.play_event(&map, &cards).unwrap();
+        assert!(matches!(outcome, EventOutcome::Pending { chooser: Superpower::Us, .. }));
+        let id = |n: &str| map.id_by_name(n).unwrap();
+        assert!(game.place(&map, id("Poland")).is_err(), "Asia only");
+        for n in ["Japan", "Japan", "Taiwan", "Taiwan"] {
+            game.place(&map, id(n)).unwrap();
+        }
+        assert!(game.place(&map, id("Japan")).is_err(), "max 2 per country");
+        assert!(game.place(&map, id("India")).is_err(), "only 4 points");
+        game.confirm().unwrap();
+        assert_eq!(game.board().influence(id("Japan"), Superpower::Us), 2);
+        assert_eq!(game.status().china_card, Superpower::Us, "unchanged");
+    }
+
+    #[test]
+    fn the_china_card_is_worth_one_more_op_when_spent_wholly_in_asia() {
+        let (map, cards, mut game) = load("china-card-asia-bonus");
+        let japan = map.id_by_name("Japan").unwrap();
+        game.play_card(&cards, CHINA_CARD).unwrap();
+        game.begin(OperationKind::Influence).unwrap();
+        assert!(!game.operation().unwrap().pending_bonus().is_empty());
+        for _ in 0..5 {
+            game.place(&map, japan).expect("4 ops + the Asia bonus = 5 points");
+        }
+        assert!(game.place(&map, japan).is_err());
+        game.confirm().unwrap();
+        assert_eq!((game.status().china_card, game.status().china_card_face_up), (Superpower::Us, false));
+    }
+
+    #[test]
+    fn a_point_outside_asia_forfeits_the_china_cards_bonus_op() {
+        let (map, cards, mut game) = load("china-card-asia-bonus");
+        game.play_card(&cards, CHINA_CARD).unwrap();
+        game.begin(OperationKind::Influence).unwrap();
+        let poland = map.id_by_name("Poland").unwrap();
+        for _ in 0..4 {
+            game.place(&map, poland).unwrap();
+        }
+        assert!(game.place(&map, map.id_by_name("Japan").unwrap()).is_err(), "only the card's own 4 ops");
     }
 }

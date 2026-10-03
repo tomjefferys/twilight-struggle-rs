@@ -1,0 +1,50 @@
+{
+  "states": [
+    {
+      "name": "cultural-revolution-us-holds",
+      "description": "USSR to act, the US holds the China Card (face up). Cultural Revolution makes the US hand it over face up.",
+      "status": {"active": "Ussr", "china_card": "Us", "china_card_face_up": true},
+      "hands": {"us": ["Duck and Cover"], "ussr": ["Cultural Revolution"]}
+    },
+    {
+      "name": "cultural-revolution-ussr-holds",
+      "description": "USSR to act and already holding the China Card: Cultural Revolution pays the USSR 1 VP instead.",
+      "status": {"active": "Ussr", "china_card": "Ussr", "china_card_face_up": true},
+      "hands": {"us": ["Duck and Cover"], "ussr": ["Cultural Revolution"]}
+    },
+    {
+      "name": "nixon-ussr-holds",
+      "description": "US to act, the USSR holds the China Card (face up). Nixon passes it to the US face down.",
+      "status": {"active": "Us", "china_card": "Ussr", "china_card_face_up": true},
+      "hands": {"us": ["Nixon Plays the China Card"], "ussr": ["Fidel"]}
+    },
+    {
+      "name": "nixon-us-holds",
+      "description": "US to act and already holding the China Card (face down): Nixon pays the US 2 VP instead.",
+      "status": {"active": "Us", "china_card": "Us", "china_card_face_up": false},
+      "hands": {"us": ["Nixon Plays the China Card"], "ussr": ["Fidel"]}
+    },
+    {
+      "name": "ussuri-ussr-holds",
+      "description": "US to act, the USSR holds the China Card (face up). Ussuri River Skirmish passes it to the US face up, no choices.",
+      "status": {"active": "Us", "china_card": "Ussr", "china_card_face_up": true},
+      "hands": {"us": ["Ussuri River Skirmish"], "ussr": ["Fidel"]}
+    },
+    {
+      "name": "ussuri-us-holds",
+      "description": "US to act and already holding the China Card: Ussuri River Skirmish adds 4 US influence in Asia, at most 2 per country.",
+      "status": {"active": "Us", "china_card": "Us", "china_card_face_up": true},
+      "hands": {"us": ["Ussuri River Skirmish"], "ussr": ["Fidel"]}
+    },
+    {
+      "name": "china-card-asia-bonus",
+      "description": "USSR to act with the face-up China Card (4 ops): spent wholly in Asia it is worth 5. The USSR has 1 influence in Japan.",
+      "status": {"active": "Ussr", "china_card": "Ussr", "china_card_face_up": true},
+      "influence": {
+        "Japan": [0, 1],
+        "Poland": [0, 3]
+      },
+      "hands": {"us": ["Duck and Cover"], "ussr": ["Fidel"]}
+    }
+  ]
+}

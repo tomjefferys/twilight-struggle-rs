@@ -4,7 +4,7 @@ Which of the 110 cards have their **event** implemented (`events::is_implemented
 Every card can already be played for its ops value; this tracks the event text only.
 `tests/cards_progress.rs` fails if a ✅ here disagrees with the code, so update both together.
 
-**Implemented: 68 / 110**
+**Implemented: 71 / 110**
 
 - `events::scoring` — the seven scoring cards.
 - `events::effects` — fixed influence / VP / DEFCON effects with no choices or die rolls.
@@ -20,7 +20,7 @@ Every card can already be played for its ops value; this tracks the event text o
 | 3 | Middle East Scoring | Both | ✅ |  |
 | 4 | Duck and Cover | US | ✅ |  |
 | 5 | Five Year Plan | US |  |  |
-| 6 | The China Card | Both |  | Ops only; passes to the opponent |
+| 6 | The China Card | Both |  | Ops only; +1 op if all spent in Asia (`OpsBonus`); passes face down; end-of-Turn-10 VP pending (no final scoring yet) |
 | 7 | Socialist Governments | USSR | ✅ | Choice; prevented by #83 (modelled) |
 | 8 | Fidel | USSR | ✅ |  |
 | 9 | Vietnam Revolts | USSR | ✅ | Turn-long: +1 ops for a card spent wholly in Southeast Asia |
@@ -72,7 +72,7 @@ Every card can already be played for its ops value; this tracks the event text o
 | 55 | Willy Brandt | USSR | ✅ | USSR +1 VP, +1 West Germany; NATO exempts West Germany; 'cancelled by #96' pending |
 | 56 | Muslim Revolution | USSR | ✅ | Choice; prevented by #110 (modelled) |
 | 57 | ABM Treaty | Both |  |  |
-| 58 | Cultural Revolution | USSR |  |  |
+| 58 | Cultural Revolution | USSR | ✅ | US holds China Card → USSR gets it face up; else +1 VP (`EffectResult::china`) |
 | 59 | Flower Power | USSR | ✅ | Lasting: USSR +2 VP per US war card (ops or event); cancelled by #97 |
 | 60 | U2 Incident | USSR |  |  |
 | 61 | OPEC | USSR |  |  |
@@ -85,12 +85,12 @@ Every card can already be played for its ops value; this tracks the event text o
 | 68 | John Paul II Elected Pope | US | ✅ | 'allows #101' clause pending #101 |
 | 69 | Latin American Death Squads | Both | ✅ | Turn-long: coup roll ±1 in Central/South America |
 | 70 | OAS Founded | US | ✅ | Choice |
-| 71 | Nixon Plays the China Card | US |  |  |
+| 71 | Nixon Plays the China Card | US | ✅ | USSR holds China Card → US gets it face down; else +2 VP |
 | 72 | Sadat Expels Soviets | US | ✅ |  |
 | 73 | Shuttle Diplomacy | US | ✅ | Lasting: −1 USSR battleground at the next Asia/Middle East scoring, then discarded |
 | 74 | The Voice of America | US |  |  |
 | 75 | Liberation Theology | USSR | ✅ | Choice |
-| 76 | Ussuri River Skirmish | US |  |  |
+| 76 | Ussuri River Skirmish | US | ✅ | Choice: USSR holds China Card → US gets it face up; else +4 US in Asia (max 2 each) |
 | 77 | “Ask Not What Your Country…” | US |  |  |
 | 78 | Alliance for Progress | US | ✅ |  |
 | 79 | Africa Scoring | Both | ✅ |  |

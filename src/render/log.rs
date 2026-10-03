@@ -295,6 +295,9 @@ fn event_detail(map: &WorldMap, cards: &CardCatalog, result: &EffectResult, vp_a
     if let Some((before, after)) = result.defcon {
         parts.push(format!("DEFCON {before}→{after}"));
     }
+    if let Some(t) = &result.china {
+        parts.push(format!("China Card→{} ({})", t.to, if t.face_up { "face up" } else { "face down" }));
+    }
     if result.vp_delta != 0 {
         parts.push(format!("{:+} VP (now {vp_after})", result.vp_delta));
     }

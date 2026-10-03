@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::board::Board;
 use crate::cards::CardId;
-use crate::country::{CountryId, Region, SubRegion, Superpower};
+use crate::country::{Area, Country, CountryId, Region, SubRegion, Superpower};
 use crate::map::WorldMap;
 
 /// The most operations points a card can ever be worth (Containment's and
@@ -31,6 +31,27 @@ pub fn short_name(card: CardId) -> &'static str {
         93 => "Iran-Contra",
         _ => "event",
     }
+}
+
+/// An extra op for an operation spent wholly inside `area`, from `card`
+/// (the China Card's Asia, Vietnam Revolts' Southeast Asia). An operation
+/// holds a list of these and tracks which still apply with a bitmask
+/// (bit *i* = bonus *i*), so two can stack.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct OpsBonus {
+    pub area: Area,
+    pub ops: u8,
+    pub card: CardId,
+}
+
+/// Which of `bonuses` cover `country`, as a bitmask.
+pub fn bonus_membership(bonuses: &[OpsBonus], country: &Country) -> u8 {
+    bonuses.iter().enumerate().filter(|(_, b)| country.is_in_area(b.area)).fold(0, |m, (i, _)| m | 1 << i)
+}
+
+/// The ops the bonuses in `mask` add up to.
+pub fn bonus_ops(bonuses: &[OpsBonus], mask: u8) -> u8 {
+    bonuses.iter().enumerate().filter(|(i, _)| mask & (1 << i) != 0).map(|(_, b)| b.ops).sum()
 }
 
 /// One card's turn-long effect, as played — what an event produces and
@@ -206,10 +227,18 @@ impl TurnEffects {
         if side == Superpower::Ussr { self.chernobyl } else { None }
     }
 
-    /// An extra op for a card `side` spends entirely in the given
-    /// sub-region: Vietnam Revolts.
-    pub fn sub_region_bonus(&self, side: Superpower) -> Option<(SubRegion, u8)> {
-        (self.vietnam_revolts && side == Superpower::Ussr).then_some((SubRegion::SoutheastAsia, 1))
+    /// The extra ops `side`'s `card` earns for being spent wholly in one
+    /// area: Vietnam Revolts (USSR, Southeast Asia) and the China Card's
+    /// own Asia op. They stack.
+    pub fn ops_bonuses(&self, side: Superpower, card: CardId) -> Vec<OpsBonus> {
+        let mut bonuses = Vec::new();
+        if card == crate::cards::CHINA_CARD {
+            bonuses.push(OpsBonus { area: Area::Region(Region::Asia), ops: 1, card });
+        }
+        if self.vietnam_revolts && side == Superpower::Ussr {
+            bonuses.push(OpsBonus { area: Area::Sub(SubRegion::SoutheastAsia), ops: 1, card: CardId(9) });
+        }
+        bonuses
     }
 
     /// Whether a US coup in a battleground leaves DEFCON alone: Nuclear Subs.
@@ -474,7 +503,9 @@ mod tests {
         assert!(t.coup_vp(Us).is_some() && t.coup_vp(Ussr).is_none());
         assert_eq!(t.extra_rounds(Us), 1);
         assert_eq!(t.extra_rounds(Ussr), 0);
-        assert!(t.sub_region_bonus(Ussr).is_some() && t.sub_region_bonus(Us).is_none());
+        assert_eq!(t.ops_bonuses(Ussr, CardId(8)).len(), 1);
+        assert!(t.ops_bonuses(Us, CardId(8)).is_empty());
+        assert_eq!(t.ops_bonuses(Ussr, crate::cards::CHINA_CARD).len(), 2, "the China Card's Asia op stacks with Vietnam Revolts");
     }
 
     #[test]

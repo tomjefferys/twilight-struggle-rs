@@ -162,8 +162,8 @@ fn ops_text(status: &GameStatus, card: &Card) -> String {
         let parts: Vec<String> = mods.iter().map(|&(id, m)| format!("{m:+} {}", short_name(id))).collect();
         text.push_str(&format!(": {} {}", card.ops, parts.join(" ")));
     }
-    if let Some((sub, n)) = status.effects.sub_region_bonus(status.active) {
-        text.push_str(&format!(", +{n} if all in {sub}"));
+    for b in status.effects.ops_bonuses(status.active, card.id) {
+        text.push_str(&format!(", +{} if all in {}", b.ops, b.area));
     }
     text
 }

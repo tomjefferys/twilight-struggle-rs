@@ -19,7 +19,8 @@ use std::collections::HashMap;
 use std::fmt;
 
 use crate::board::Board;
-use crate::country::{CountryId, Region, SubRegion, Superpower};
+use crate::country::{CountryId, Region, Superpower};
+use crate::ongoing::{bonus_membership, bonus_ops, OpsBonus};
 use crate::map::WorldMap;
 
 /// One step in the placement history, so undoing it can refund the exact
@@ -29,8 +30,8 @@ use crate::map::WorldMap;
 struct Step {
     id: CountryId,
     cost: u8,
-    /// Whether `id` is in the sub-region Vietnam Revolts' bonus needs.
-    in_bonus_sub: bool,
+    /// Which of the placement's bonuses `id` is inside (bit per bonus).
+    in_bonus: u8,
 }
 
 /// A staged influence placement: operation points a player has committed
@@ -59,8 +60,8 @@ pub struct InfluencePlacement {
     pending: HashMap<CountryId, u8>,
     /// A region an ongoing event (Chernobyl) bars this side from placing in.
     banned: Option<Region>,
-    /// An extra op for a card spent wholly in one sub-region (Vietnam Revolts).
-    bonus: Option<(SubRegion, u8)>,
+    /// Extra ops for a card spent wholly in one area (China Card, Vietnam Revolts).
+    bonuses: Vec<OpsBonus>,
 }
 
 /// Why a placement was refused.
@@ -110,7 +111,7 @@ impl InfluencePlacement {
             history: Vec::new(),
             pending: HashMap::new(),
             banned: None,
-            bonus: None,
+            bonuses: Vec::new(),
         }
     }
 
@@ -120,16 +121,24 @@ impl InfluencePlacement {
         self
     }
 
-    /// Grants `n` extra ops while every point placed is in `sub` — Vietnam
-    /// Revolts' effect on the USSR.
-    pub fn with_bonus(mut self, bonus: Option<(SubRegion, u8)>) -> Self {
-        self.bonus = bonus;
+    /// Grants extra ops while every point placed is inside a bonus's area.
+    pub fn with_bonuses(mut self, bonuses: Vec<OpsBonus>) -> Self {
+        self.bonuses = bonuses;
         self
     }
 
-    /// The sub-region bonus on offer, for display.
-    pub fn bonus(&self) -> Option<(SubRegion, u8)> {
-        self.bonus
+    /// The bonuses on offer, for display.
+    pub fn bonuses(&self) -> &[OpsBonus] {
+        &self.bonuses
+    }
+
+    /// The bonuses every point placed so far — and `extra`, a point about
+    /// to be placed — lies inside (nothing placed and no `extra`: none).
+    fn bonus_mask(&self, extra: Option<u8>) -> u8 {
+        if self.history.is_empty() && extra.is_none() {
+            return 0;
+        }
+        self.history.iter().fold(extra.unwrap_or(u8::MAX), |m, s| m & s.in_bonus)
     }
 
     /// The region placement is barred in, for display.
@@ -144,10 +153,7 @@ impl InfluencePlacement {
     /// The ops this action is worth: the card's, plus the sub-region bonus
     /// while at least one point is placed and every one is inside it.
     pub fn ops_total(&self) -> u8 {
-        match self.bonus {
-            Some((_, n)) if !self.history.is_empty() && self.history.iter().all(|s| s.in_bonus_sub) => self.ops_total + n,
-            _ => self.ops_total,
-        }
+        self.ops_total + bonus_ops(&self.bonuses, self.bonus_mask(None))
     }
 
     pub fn ops_spent(&self) -> u8 {
@@ -224,11 +230,8 @@ impl InfluencePlacement {
     /// the sub-region bonus counts only if this point, like every earlier
     /// one, is inside it.
     fn available_if_placed(&self, map: &WorldMap, id: CountryId) -> u8 {
-        let in_bonus_sub = self.bonus.is_some_and(|(sub, _)| map.country(id).is_in_sub_region(sub));
-        match self.bonus {
-            Some((_, n)) if in_bonus_sub && self.history.iter().all(|s| s.in_bonus_sub) => self.ops_total + n,
-            _ => self.ops_total,
-        }
+        let in_bonus = bonus_membership(&self.bonuses, map.country(id));
+        self.ops_total + bonus_ops(&self.bonuses, self.bonus_mask(Some(in_bonus)))
     }
 
     /// Whether a point in `id` would be accepted right now — a legal
@@ -255,7 +258,7 @@ impl InfluencePlacement {
             });
         }
         let cost = self.cost(map, id);
-        let in_bonus_sub = self.bonus.is_some_and(|(sub, _)| map.country(id).is_in_sub_region(sub));
+        let in_bonus = bonus_membership(&self.bonuses, map.country(id));
         let available = self.available_if_placed(map, id);
         if self.ops_spent + cost > available {
             return Err(PlacementError::InsufficientOps {
@@ -268,7 +271,7 @@ impl InfluencePlacement {
         self.board.add_influence(id, self.side, 1);
         self.ops_spent += cost;
         *self.pending.entry(id).or_insert(0) += 1;
-        self.history.push(Step { id, cost, in_bonus_sub });
+        self.history.push(Step { id, cost, in_bonus });
         Ok(cost)
     }
 
@@ -590,8 +593,8 @@ mod tests {
         let mut board = Board::new(&map);
         board.set_influence(id(&map, "Vietnam"), Ussr, 2);
         board.set_influence(id(&map, "Thailand"), Ussr, 1);
-        let bonus = Some((SubRegion::SoutheastAsia, 1));
-        let mut p = InfluencePlacement::new(Ussr, 2, &board).with_bonus(bonus);
+        let bonus = vec![OpsBonus { area: crate::country::Area::Sub(SubRegion::SoutheastAsia), ops: 1, card: crate::cards::CardId(9) }];
+        let mut p = InfluencePlacement::new(Ussr, 2, &board).with_bonuses(bonus);
         assert_eq!((p.ops_total(), p.remaining()), (2, 2), "nothing placed yet: the card's own value");
         p.place(&map, id(&map, "Vietnam")).unwrap();
         p.place(&map, id(&map, "Vietnam")).unwrap();
@@ -605,5 +608,36 @@ mod tests {
         p.unplace(id(&map, "Vietnam")).unwrap();
         p.unplace(id(&map, "Vietnam")).unwrap();
         assert_eq!((p.ops_total(), p.remaining()), (2, 2), "empty again: back to the card's value");
+    }
+
+    #[test]
+    fn the_china_cards_asia_op_needs_every_point_in_asia_and_stacks_with_vietnam() {
+        use crate::cards::{CardId, CHINA_CARD};
+        use crate::country::{Area, Region, SubRegion};
+        let map = map();
+        let mut board = Board::new(&map);
+        board.set_influence(id(&map, "Japan"), Ussr, 1);
+        board.set_influence(id(&map, "Vietnam"), Ussr, 1);
+        let asia = OpsBonus { area: Area::Region(Region::Asia), ops: 1, card: CHINA_CARD };
+        let sea = OpsBonus { area: Area::Sub(SubRegion::SoutheastAsia), ops: 1, card: CardId(9) };
+
+        let mut p = InfluencePlacement::new(Ussr, 1, &board).with_bonuses(vec![asia]);
+        p.place(&map, id(&map, "Japan")).unwrap();
+        assert!(p.can_place(&map, id(&map, "Vietnam")), "the fifth op is the Asia bonus");
+        assert!(!p.can_place(&map, id(&map, "Poland")));
+        p.place(&map, id(&map, "Vietnam")).unwrap();
+        assert_eq!((p.ops_total(), p.remaining()), (2, 0));
+
+        let mut p = InfluencePlacement::new(Ussr, 1, &board).with_bonuses(vec![asia, sea]);
+        p.place(&map, id(&map, "Vietnam")).unwrap();
+        p.place(&map, id(&map, "Vietnam")).unwrap();
+        p.place(&map, id(&map, "Vietnam")).unwrap();
+        assert_eq!(p.ops_total(), 3, "all in Southeast Asia earns both bonuses");
+        // One point in Japan (Asia, not Southeast Asia) keeps only the China Card's op.
+        let mut p = InfluencePlacement::new(Ussr, 1, &board).with_bonuses(vec![asia, sea]);
+        p.place(&map, id(&map, "Vietnam")).unwrap();
+        p.place(&map, id(&map, "Japan")).unwrap();
+        assert_eq!(p.ops_total(), 2);
+        assert!(!p.can_place(&map, id(&map, "Japan")));
     }
 }

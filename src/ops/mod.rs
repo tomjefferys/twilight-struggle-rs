@@ -70,15 +70,15 @@ impl Operation {
         }
     }
 
-    /// An extra op still on offer for spending the card wholly in one
-    /// sub-region (Vietnam Revolts), while nothing has yet been spent or
+    /// Extra ops still on offer for spending the card wholly in one
+    /// area (China Card, Vietnam Revolts), while nothing has yet been spent or
     /// placed outside it — what a header hints at so it isn't a surprise.
-    pub fn pending_bonus(&self) -> Option<(crate::country::SubRegion, u8)> {
+    pub fn pending_bonus(&self) -> Vec<crate::ongoing::OpsBonus> {
         match self {
-            Operation::Influence(p) => p.bonus().filter(|_| p.is_empty()),
-            Operation::Realign(r) => r.sub_region_bonus().filter(|_| r.ops_spent() == 0),
-            Operation::Coup(c) => c.sub_region_bonus().filter(|_| c.ops_spent() == 0),
-            Operation::Event(_) | Operation::War(_) => None,
+            Operation::Influence(p) if p.is_empty() => p.bonuses().to_vec(),
+            Operation::Realign(r) if r.ops_spent() == 0 => r.bonuses(),
+            Operation::Coup(c) if c.ops_spent() == 0 => c.bonuses().to_vec(),
+            _ => Vec::new(),
         }
     }
 

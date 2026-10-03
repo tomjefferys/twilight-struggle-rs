@@ -186,6 +186,23 @@ impl fmt::Display for SubRegion {
     }
 }
 
+/// Somewhere an ops bonus can be confined to: a whole scoring region (the
+/// China Card's Asia) or a sub-region (Vietnam Revolts' Southeast Asia).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Area {
+    Region(Region),
+    Sub(SubRegion),
+}
+
+impl fmt::Display for Area {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Area::Region(r) => write!(f, "{r}"),
+            Area::Sub(s) => write!(f, "{s}"),
+        }
+    }
+}
+
 /// The immutable properties of a country on the board: its name, how hard
 /// it is to control, whether it's fought over by scoring cards, which
 /// region(s) it belongs to, and which countries border it.
@@ -204,6 +221,13 @@ pub struct Country {
 }
 
 impl Country {
+    pub fn is_in_area(&self, area: Area) -> bool {
+        match area {
+            Area::Region(r) => self.region == r,
+            Area::Sub(s) => self.is_in_sub_region(s),
+        }
+    }
+
     pub fn is_in_sub_region(&self, sub_region: SubRegion) -> bool {
         self.sub_regions.contains(&sub_region)
     }

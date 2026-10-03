@@ -31,11 +31,11 @@
 use std::fmt;
 
 use crate::board::Board;
-use crate::country::{CountryId, SubRegion, Superpower};
+use crate::country::{CountryId, Superpower};
 use crate::dice::Dice;
 use crate::map::WorldMap;
 use crate::cards::CardId;
-use crate::ongoing::{LastingEffects, TurnEffects};
+use crate::ongoing::{bonus_membership, bonus_ops, LastingEffects, OpsBonus, TurnEffects};
 
 /// One side's die-roll modifiers for one country, itemised rather than
 /// summed, so the UI can explain the number instead of just showing it.
@@ -245,9 +245,11 @@ pub struct Realignment {
     effects: TurnEffects,
     /// Game-long events that shield countries (NATO, the US/Japan pact).
     lasting: LastingEffects,
-    /// Whether any roll so far targeted outside the sub-region Vietnam
-    /// Revolts' bonus needs — rolls can't be undone, so once set it stays.
-    outside_bonus_sub: bool,
+    /// Extra ops for rolls spent wholly in one area (China Card, Vietnam Revolts).
+    bonuses: Vec<OpsBonus>,
+    /// The bonuses every roll so far has stayed inside (bit per bonus) —
+    /// rolls can't be undone, so a bit once cleared stays cleared.
+    bonus_mask: u8,
     /// The board as it stood when this action started — display only.
     /// `delta` reads it; legality and the modifier/odds maths never do.
     base: Board,
@@ -262,7 +264,8 @@ impl Realignment {
             history: Vec::new(),
             effects: TurnEffects::default(),
             lasting: LastingEffects::default(),
-            outside_bonus_sub: false,
+            bonuses: Vec::new(),
+            bonus_mask: u8::MAX,
             base: board.clone(),
         }
     }
@@ -285,10 +288,16 @@ impl Realignment {
         self.lasting.protects(map, board, self.side, id)
     }
 
-    /// The Southeast Asia-style bonus op still available: only while every
-    /// roll so far has been inside its sub-region.
-    pub fn sub_region_bonus(&self) -> Option<(SubRegion, u8)> {
-        self.effects.sub_region_bonus(self.side).filter(|_| !self.outside_bonus_sub)
+    /// Grants extra ops while every roll stays inside a bonus's area.
+    pub fn with_bonuses(mut self, bonuses: Vec<OpsBonus>) -> Self {
+        self.bonuses = bonuses;
+        self
+    }
+
+    /// The bonus ops still available: those whose area every roll so far
+    /// has stayed inside.
+    pub fn bonuses(&self) -> Vec<OpsBonus> {
+        self.bonuses.iter().enumerate().filter(|(i, _)| self.bonus_mask & (1 << i) != 0).map(|(_, b)| *b).collect()
     }
 
     pub fn side(&self) -> Superpower {
@@ -299,10 +308,7 @@ impl Realignment {
     /// sub-region bonus once a roll has used it (and only while every
     /// roll has stayed inside that sub-region).
     pub fn ops_total(&self) -> u8 {
-        match self.sub_region_bonus() {
-            Some((_, n)) if self.ops_spent > 0 => self.ops_total + n,
-            _ => self.ops_total,
-        }
+        if self.ops_spent > 0 { self.ops_total + bonus_ops(&self.bonuses, self.bonus_mask) } else { self.ops_total }
     }
 
     pub fn ops_spent(&self) -> u8 {
@@ -316,12 +322,8 @@ impl Realignment {
     /// Whether a roll in `id` fits in the ops left — counting the bonus
     /// op only if this roll (and every earlier one) is in its sub-region.
     pub fn can_afford(&self, map: &WorldMap, id: CountryId) -> bool {
-        let in_sub = |sub| map.country(id).is_in_sub_region(sub);
-        let bonus = match self.sub_region_bonus() {
-            Some((sub, n)) if in_sub(sub) => n,
-            _ => 0,
-        };
-        self.ops_spent < self.ops_total + bonus
+        let mask = self.bonus_mask & bonus_membership(&self.bonuses, map.country(id));
+        self.ops_spent < self.ops_total + bonus_ops(&self.bonuses, mask)
     }
 
     /// Both sides' modifiers and the resulting odds for a roll on `id`
@@ -373,11 +375,7 @@ impl Realignment {
         if let Some(loser) = result.loser {
             board.remove_influence(id, loser, result.removed);
         }
-        if let Some((sub, _)) = self.effects.sub_region_bonus(self.side)
-            && !map.country(id).is_in_sub_region(sub)
-        {
-            self.outside_bonus_sub = true;
-        }
+        self.bonus_mask &= bonus_membership(&self.bonuses, map.country(id));
         self.ops_spent += 1;
         self.history.push(result);
         Ok(result)
@@ -783,10 +781,11 @@ mod tests {
         }
         let mut effects = TurnEffects::default();
         effects.apply(OngoingEffect::VietnamRevolts);
+        let bonuses = effects.ops_bonuses(Ussr, CardId(8));
         let mut dice = Dice::from_seed(8);
 
-        let mut r = Realignment::new(Ussr, 2, &board).with_effects(effects);
-        assert!(r.sub_region_bonus().is_some());
+        let mut r = Realignment::new(Ussr, 2, &board).with_effects(effects).with_bonuses(bonuses.clone());
+        assert_eq!(r.bonuses().len(), 1);
         let mut live = board.clone();
         r.roll(&map, &mut live, id(&map, "Thailand"), &mut dice).unwrap();
         r.roll(&map, &mut live, id(&map, "Vietnam"), &mut dice).unwrap();
@@ -796,11 +795,31 @@ mod tests {
         assert_eq!((r.ops_total(), r.remaining()), (3, 0));
 
         // One roll outside forfeits it for good.
-        let mut r = Realignment::new(Ussr, 2, &board).with_effects(effects);
+        let mut r = Realignment::new(Ussr, 2, &board).with_effects(effects).with_bonuses(bonuses);
         let mut live = board.clone();
         r.roll(&map, &mut live, id(&map, "Poland"), &mut dice).unwrap();
         r.roll(&map, &mut live, id(&map, "Thailand"), &mut dice).unwrap();
-        assert!(r.sub_region_bonus().is_none());
+        assert!(r.bonuses().is_empty());
+        assert_eq!((r.ops_total(), r.remaining()), (2, 0));
+    }
+
+    #[test]
+    fn the_china_cards_asia_op_covers_any_asian_country() {
+        use crate::cards::CHINA_CARD;
+        use crate::ongoing::TurnEffects;
+        let map = map();
+        let mut board = Board::new(&map);
+        for name in ["Japan", "Thailand", "Poland"] {
+            board.set_influence(id(&map, name), Us, 9);
+        }
+        let bonuses = TurnEffects::default().ops_bonuses(Ussr, CHINA_CARD);
+        let mut dice = Dice::from_seed(3);
+        let mut r = Realignment::new(Ussr, 1, &board).with_bonuses(bonuses);
+        let mut live = board.clone();
+        r.roll(&map, &mut live, id(&map, "Japan"), &mut dice).unwrap();
+        assert!(r.can_afford(&map, id(&map, "Thailand")), "the Asia op");
+        assert!(!r.can_afford(&map, id(&map, "Poland")));
+        r.roll(&map, &mut live, id(&map, "Thailand"), &mut dice).unwrap();
         assert_eq!((r.ops_total(), r.remaining()), (2, 0));
     }
 }

@@ -32,6 +32,14 @@ pub struct InfluenceChange {
     pub after: u8,
 }
 
+/// An event passing the China Card to `to`, face up (playable at once) or
+/// face down (not until the turn rolls over).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ChinaTransfer {
+    pub to: Superpower,
+    pub face_up: bool,
+}
+
 /// What resolving a fixed-effect card produced. `vp_delta` follows
 /// [`GameStatus::vp`]'s convention (positive favours the US); `defcon` is
 /// `(before, after)`, already clamped to the track, and `None` for a card
@@ -50,6 +58,8 @@ pub struct EffectResult {
     /// A game-long effect the event starts, or one it ends (see [`crate::ongoing`]).
     pub lasting: Option<LastingEffect>,
     pub cancels: Option<LastingEffect>,
+    /// The China Card changing hands (Cultural Revolution, Nixon, Ussuri River Skirmish).
+    pub china: Option<ChinaTransfer>,
 }
 
 /// What one card's effect function sees and mutates: the board as it was
@@ -71,6 +81,7 @@ struct Ctx<'a> {
     ongoing: Option<OngoingEffect>,
     lasting: Option<LastingEffect>,
     cancels: Option<LastingEffect>,
+    china: Option<ChinaTransfer>,
 }
 
 impl Ctx<'_> {
@@ -146,6 +157,16 @@ impl Ctx<'_> {
         self.cancels = Some(effect);
     }
 
+    /// Who holds the China Card, face up or down.
+    fn china_holder(&self) -> Superpower {
+        self.status.china_card
+    }
+
+    /// Passes the China Card to `to`.
+    fn give_china(&mut self, to: Superpower, face_up: bool) {
+        self.china = Some(ChinaTransfer { to, face_up });
+    }
+
     /// Battleground countries `side` controls, optionally restricted to
     /// some regions.
     fn controlled_battlegrounds(&self, side: Superpower, regions: Option<&[Region]>) -> i8 {
@@ -184,11 +205,13 @@ const EFFECTS: &[(u8, Effect)] = &[
     (52, portuguese_empire_crumbles),
     (54, allende),
     (55, willy_brandt),
+    (58, cultural_revolution),
     (59, flower_power),
     (64, panama_canal_returned),
     (65, camp_david_accords),
     (68, john_paul_ii_elected_pope),
     (69, latin_american_death_squads),
+    (71, nixon_plays_the_china_card),
     (72, sadat_expels_soviets),
     (78, alliance_for_progress),
     (82, iranian_hostage_crisis),
@@ -216,9 +239,9 @@ pub fn is_effect_card(card: CardId) -> bool {
 /// name the map doesn't know, which `tests` below pins for every card.
 pub fn resolve(map: &WorldMap, board: &Board, status: &GameStatus, card: CardId) -> Option<EffectResult> {
     let effect = effect_for(card)?;
-    let mut ctx = Ctx { map, before: board, working: board.clone(), status, changes: Vec::new(), vp_delta: 0, defcon: None, ongoing: None, lasting: None, cancels: None };
+    let mut ctx = Ctx { map, before: board, working: board.clone(), status, changes: Vec::new(), vp_delta: 0, defcon: None, ongoing: None, lasting: None, cancels: None, china: None };
     effect(&mut ctx);
-    Some(EffectResult { card, player: status.active, influence: ctx.changes, vp_delta: ctx.vp_delta, defcon: ctx.defcon, ongoing: ctx.ongoing, lasting: ctx.lasting, cancels: ctx.cancels })
+    Some(EffectResult { card, player: status.active, influence: ctx.changes, vp_delta: ctx.vp_delta, defcon: ctx.defcon, ongoing: ctx.ongoing, lasting: ctx.lasting, cancels: ctx.cancels, china: ctx.china })
 }
 
 // ---- the cards, in printed-number order ----
@@ -310,6 +333,24 @@ fn allende(c: &mut Ctx) {
 fn panama_canal_returned(c: &mut Ctx) {
     for name in ["Panama", "Costa Rica", "Venezuela"] {
         c.add(name, Superpower::Us, 1);
+    }
+}
+
+/// #58 Cultural Revolution: the US gives up the China Card (face up); if the USSR already holds it, +1 VP.
+fn cultural_revolution(c: &mut Ctx) {
+    if c.china_holder() == Superpower::Us {
+        c.give_china(Superpower::Ussr, true);
+    } else {
+        c.award_vp(Superpower::Ussr, 1);
+    }
+}
+
+/// #71 Nixon Plays the China Card: the USSR gives it up (face down); if the US already holds it, +2 VP.
+fn nixon_plays_the_china_card(c: &mut Ctx) {
+    if c.china_holder() == Superpower::Ussr {
+        c.give_china(Superpower::Us, false);
+    } else {
+        c.award_vp(Superpower::Us, 2);
     }
 }
 

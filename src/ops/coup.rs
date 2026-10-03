@@ -31,8 +31,7 @@ use crate::country::{CountryId, Region, Superpower};
 use crate::dice::Dice;
 use crate::map::WorldMap;
 use crate::cards::CardId;
-use crate::ongoing::{LastingEffects, TurnEffects};
-use crate::country::SubRegion;
+use crate::ongoing::{bonus_membership, bonus_ops, LastingEffects, OpsBonus, TurnEffects};
 
 /// The number a coup's modified roll must strictly exceed to succeed:
 /// the target country's stability, doubled (rule 6.3.2).
@@ -178,13 +177,15 @@ pub struct Coup {
     /// Turn-long events that adjust the roll or the ops (Death Squads,
     /// Vietnam Revolts).
     effects: TurnEffects,
+    /// Extra ops for a coup in one area (China Card, Vietnam Revolts).
+    bonuses: Vec<OpsBonus>,
     /// Game-long events that shield countries (NATO, the US/Japan pact).
     lasting: LastingEffects,
 }
 
 impl Coup {
     pub fn new(side: Superpower, ops: u8, board: &Board) -> Self {
-        Coup { side, ops_total: ops, result: None, base: board.clone(), banned: Vec::new(), effects: TurnEffects::default(), lasting: LastingEffects::default() }
+        Coup { side, ops_total: ops, result: None, base: board.clone(), banned: Vec::new(), bonuses: Vec::new(), effects: TurnEffects::default(), lasting: LastingEffects::default() }
     }
 
     /// Forbids this coup from targeting any country in `regions` — what an
@@ -222,18 +223,21 @@ impl Coup {
         self.result.map_or(self.ops_total, |r| r.ops)
     }
 
-    /// The ops a coup on `id` would use: the card's, plus Vietnam Revolts'
-    /// bonus when `id` is in Southeast Asia.
-    pub fn ops_for(&self, map: &WorldMap, id: CountryId) -> u8 {
-        match self.effects.sub_region_bonus(self.side) {
-            Some((sub, n)) if map.country(id).is_in_sub_region(sub) => self.ops_total + n,
-            _ => self.ops_total,
-        }
+    /// Grants extra ops when the target is inside a bonus's area.
+    pub fn with_bonuses(mut self, bonuses: Vec<OpsBonus>) -> Self {
+        self.bonuses = bonuses;
+        self
     }
 
-    /// The Southeast Asia-style bonus still on offer, for display.
-    pub fn sub_region_bonus(&self) -> Option<(SubRegion, u8)> {
-        self.effects.sub_region_bonus(self.side)
+    /// The ops a coup on `id` would use: the card's, plus every bonus
+    /// whose area contains `id`.
+    pub fn ops_for(&self, map: &WorldMap, id: CountryId) -> u8 {
+        self.ops_total + bonus_ops(&self.bonuses, bonus_membership(&self.bonuses, map.country(id)))
+    }
+
+    /// The bonuses on offer, for display.
+    pub fn bonuses(&self) -> &[OpsBonus] {
+        &self.bonuses
     }
 
     /// The die modifier a coup on `id` gets, with the card responsible.
@@ -604,12 +608,23 @@ mod tests {
         board.set_influence(id(&map, "Thailand"), Us, 2);
         let mut effects = TurnEffects::default();
         effects.apply(OngoingEffect::VietnamRevolts);
-        let mut coup = Coup::new(Ussr, 2, &board).with_effects(effects);
+        let bonuses = effects.ops_bonuses(Ussr, CardId(8));
+        let mut coup = Coup::new(Ussr, 2, &board).with_effects(effects).with_bonuses(bonuses);
         assert_eq!(coup.ops_for(&map, id(&map, "Thailand")), 3);
         assert_eq!(coup.ops_for(&map, id(&map, "Poland")), 2);
         assert_eq!(coup.ops_total(), 2, "before the attempt it is the card's own value");
         let mut live = board.clone();
         let result = coup.attempt(&map, &mut live, id(&map, "Thailand"), &mut Dice::from_seed(1)).unwrap();
         assert_eq!((result.ops, coup.ops_total(), coup.ops_spent(), coup.remaining()), (3, 3, 3, 0));
+    }
+
+    #[test]
+    fn the_china_cards_asia_op_applies_to_a_coup_anywhere_in_asia() {
+        use crate::cards::CHINA_CARD;
+        let map = map();
+        let bonuses = TurnEffects::default().ops_bonuses(Ussr, CHINA_CARD);
+        let coup = Coup::new(Ussr, 4, &Board::new(&map)).with_bonuses(bonuses);
+        assert_eq!(coup.ops_for(&map, id(&map, "Japan")), 5);
+        assert_eq!(coup.ops_for(&map, id(&map, "Poland")), 4);
     }
 }

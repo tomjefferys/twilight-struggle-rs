@@ -589,18 +589,19 @@ impl Game {
         let side = self.status.active;
         let effects = self.status.effects;
         let (ops, _) = effects.card_ops(card.ops, side);
+        let bonuses = effects.ops_bonuses(side, card.id);
         self.op = Some(match kind {
             OperationKind::Influence => Operation::Influence(
                 InfluencePlacement::new(side, ops, &self.board)
                     .with_banned_region(effects.placement_banned(side))
-                    .with_bonus(effects.sub_region_bonus(side)),
+                    .with_bonuses(bonuses),
             ),
-            OperationKind::Realign => Operation::Realign(Realignment::new(side, ops, &self.board).with_effects(effects).with_lasting(self.status.lasting)),
+            OperationKind::Realign => Operation::Realign(Realignment::new(side, ops, &self.board).with_effects(effects).with_bonuses(bonuses).with_lasting(self.status.lasting)),
             OperationKind::Coup => {
                 // The Reformer (#87), once played, bars the USSR from coups
                 // in Europe for the rest of the game.
                 let banned = if side == Superpower::Ussr && self.hands.removed().contains(&CardId(87)) { vec![Region::Europe] } else { Vec::new() };
-                Operation::Coup(Coup::new(side, ops, &self.board).with_banned_regions(banned).with_effects(effects).with_lasting(self.status.lasting))
+                Operation::Coup(Coup::new(side, ops, &self.board).with_banned_regions(banned).with_effects(effects).with_bonuses(bonuses).with_lasting(self.status.lasting))
             }
         });
         Ok(())
@@ -997,6 +998,10 @@ impl Game {
         }
         if let Some(effect) = result.cancels {
             self.status.lasting.cancel(effect);
+        }
+        if let Some(transfer) = result.china {
+            self.status.china_card = transfer.to;
+            self.status.china_card_face_up = transfer.face_up;
         }
         let vp_after = self.status.vp;
         self.log.push(LogEntry {

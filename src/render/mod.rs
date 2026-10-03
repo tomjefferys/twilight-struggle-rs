@@ -499,9 +499,11 @@ pub fn operation_header(op: &crate::ops::Operation) -> String {
     if let crate::ops::Operation::Event(e) = op {
         return format!("{} chooses · {}", op.side(), e.progress());
     }
-    let bonus = match op.pending_bonus() {
-        Some((sub, n)) => format!(" (+{n} if all in {sub})"),
-        None => String::new(),
+    let pending = op.pending_bonus();
+    let bonus = if pending.is_empty() {
+        String::new()
+    } else {
+        format!(" ({})", pending.iter().map(|b| format!("+{} if all in {}", b.ops, b.area)).collect::<Vec<_>>().join(", "))
     };
     format!("{} {} · {} of {} ops left{bonus}", op.side(), op.verb(), op.remaining(), op.ops_total())
 }

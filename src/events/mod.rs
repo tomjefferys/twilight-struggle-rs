@@ -27,7 +27,7 @@ pub mod scoring;
 pub mod war;
 
 pub use choice::EventChoice;
-pub use effects::EffectResult;
+pub use effects::{ChinaTransfer, EffectResult};
 pub use scoring::ScoringResult;
 pub use war::{War, WarResult};
 

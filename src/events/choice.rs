@@ -32,7 +32,7 @@
 
 use std::fmt;
 
-use super::effects::{EffectResult, InfluenceChange};
+use super::effects::{ChinaTransfer, EffectResult, InfluenceChange};
 use crate::board::Board;
 use crate::cards::CardId;
 use crate::country::{CountryId, Region, SubRegion, Superpower};
@@ -207,6 +207,8 @@ pub struct Mode {
     ongoing: Option<OngoingEffect>,
     /// VP the event awards its chooser on top of the picks (Special Relationship with NATO).
     vp: i8,
+    /// The China Card changing hands when this mode is played (Ussuri River Skirmish).
+    china: Option<ChinaTransfer>,
 }
 
 /// A card's whole choice: who chooses, whether they must finish, and the
@@ -221,7 +223,7 @@ pub struct Spec {
 
 impl Spec {
     fn single(chooser: Superpower, label: impl Into<String>, rule: Rule) -> Self {
-        Spec { chooser, optional: false, modes: vec![Mode { ongoing: None, vp: 0, label: label.into(), fixed: Vec::new(), rule: Some(rule) }] }
+        Spec { chooser, optional: false, modes: vec![Mode { ongoing: None, vp: 0, china: None, label: label.into(), fixed: Vec::new(), rule: Some(rule) }] }
     }
 
     fn optional(mut self) -> Self {
@@ -715,7 +717,8 @@ impl EventChoice {
         let ongoing = self.mode.and_then(|i| self.modes[i].ongoing);
         let vp = self.mode.map_or(0, |i| self.modes[i].vp);
         let vp_delta = if self.chooser == Superpower::Us { vp } else { -vp };
-        EffectResult { card: self.card, player: status.active, influence: self.changes.clone(), vp_delta, defcon: None, ongoing, lasting: None, cancels: None }
+        let china = self.mode.and_then(|i| self.modes[i].china);
+        EffectResult { card: self.card, player: status.active, influence: self.changes.clone(), vp_delta, defcon: None, ongoing, lasting: None, cancels: None, china }
     }
 
     /// The region a region-designating event (Chernobyl) has been set to
@@ -757,6 +760,7 @@ const CHOICES: &[(u8, SpecFn)] = &[
     (66, puppet_governments),
     (70, oas_founded),
     (75, liberation_theology),
+    (76, ussuri_river_skirmish),
     (87, the_reformer),
     (88, marine_barracks_bombing),
     (94, chernobyl),
@@ -802,12 +806,12 @@ fn warsaw_pact_formed(_: &WorldMap, _: &Board, _: &GameStatus) -> Spec {
         optional: false,
         modes: vec![
             Mode {
-                ongoing: None, vp: 0, label: "remove all US influence from 4 Eastern European countries".into(),
+                ongoing: None, vp: 0, china: None, label: "remove all US influence from 4 Eastern European countries".into(),
                 fixed: Vec::new(),
                 rule: Some(Rule::remove(Us, Eligible::new(EASTERN), ANY, ANY, 4).chunk(Chunk::All)),
             },
             Mode {
-                ongoing: None, vp: 0, label: "add 5 USSR influence to Eastern Europe (max 2 per country)".into(),
+                ongoing: None, vp: 0, china: None, label: "add 5 USSR influence to Eastern Europe (max 2 per country)".into(),
                 fixed: Vec::new(),
                 rule: Some(Rule::add(Ussr, Eligible::new(EASTERN), 5, 2, ANY)),
             },
@@ -902,12 +906,12 @@ fn south_african_unrest(_: &WorldMap, _: &Board, _: &GameStatus) -> Spec {
         optional: false,
         modes: vec![
             Mode {
-                ongoing: None, vp: 0, label: "add 2 USSR influence to South Africa".into(),
+                ongoing: None, vp: 0, china: None, label: "add 2 USSR influence to South Africa".into(),
                 fixed: vec![Fixed { country: "South Africa", side: Ussr, op: FixedOp::Add(2) }],
                 rule: None,
             },
             Mode {
-                ongoing: None, vp: 0, label: "add 1 USSR influence to South Africa and 2 to one adjacent country".into(),
+                ongoing: None, vp: 0, china: None, label: "add 1 USSR influence to South Africa and 2 to one adjacent country".into(),
                 fixed: vec![Fixed { country: "South Africa", side: Ussr, op: FixedOp::Add(1) }],
                 rule: Some(Rule::add(Ussr, Eligible::new(Where::AdjacentTo("South Africa")), ANY, 2, 1).chunk(Chunk::Fixed(2))),
             },
@@ -968,6 +972,29 @@ fn liberation_theology(_: &WorldMap, _: &Board, _: &GameStatus) -> Spec {
     )
 }
 
+/// #76 Ussuri River Skirmish: if the USSR holds the China Card the US takes it
+/// (face up); if the US already holds it, +4 US influence in Asia (max 2 each).
+fn ussuri_river_skirmish(_: &WorldMap, _: &Board, status: &GameStatus) -> Spec {
+    if status.china_card == Ussr {
+        return Spec {
+            chooser: Us,
+            optional: false,
+            modes: vec![Mode {
+                ongoing: None, vp: 0,
+                china: Some(ChinaTransfer { to: Us, face_up: true }),
+                label: "the US takes the China Card (face up)".into(),
+                fixed: Vec::new(),
+                rule: None,
+            }],
+        };
+    }
+    Spec::single(
+        Us,
+        "add 4 US influence to Asia (max 2 per country)",
+        Rule::add(Us, Eligible::new(Where::Region(Region::Asia)), 4, 2, ANY),
+    )
+}
+
 /// #87 The Reformer: 4 influence, or 6 if the USSR is ahead on VP.
 /// (The coup ban in Europe is `Game::begin`'s business.)
 fn the_reformer(_: &WorldMap, _: &Board, status: &GameStatus) -> Spec {
@@ -985,7 +1012,7 @@ fn marine_barracks_bombing(_: &WorldMap, _: &Board, _: &GameStatus) -> Spec {
         chooser: Ussr,
         optional: false,
         modes: vec![Mode {
-            ongoing: None, vp: 0, label: "remove 2 more US influence from the Middle East (Lebanon's is already gone)".into(),
+            ongoing: None, vp: 0, china: None, label: "remove 2 more US influence from the Middle East (Lebanon's is already gone)".into(),
             fixed: vec![Fixed { country: "Lebanon", side: Us, op: FixedOp::Clear }],
             rule: Some(Rule::remove(Us, Eligible::new(Where::Region(Region::MiddleEast)), 2, ANY, ANY)),
         }],
@@ -1006,6 +1033,7 @@ fn chernobyl(_: &WorldMap, _: &Board, _: &GameStatus) -> Spec {
                 rule: None,
                 ongoing: Some(OngoingEffect::Chernobyl { region }),
                 vp: 0,
+                china: None,
             })
             .collect(),
     }

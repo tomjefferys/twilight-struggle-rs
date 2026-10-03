@@ -5,8 +5,8 @@ focused on the data model and terminal display, a handful of the
 ops-spending actions (influence placement, realignment, coups), enforced
 alternating turns, playing a card from each side's hand for its ops
 value, and — the first slices of card *events* — the seven scoring cards
-nineteen fixed-effect cards (influence/VP/DEFCON only, no choices or
-rolls), twenty *choice* cards (the card's own side picks the
+twenty-one fixed-effect cards (influence/VP/DEFCON/China Card only, no choices or
+rolls), twenty-one *choice* cards (the card's own side picks the
 countries to add/remove influence in, whoever is phasing), and ten
 *turn-long* effects ("for the remainder of this turn" — Containment,
 Chernobyl, …, held in `GameStatus::effects` until the turn rolls over),
@@ -179,20 +179,24 @@ uniformly random legal moves.
   Brezhnev +1, Red Scare −1: the modifiers are *summed*, then clamped to
   1–4, so Containment and Red Scare on the US cancel; also returns each
   card's contribution so a view can itemise it), `coup_roll_mod`,
-  `realign_roll_mod`, `placement_banned`, `sub_region_bonus` (Vietnam),
+  `realign_roll_mod`, `placement_banned`, `ops_bonuses` (Vietnam; also the China Card's Asia op — see below),
   `spares_defcon`, `coup_vp`, `extra_rounds`. `Game::begin` reads them
   once and hands each operation what it needs, so views reading an
   `Operation` never need the status: `InfluencePlacement::with_banned_region`
   (Chernobyl; `PlacementError::Banned`, and `is_legal_target` is false so
-  the existing dimming works) and `with_bonus`, `Realignment::with_effects`
+  the existing dimming works) and `with_bonuses`, `Realignment::with_effects`/`with_bonuses`
   (`Modifiers::iran_contra`, shown in `reasons`), `Coup::with_effects`
   (`CoupResult::modifier`; `coup_resolve_with`/`coup_odds_with`). The
-  Vietnam Revolts bonus op is **dynamic**: `ops_total()` is the card's
-  value until something's been spent, then +1 only while *every* point/roll
-  has been inside Southeast Asia (a coup: if the target is) — so
+  ops *bonuses* are **dynamic**: `TurnEffects::ops_bonuses(side, card)`
+  returns a list of `OpsBonus { area: Area, ops, card }` — Vietnam Revolts
+  (USSR, Southeast Asia) and the China Card's own +1 for Asia (#6) — and they
+  stack. Each operation keeps a bitmask (`bonus_membership`/`bonus_ops`, one
+  bit per bonus) of the bonuses every point/roll so far has stayed inside:
+  `ops_total()` is the card's value until something's been spent, then adds
+  each surviving bonus (a coup: each one whose area holds the target) — so
   `remaining()` and the AI must ask `InfluencePlacement::can_place` /
   `Realignment::can_afford`, never compare `cost` to `remaining` themselves.
-  `Operation::pending_bonus` is what headers hint at.
+  `Operation::pending_bonus` (a `Vec<OpsBonus>`) is what headers hint at.
   **Lasting effects** (`LastingEffects`/`LastingEffect`, same file) are the game-long sibling of `TurnEffects`: a `GameStatus::lasting` field (`#[serde(default, skip_serializing_if = is_empty)]`) that `Game::advance` never resets. Pure queries only: `protects(map, board, attacker, id)` (NATO for US-controlled Europe, minus France under De Gaulle and West Germany under Willy Brandt; the US/Japan pact for Japan — only the USSR is ever barred; returns the responsible `CardId`), `taiwan_battleground` (Formosan) and `shuttle_applies`. `Coup`/`Realignment` take `with_lasting` and refuse a protected target (`CoupError`/`RealignError::Protected`, and `is_legal_target` is false so the existing dimming works, judged on the live board); `War::with_lasting` does the same for Brush War vs NATO. `events::scoring::resolve` takes the effects too and lists what applied in `ScoringResult::modifiers` (shown in the score modal and log line). `EffectResult::lasting`/`cancels` start or end one (`Ctx::persist`/`cancel`); `Game::finish_effect` applies them. Three triggers live in `Game`, each logged as `Event::Triggered` (`trigger` line): Flower Power (`flower_power_check`, from `discard_played_card` for ops and `finish_war` for events), We Will Bury You (in `advance`, when the US finishes the round it was owed — `skip` is 1 if the US itself played it), and Formosan's cancel on the US playing the China Card. Shuttle Diplomacy isn't discarded when played: the scoring it modifies spends and discards it.
 - **`ops`** (`src/ops/`) — the game's ops-spending operations, plus (as
   `Operation::Event`) a choice card's event in progress. Four kinds
@@ -276,7 +280,7 @@ uniformly random legal moves.
   `events::is_implemented` is what `Game::play_event` and
   `Game::legal_actions` both check before calling it, or offering
   `Action::Event`, respectively. Three stages so far:
-  - `events::choice` (`src/events/choice.rs`) — nineteen cards where a
+  - `events::choice` (`src/events/choice.rs`) — twenty-one cards where a
     player *picks countries* (CARDS.md lists them; #106 NORAD, an ongoing
     end-of-AR trigger, is not one). `EventChoice` stages the **chooser**'s
     picks against a cloned `Board` (`base` is what eligibility is judged
@@ -330,8 +334,8 @@ uniformly random legal moves.
     (preferring the current region) with non-targets dimmed; `r` rolls on the
     country screen. Views: `render::render_war_result` modal (`Modal::War`), `war_line` in
     the region footer/country panel, a `war` log line.
-  - `events::effects` (the second stage) resolves nineteen cards whose text only moves
-    influence, VP, or DEFCON by fixed amounts (see `CARDS.md`) into an
+  - `events::effects` (the second stage) resolves twenty-one cards whose text only moves
+    influence, VP, DEFCON, or the China Card (`EffectResult::china`, a `ChinaTransfer` that `Game::finish_effect` applies; #58, #71, and #76 via `Mode::china`) by fixed amounts (see `CARDS.md`) into an
     `EffectResult` — `influence: Vec<InfluenceChange>` (country, side,
     before, after; no-op changes omitted), a signed `vp_delta` (positive
     favours the US, like `GameStatus::vp`), and `defcon: Option<(before,
