@@ -718,7 +718,7 @@ impl EventChoice {
         let vp = self.mode.map_or(0, |i| self.modes[i].vp);
         let vp_delta = if self.chooser == Superpower::Us { vp } else { -vp };
         let china = self.mode.and_then(|i| self.modes[i].china);
-        EffectResult { card: self.card, player: status.active, influence: self.changes.clone(), vp_delta, defcon: None, ongoing, lasting: None, cancels: None, china }
+        EffectResult { card: self.card, player: status.active, influence: self.changes.clone(), vp_delta, defcon: None, ongoing, lasting: None, cancels: None, china, space: None }
     }
 
     /// The region a region-designating event (Chernobyl) has been set to

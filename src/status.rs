@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::country::Superpower;
 use crate::ongoing::{LastingEffects, TurnEffects};
+use crate::space::{self, Perk, MAX_BOX};
 
 /// The VP track's own cap (rule 5.5) — reaching either end wins the game
 /// outright ([`crate::game::Game::apply_vp`]), so a valid [`GameStatus`]
@@ -41,6 +42,10 @@ pub enum StatusError {
     /// named together, since which values are valid depends on the
     /// other field.
     ActionRoundOutOfRange { action_round: u8, action_rounds_per_turn: u8 },
+    /// A space race marker past the last box.
+    SpaceRaceOutOfRange(u8),
+    /// More space attempts in a turn than the rules ever allow (two).
+    SpaceAttemptsOutOfRange(u8),
 }
 
 impl fmt::Display for StatusError {
@@ -63,6 +68,8 @@ impl fmt::Display for StatusError {
                 f,
                 "action round {action_round} isn't between 1 and {action_rounds_per_turn} (this turn's own action_rounds_per_turn)"
             ),
+            StatusError::SpaceRaceOutOfRange(n) => write!(f, "space race box {n} is past the end of the track (0..={MAX_BOX})"),
+            StatusError::SpaceAttemptsOutOfRange(n) => write!(f, "{n} space attempts in a turn isn't possible (0..=2)"),
         }
     }
 }
@@ -93,6 +100,11 @@ pub struct GameStatus {
     pub vp: i8,
     pub space_race_us: u8,
     pub space_race_ussr: u8,
+    /// Space attempts made so far this turn (reset when the turn rolls over).
+    #[serde(skip_serializing_if = "is_zero")]
+    pub space_attempts_us: u8,
+    #[serde(skip_serializing_if = "is_zero")]
+    pub space_attempts_ussr: u8,
     pub military_ops_us: i8,
     pub military_ops_ussr: i8,
     pub china_card: Superpower,
@@ -105,17 +117,28 @@ pub struct GameStatus {
     pub lasting: LastingEffects,
 }
 
+fn is_zero(n: &u8) -> bool {
+    *n == 0
+}
+
 impl GameStatus {
+    /// How many action rounds `side` may play this turn: the turn's usual
+    /// count, plus North Sea Oil's extra round for the US — or eight, for
+    /// whoever holds the Space Station box's perk.
+    pub fn rounds_for(&self, side: Superpower) -> u8 {
+        let usual = self.action_rounds_per_turn + self.effects.extra_rounds(side);
+        if space::perk_holder(self, Perk::EightRounds) == Some(side) { usual.max(8) } else { usual }
+    }
+
     /// Whether every field is within the bounds a real `GameStatus`
     /// could actually be in — the one check both a loaded `Scenario`/
     /// test state and a live debug-mode edit (`vp`/`defcon`/`turn`/`ar`)
     /// go through, so "nonsensical" means the same thing in both places.
-    /// Deliberately doesn't check `space_race_us`/`ussr` or
-    /// `military_ops_us`/`ussr` — both tracks belong to rules this crate
-    /// doesn't implement at all yet (DEFCON degradation, Military
-    /// Operations), so this has no real basis to bound them, unlike
-    /// DEFCON's five levels or the VP cap, which are the tracks
-    /// themselves rather than a rule about moving them.
+    /// Deliberately doesn't check `military_ops_us`/`ussr` — that track
+    /// belongs to a rule this crate doesn't implement fully yet (Military
+    /// Operations), so this has no real basis to bound it, unlike DEFCON's
+    /// five levels, the VP cap or the space race's eight boxes, which are
+    /// the tracks themselves rather than a rule about moving them.
     pub fn validate(&self) -> Result<(), StatusError> {
         if !VP_RANGE.contains(&self.vp) {
             return Err(StatusError::VpOutOfRange(self.vp));
@@ -129,11 +152,18 @@ impl GameStatus {
         if !ACTION_ROUNDS_PER_TURN_RANGE.contains(&self.action_rounds_per_turn) {
             return Err(StatusError::ActionRoundsPerTurnOutOfRange(self.action_rounds_per_turn));
         }
-        // North Sea Oil gives the US one action round past the usual count.
-        let extra_round = self.action_round == self.action_rounds_per_turn + 1
-            && self.active == Superpower::Us
-            && self.effects.extra_rounds(Superpower::Us) > 0;
-        if self.action_round < 1 || (self.action_round > self.action_rounds_per_turn && !extra_round) {
+        for n in [self.space_race_us, self.space_race_ussr] {
+            if n > MAX_BOX {
+                return Err(StatusError::SpaceRaceOutOfRange(n));
+            }
+        }
+        for n in [self.space_attempts_us, self.space_attempts_ussr] {
+            if n > 2 {
+                return Err(StatusError::SpaceAttemptsOutOfRange(n));
+            }
+        }
+        // North Sea Oil and the Space Station box give one side rounds past the usual count.
+        if self.action_round < 1 || self.action_round > self.rounds_for(self.active) {
             return Err(StatusError::ActionRoundOutOfRange {
                 action_round: self.action_round,
                 action_rounds_per_turn: self.action_rounds_per_turn,
@@ -154,6 +184,8 @@ impl Default for GameStatus {
             vp: 0,
             space_race_us: 0,
             space_race_ussr: 0,
+            space_attempts_us: 0,
+            space_attempts_ussr: 0,
             military_ops_us: 0,
             military_ops_ussr: 0,
             china_card: Superpower::Ussr,
@@ -193,6 +225,23 @@ mod tests {
     fn turn_outside_one_through_ten_is_rejected() {
         let status = GameStatus { turn: 11, ..GameStatus::default() };
         assert_eq!(status.validate(), Err(StatusError::TurnOutOfRange(11)));
+    }
+
+    #[test]
+    fn space_race_markers_and_attempts_are_bounded() {
+        let status = GameStatus { space_race_us: 9, ..GameStatus::default() };
+        assert_eq!(status.validate(), Err(StatusError::SpaceRaceOutOfRange(9)));
+        let status = GameStatus { space_attempts_ussr: 3, ..GameStatus::default() };
+        assert_eq!(status.validate(), Err(StatusError::SpaceAttemptsOutOfRange(3)));
+    }
+
+    #[test]
+    fn the_space_station_holder_may_play_an_eighth_round_alone() {
+        let status = GameStatus { action_round: 8, space_race_ussr: 8, action_rounds_per_turn: 7, ..GameStatus::default() };
+        assert_eq!(status.rounds_for(Superpower::Ussr), 8);
+        assert_eq!(status.validate(), Ok(()));
+        let cancelled = GameStatus { space_race_us: 8, ..status };
+        assert_eq!(cancelled.validate(), Err(StatusError::ActionRoundOutOfRange { action_round: 8, action_rounds_per_turn: 7 }));
     }
 
     #[test]

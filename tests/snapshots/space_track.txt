@@ -1,0 +1,17 @@
+┌─ Space Race ─────────────────────────────────────────────────────────┐
+│  Box                                                USA  USSR        │
+│  Start                                                               │
+│  1  Earth Satellite        2+ ops  d6≤3  2/1 VP                      │
+│  2  Animal in Space        2+ ops  d6≤4  0/0 VP          ◆           │
+│       ★ 2 space attempts a turn — cancelled                          │
+│  3  Man in Space           2+ ops  d6≤3  2/0 VP     ◆                │
+│  4  Man in Earth Orbit     2+ ops  d6≤4  0/0 VP                      │
+│       ★ opponent headlines first — nobody yet                        │
+│  5  Lunar Orbit            3+ ops  d6≤3  3/1 VP                      │
+│  6  Eagle/Bear has Landed  3+ ops  d6≤4  0/0 VP                      │
+│       ★ may discard 1 held card — nobody yet                         │
+│  7  Space Shuttle          3+ ops  d6≤3  4/2 VP                      │
+│  8  Space Station          4+ ops  d6≤2  2/0 VP                      │
+│       ★ 8 action rounds — nobody yet                                 │
+│  Attempts this turn: USA 0/1  USSR 0/1                               │
+└──────────────────────────────────────────────────────────────────────┘

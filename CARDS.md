@@ -4,7 +4,7 @@ Which of the 110 cards have their **event** implemented (`events::is_implemented
 Every card can already be played for its ops value; this tracks the event text only.
 `tests/cards_progress.rs` fails if a ✅ here disagrees with the code, so update both together.
 
-**Implemented: 71 / 110**
+**Implemented: 73 / 110**
 
 - `events::scoring` — the seven scoring cards.
 - `events::effects` — fixed influence / VP / DEFCON effects with no choices or die rolls.
@@ -32,7 +32,7 @@ Every card can already be played for its ops value; this tracks the event text o
 | 15 | Nasser | USSR | ✅ |  |
 | 16 | Warsaw Pact Formed | USSR | ✅ | Choice (2 modes); enables #21 (modelled) |
 | 17 | De Gaulle Leads France | USSR | ✅ | Exempts France from NATO (#21) |
-| 18 | Captured Nazi Scientist | Both |  |  |
+| 18 | Captured Nazi Scientist | Both | ✅ | Advances the space race 1 box |
 | 19 | Truman Doctrine | US | ✅ | Choice |
 | 20 | Olympic Games | Both |  |  |
 | 21 | NATO | US | ✅ | Lasting: USSR can't coup/realign US-controlled Europe; needs #16 or #23 first; Brush War clause modelled |
@@ -94,7 +94,7 @@ Every card can already be played for its ops value; this tracks the event text o
 | 77 | “Ask Not What Your Country…” | US |  |  |
 | 78 | Alliance for Progress | US | ✅ |  |
 | 79 | Africa Scoring | Both | ✅ |  |
-| 80 | “One Small Step…” | Both |  |  |
+| 80 | “One Small Step…” | Both | ✅ | If behind on the space race: 2 boxes, VP only from the last |
 | 81 | South America Scoring | Both | ✅ |  |
 | 82 | Iranian Hostage Crisis | USSR | ✅ |  |
 | 83 | The Iron Lady | US | ✅ | Prevents #7 (modelled) |

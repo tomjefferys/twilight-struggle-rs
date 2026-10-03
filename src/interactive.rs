@@ -14,10 +14,11 @@ use crossterm::{execute, queue};
 
 use twilight_struggle::render::{
     log_entry_line, operation_abandoned_line, operation_closed_line, operation_header, render_card, render_country, render_hand,
-    render_event_result, render_war_result, render_region, render_roll_result, render_scoring_result, render_status_bar, render_world_map, Canvas, RollReport, HAND_ROWS,
+    render_event_result, render_space_confirm, render_space_result, render_war_result, render_region, render_roll_result, render_scoring_result, render_status_bar, render_world_map, Canvas, RollReport, HAND_ROWS,
 };
 use twilight_struggle::events::{EffectResult, ScoringResult, WarResult};
 use twilight_struggle::game::Victory;
+use twilight_struggle::space::SpaceResult;
 use twilight_struggle::ops::Operation;
 use twilight_struggle::{
     ai, Board, CardCatalog, CardId, ColorMode, CountryId, Dice, Direction, Event, EventOutcome, Game, GameError, LogEntry, MapLayout,
@@ -45,6 +46,13 @@ enum Modal {
     /// A resolved war card's result, the VP track's new value, and the
     /// winner if the war ended the game.
     War(WarResult, i8, Option<Victory>),
+    /// A resolved space race attempt, the VP track's new value, and the
+    /// winner if it ended the game.
+    Space(SpaceResult, i8, Option<Victory>),
+    /// `s`: the confirmation before a space attempt rolls. Holds no data —
+    /// it's drawn live from the card in play and the status, and Enter
+    /// rolls only if [`Game::can_space`].
+    SpaceConfirm,
 }
 
 /// Which screen is currently showing.
@@ -226,6 +234,27 @@ pub fn run(
                     // happens. Only Enter (and Esc, as a harmless
                     // synonym) dismiss the front of the queue; nothing
                     // else reaches the map or the hand while it's up.
+                    if matches!(modal.front(), Some(Modal::SpaceConfirm)) {
+                        // A confirmation, not a result: Enter rolls (only
+                        // when allowed — otherwise it does nothing and the
+                        // modal says why), Esc/Backspace cancel for free.
+                        match key.code {
+                            KeyCode::Enter | KeyCode::Char('r') if game.can_space() => {
+                                modal.pop_front();
+                                match game.space(dice) {
+                                    Ok(result) => modal.push_back(Modal::Space(result, game.status().vp, game.winner())),
+                                    Err(e) => message = Some(e.to_string()),
+                                }
+                            }
+                            KeyCode::Esc | KeyCode::Backspace => {
+                                modal.pop_front();
+                            }
+                            KeyCode::Char('q') => return Ok(()),
+                            _ => {}
+                        }
+                        draw(&screen, map, layout, cards, game, message.as_deref(), &hand_selected, zoomed, &modal, color)?;
+                        continue;
+                    }
                     match key.code {
                         KeyCode::Enter | KeyCode::Esc => {
                             modal.pop_front();
@@ -274,6 +303,17 @@ pub fn run(
                     KeyCode::Char('i') => message = begin(game, OperationKind::Influence),
                     KeyCode::Char('a') => message = begin(game, OperationKind::Realign),
                     KeyCode::Char('o') => message = begin(game, OperationKind::Coup),
+                    // A space-race refusal (too few ops, attempt used, …) still
+                    // opens the confirmation, which explains it; only having
+                    // no card in play, an open operation, or a finished game
+                    // is refused outright.
+                    KeyCode::Char('s') => match game.space_check() {
+                        Ok(()) | Err(GameError::Space(_)) => {
+                            zoomed = false;
+                            modal.push_back(Modal::SpaceConfirm);
+                        }
+                        Err(e) => message = Some(e.to_string()),
+                    },
                     KeyCode::Char('e') => match game.play_event(map, cards) {
                         Ok(EventOutcome::Scoring(result)) => {
                             let vp_after = game.status().vp;
@@ -634,6 +674,13 @@ fn queue_turn_modals(modal: &mut VecDeque<Modal>, board: &Board, entries: &[LogE
                 };
                 modal.push_back(Modal::War(result.clone(), *vp_after, winner));
             }
+            Event::Space { result, vp_after } => {
+                let winner = match entries.get(i + 1).map(|e| &e.event) {
+                    Some(Event::GameOver(victory)) => Some(*victory),
+                    _ => None,
+                };
+                modal.push_back(Modal::Space(*result, *vp_after, winner));
+            }
             Event::EventResolved { result, vp_after } => {
                 let winner = match entries.get(i + 1).map(|e| &e.event) {
                     Some(Event::GameOver(victory)) => Some(*victory),
@@ -835,6 +882,11 @@ fn draw(
             Modal::Score(result, vp_after) => render_scoring_result(map, cards, result, *vp_after, queue_pos),
             Modal::Event(result, vp_after, winner) => render_event_result(map, cards, result, *vp_after, *winner, queue_pos),
             Modal::War(result, vp_after, winner) => render_war_result(map, cards, result, *vp_after, *winner, queue_pos),
+            Modal::Space(result, vp_after, winner) => render_space_result(cards, result, *vp_after, *winner, queue_pos),
+            Modal::SpaceConfirm => match game.card_in_play() {
+                Some(id) => render_space_confirm(game.status(), cards.card(id)),
+                None => Canvas::new(0, 0),
+            },
         };
         blit_centred(&mut canvas, &modal_canvas);
     }

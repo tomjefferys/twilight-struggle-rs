@@ -11,6 +11,7 @@ use crate::events;
 use crate::game::Victory;
 use crate::layout::MapLayout;
 use crate::ops::Operation;
+use crate::space::{self, Perk};
 use crate::status::GameStatus;
 
 use super::{game_over_line, lasting_effect_line, ongoing_effect_line, operation_balance_line, vp_line, Canvas, Color, Style};
@@ -74,12 +75,13 @@ pub fn render_status_bar(
         _ => status.active,
     };
     let turn_line = format!(
-        "TURN {} · AR {} · {} to act · DEFCON {} · VP {}",
+        "TURN {} · AR {} · {} to act · DEFCON {} · VP {}{}",
         status.turn,
         ar_label(status),
         to_act,
         status.defcon,
         vp_line(status.vp),
+        space_label(status),
     );
     let (op_line, op_style) = if let Some(victory) = winner {
         (game_over_line(victory), side_style(victory.side).bold())
@@ -107,11 +109,11 @@ pub fn render_status_bar(
                 (format!("playing {} — e score · ⌫ return card", card.name), Style::color(Color::Selected))
             }
             (Some(card), None) if events::is_implemented(card.id) => (
-                format!("playing {} ({}) — e event · i influence · a realign · o coup · ⌫ return card", card.name, ops_text(status, card)),
+                format!("playing {} ({}) — e event · i influence · a realign · o coup{} · ⌫ return card", card.name, ops_text(status, card), space_hint(card)),
                 Style::color(Color::Selected),
             ),
             (Some(card), None) => (
-                format!("playing {} ({}) — i influence · a realign · o coup · ⌫ return card", card.name, ops_text(status, card)),
+                format!("playing {} ({}) — i influence · a realign · o coup{} · ⌫ return card", card.name, ops_text(status, card), space_hint(card)),
                 Style::color(Color::Selected),
             ),
             (None, None) => (PLAY_HINT.to_string(), Style::color(Color::Muted)),
@@ -125,6 +127,7 @@ pub fn render_status_bar(
         .iter()
         .map(|e| (lasting_effect_line(e), e.side()))
         .chain(status.effects.active().iter().map(|e| (ongoing_effect_line(e), e.side())))
+        .chain(Perk::ALL.iter().filter_map(|&p| space::perk_holder(status, p).map(|side| (format!("{side} space: {}", p.label()), side))))
         .collect();
     let effects_width = if effects.is_empty() {
         NO_EFFECTS.chars().count()
@@ -145,6 +148,17 @@ pub fn render_status_bar(
 const NO_EFFECTS: &str = "no turn effects in force";
 const EFFECTS_LABEL: &str = "In effect: ";
 const EFFECT_SEP: &str = " · ";
+
+/// ` · Space 2-1` — the USA's box, then the USSR's.
+fn space_label(status: &GameStatus) -> String {
+    format!(" · Space {}-{}", status.space_race_us, status.space_race_ussr)
+}
+
+/// ` · s space race` for any card that has ops to spend — the key opens a
+/// confirmation that explains the box, and why a roll isn't available if it isn't.
+fn space_hint(card: &Card) -> &'static str {
+    if card.scoring { "" } else { " · s space race" }
+}
 
 /// `3`, or `8/7+1` for the extra round North Sea Oil gives the US.
 fn ar_label(status: &GameStatus) -> String {
@@ -210,7 +224,7 @@ fn draw_turn_line(canvas: &mut Canvas, status: &GameStatus, to_act: Superpower) 
         Superpower::Ussr => Style::color(Color::Ussr).bold(),
     };
     put(canvas, &format!("{to_act} to act"), side_style);
-    put(canvas, &format!(" · DEFCON {} · VP {}", status.defcon, vp_line(status.vp)), Style::default());
+    put(canvas, &format!(" · DEFCON {} · VP {}{}", status.defcon, vp_line(status.vp), space_label(status)), Style::default());
 }
 
 #[cfg(test)]
@@ -255,7 +269,7 @@ mod tests {
         let board = Board::new(&map);
         let text = render_status_bar(&layout, &board, &status(), None, None, None, 60).render(ColorMode::Never);
         let first_line = text.lines().next().unwrap();
-        assert_eq!(first_line, "TURN 5 · AR 3/7 · USSR to act · DEFCON 3 · VP US +4");
+        assert_eq!(first_line, "TURN 5 · AR 3/7 · USSR to act · DEFCON 3 · VP US +4 · Space 0-0");
     }
 
     #[test]

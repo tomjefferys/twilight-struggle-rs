@@ -18,6 +18,7 @@ use crate::cards::CardId;
 use crate::country::{CountryId, Region, Superpower};
 use crate::map::WorldMap;
 use crate::ongoing::{LastingEffect, OngoingEffect};
+use crate::space;
 use crate::status::GameStatus;
 
 /// One country's influence for one side, before and after an event —
@@ -60,6 +61,8 @@ pub struct EffectResult {
     pub cancels: Option<LastingEffect>,
     /// The China Card changing hands (Cultural Revolution, Nixon, Ussuri River Skirmish).
     pub china: Option<ChinaTransfer>,
+    /// The space race marker moving: the side, and the box it was at and moves to.
+    pub space: Option<(Superpower, u8, u8)>,
 }
 
 /// What one card's effect function sees and mutates: the board as it was
@@ -82,6 +85,7 @@ struct Ctx<'a> {
     lasting: Option<LastingEffect>,
     cancels: Option<LastingEffect>,
     china: Option<ChinaTransfer>,
+    space: Option<(Superpower, u8, u8)>,
 }
 
 impl Ctx<'_> {
@@ -157,6 +161,22 @@ impl Ctx<'_> {
         self.cancels = Some(effect);
     }
 
+    /// Advances `side`'s space race marker by up to `n` boxes (stopping at
+    /// the end of the track), awarding each box's arrival VP — or only the
+    /// last box's, with `vp_from_last_only`.
+    fn advance_space(&mut self, side: Superpower, n: u8, vp_from_last_only: bool) {
+        let from = space::position(self.status, side);
+        let to = (from + n).min(space::MAX_BOX);
+        if to == from {
+            return;
+        }
+        let first = if vp_from_last_only { to } else { from + 1 };
+        for b in first..=to {
+            self.vp_delta += space::arrival_vp(self.status, side, b);
+        }
+        self.space = Some((side, from, to));
+    }
+
     /// Who holds the China Card, face up or down.
     fn china_holder(&self) -> Superpower {
         self.status.china_card
@@ -192,12 +212,14 @@ const EFFECTS: &[(u8, Effect)] = &[
     (12, romanian_abdication),
     (15, nasser),
     (17, de_gaulle_leads_france),
+    (18, captured_nazi_scientist),
     (21, nato),
     (25, containment),
     (31, red_scare_purge),
     (27, us_japan_mutual_defense_pact),
     (34, nuclear_test_ban),
     (35, formosan_resolution),
+    (80, one_small_step),
     (41, nuclear_subs),
     (48, kitchen_debates),
     (50, we_will_bury_you),
@@ -239,9 +261,9 @@ pub fn is_effect_card(card: CardId) -> bool {
 /// name the map doesn't know, which `tests` below pins for every card.
 pub fn resolve(map: &WorldMap, board: &Board, status: &GameStatus, card: CardId) -> Option<EffectResult> {
     let effect = effect_for(card)?;
-    let mut ctx = Ctx { map, before: board, working: board.clone(), status, changes: Vec::new(), vp_delta: 0, defcon: None, ongoing: None, lasting: None, cancels: None, china: None };
+    let mut ctx = Ctx { map, before: board, working: board.clone(), status, changes: Vec::new(), vp_delta: 0, defcon: None, ongoing: None, lasting: None, cancels: None, china: None, space: None };
     effect(&mut ctx);
-    Some(EffectResult { card, player: status.active, influence: ctx.changes, vp_delta: ctx.vp_delta, defcon: ctx.defcon, ongoing: ctx.ongoing, lasting: ctx.lasting, cancels: ctx.cancels, china: ctx.china })
+    Some(EffectResult { card, player: status.active, influence: ctx.changes, vp_delta: ctx.vp_delta, defcon: ctx.defcon, ongoing: ctx.ongoing, lasting: ctx.lasting, cancels: ctx.cancels, china: ctx.china, space: ctx.space })
 }
 
 // ---- the cards, in printed-number order ----
@@ -283,9 +305,23 @@ fn de_gaulle_leads_france(c: &mut Ctx) {
     c.persist(LastingEffect::DeGaulle);
 }
 
+/// #18 Captured Nazi Scientist: the player advances one box on the space race.
+fn captured_nazi_scientist(c: &mut Ctx) {
+    let player = c.player();
+    c.advance_space(player, 1, false);
+}
+
 /// #25 Containment: US ops cards get +1 ops (max 4) for the rest of the turn.
 fn containment(c: &mut Ctx) {
     c.start(OngoingEffect::Containment);
+}
+
+/// #80 One Small Step: if behind on the space race, advance two boxes — VP only from the last.
+fn one_small_step(c: &mut Ctx) {
+    let player = c.player();
+    if space::position(c.status, player) < space::position(c.status, player.opponent()) {
+        c.advance_space(player, 2, true);
+    }
 }
 
 /// #31 Red Scare/Purge: the opponent's ops cards get -1 ops (min 1) for the rest of the turn.

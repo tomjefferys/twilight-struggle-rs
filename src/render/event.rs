@@ -49,6 +49,9 @@ pub fn render_event_result(
     if let Some(t) = &result.china {
         lines.push((format!("China Card → {} ({})", t.to, if t.face_up { "face up" } else { "face down" }), Style::color(side_color(t.to)).bold()));
     }
+    if let Some((side, from, to)) = result.space {
+        lines.push((format!("{side} space race: box {from} → {to} ({})", crate::space::space_box(to).name), Style::color(side_color(side)).bold()));
+    }
     if let Some(effect) = &result.ongoing {
         if !lines.is_empty() {
             lines.push((String::new(), Style::default()));
@@ -110,7 +113,7 @@ mod tests {
     use crate::render::ColorMode;
 
     fn result(ongoing: Option<OngoingEffect>, vp_delta: i8) -> EffectResult {
-        EffectResult { card: CardId(25), player: Superpower::Us, influence: Vec::new(), vp_delta, defcon: None, ongoing, lasting: None, cancels: None, china: None }
+        EffectResult { card: CardId(25), player: Superpower::Us, influence: Vec::new(), vp_delta, defcon: None, ongoing, lasting: None, cancels: None, china: None, space: None }
     }
 
     #[test]

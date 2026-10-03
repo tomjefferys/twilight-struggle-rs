@@ -7,7 +7,7 @@ use rustyline::Editor;
 
 use twilight_struggle::render::{
     coup_result_line, game_over_line, log_entry_line, log_text, ongoing_effect_line, operation_abandoned_line, operation_balance_line, render_card,
-    render_country, render_event_result, render_war_result, render_hand, render_log, render_region, render_scoring_result, render_world, render_world_map, roll_result_line,
+    render_country, render_event_result, render_space_result, render_space_track, render_war_result, render_hand, render_log, render_region, render_scoring_result, render_world, render_world_map, roll_result_line,
 };
 use twilight_struggle::{
     ai, CardCatalog, CardFound, CardId, ColorMode, Dice, EventOutcome, Found, Game, GameError, GameStatus, MapLayout, Operation,
@@ -33,7 +33,7 @@ const COMMANDS: &[&str] = &[
     "map", "world", "worldmap", "wm", "region", "country", "set", "add", "remove", "clear", "blank", "load", "save", "states", "play",
     "influence", "realign", "coup", "event", "place", "roll", "undo", "confirm", "cancel", "abandon", "status", "pass", "ai", "hand",
     "card", "log", "history", "export", "seed", "width", "color", "debug", "vp", "defcon", "turn", "ar", "active", "china", "give",
-    "discard", "exile", "help", "+", "-", "take", "mode",
+    "discard", "exile", "help", "+", "-", "take", "mode", "space", "spacerace", "track",
 ];
 
 struct Session {
@@ -639,6 +639,25 @@ fn run_command(session: &mut Session, line: &str) {
         "realign" => run_begin_command(session, OperationKind::Realign, &words),
         "coup" => run_begin_command(session, OperationKind::Coup, &words),
         "event" => run_event_command(session),
+        "space" => run_space_command(session),
+        "spacerace" => println!("{}", render_space_track(session.game.status()).render(session.color)),
+        "track" => {
+            let side = match words.get(1).copied() {
+                Some("us") => Some(Superpower::Us),
+                Some("ussr") => Some(Superpower::Ussr),
+                _ => None,
+            };
+            let (Some(side), Some(n)) = (side, words.get(2).and_then(|s| s.parse::<u8>().ok())) else {
+                println!("usage: track us|ussr <box> (0..=8)");
+                return;
+            };
+            if !debug_guard_strict(session) {
+                return;
+            }
+            let Some(before) = debug_apply_status(session, |s| twilight_struggle::space::set_position(s, side, n)) else { return };
+            session.game.record_note(format!("debug: {side} space race {} -> {n}", twilight_struggle::space::position(&before, side)));
+            println!("{side} space race marker set to box {n}");
+        }
         "place" | "+" => run_place_command(session, &words),
         "-" | "take" => run_unplace_command(session, &words),
         "mode" => run_mode_command(session, &words),
@@ -916,6 +935,17 @@ fn run_begin_command(session: &mut Session, kind: OperationKind, words: &[&str])
 /// refused with [`GameError::EventNotImplemented`]'s own text. Prints the
 /// same breakdown the interactive map's modal shows, and, if the event
 /// just won the game, [`game_over_line`] right after it.
+/// `space`: spends the card in play on a space race attempt and shows the result.
+fn run_space_command(session: &mut Session) {
+    match session.game.space(&mut session.dice) {
+        Ok(result) => {
+            let canvas = render_space_result(&session.cards, &result, session.game.status().vp, session.game.winner(), None);
+            println!("{}", canvas.render(session.color));
+        }
+        Err(e) => println!("{e}"),
+    }
+}
+
 fn run_event_command(session: &mut Session) {
     match session.game.play_event(&session.map, &session.cards) {
         Ok(EventOutcome::Scoring(result)) => {
@@ -1544,6 +1574,13 @@ Commands:
                           REMOVES influence there (or takes back a staged
                           add). `take` is an alias. Press - in the map too
 
+  space                   spend the card in play on a space race attempt:
+                          needs at least the next box's ops (not the China
+                          Card), then a d6 at or under the box's number
+                          moves the marker and pays the box's VP. The card
+                          is discarded either way and the turn passes.
+  spacerace               show the space race track, markers and perks
+
   event                   play the card in play for its text. Cards with a
                           choice (Comecon, Marshall Plan, Truman Doctrine…)
                           open a session for the CARD'S OWN side to choose
@@ -1646,6 +1683,7 @@ Commands:
   add <c> <us|ussr> <n>   add influence (saturates)
   remove <c> <us|ussr> <n> remove influence (saturates at 0)
   clear <c>|all           zero a country's influence, or the whole board
+  track us|ussr <box>      set a space race marker (0..8)
   vp <n>                  set the VP track (-20..20)
   defcon <n>               set DEFCON
   turn <n>, ar <n>         set the turn counter / action round

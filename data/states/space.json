@@ -1,0 +1,70 @@
+{
+  "states": [
+    {
+      "name": "first-attempt",
+      "description": "USSR to act at the start of the track with a 3-op and a 1-op card. Box 1 needs 2+ ops and a roll of 1-3.",
+      "status": {"active": "Ussr"},
+      "hands": {"us": ["Fidel"], "ussr": ["Duck and Cover", "Romanian Abdication"]}
+    },
+    {
+      "name": "second-in",
+      "description": "USSR to act, the US already in box 1: reaching it second pays 1 VP instead of 2.",
+      "status": {"active": "Ussr", "space_race_us": 1},
+      "hands": {"us": ["Fidel"], "ussr": ["Duck and Cover"]}
+    },
+    {
+      "name": "animal-in-space-leader",
+      "description": "US leads into Animal in Space (box 2) and has made one attempt this turn: its perk allows a second.",
+      "status": {"active": "Us", "space_race_us": 2, "space_race_ussr": 1, "space_attempts_us": 1},
+      "hands": {"us": ["Duck and Cover", "Fidel"], "ussr": ["Comecon"]}
+    },
+    {
+      "name": "animal-in-space-cancelled",
+      "description": "Both sides have reached box 2, so its perk is gone: the US has used its one attempt this turn.",
+      "status": {"active": "Us", "space_race_us": 3, "space_race_ussr": 2, "space_attempts_us": 1},
+      "hands": {"us": ["Duck and Cover", "Fidel"], "ussr": ["Comecon"]}
+    },
+    {
+      "name": "space-station-ussr",
+      "description": "USSR holds the Space Station box (8 action rounds); the US is about to finish AR 6 of 6, so the USSR plays ARs 7 and 8 alone.",
+      "status": {"active": "Us", "action_round": 6, "space_race_us": 3, "space_race_ussr": 8},
+      "hands": {"us": ["Fidel"], "ussr": ["Comecon"]}
+    },
+    {
+      "name": "space-station-cancelled",
+      "description": "Both sides have reached the Space Station, so nobody gets eighth action rounds.",
+      "status": {"active": "Us", "action_round": 6, "space_race_us": 8, "space_race_ussr": 8},
+      "hands": {"us": ["Fidel"], "ussr": ["Comecon"]}
+    },
+    {
+      "name": "nazi-scientist",
+      "description": "US to act with Captured Nazi Scientist: moves the US marker from 0 to box 1 (2 VP for being first).",
+      "status": {"active": "Us"},
+      "hands": {"us": ["Captured Nazi Scientist"], "ussr": ["Fidel"]}
+    },
+    {
+      "name": "one-small-step-behind",
+      "description": "USSR to act with One Small Step, 2 boxes behind: moves from 0 to box 2, VP only from the last box (second into Animal in Space: 0).",
+      "status": {"active": "Ussr", "space_race_us": 2},
+      "hands": {"us": ["Fidel"], "ussr": ["“One Small Step…”"]}
+    },
+    {
+      "name": "one-small-step-not-behind",
+      "description": "Level on the track, so One Small Step does nothing.",
+      "status": {"active": "Ussr", "space_race_us": 2, "space_race_ussr": 2},
+      "hands": {"us": ["Fidel"], "ussr": ["“One Small Step…”"]}
+    },
+    {
+      "name": "vp-win-by-space",
+      "description": "US at 18 VP and in box 6: reaching the Space Shuttle first pays 4 VP and wins the game.",
+      "status": {"active": "Us", "vp": 18, "space_race_us": 6},
+      "hands": {"us": ["Duck and Cover"], "ussr": ["Fidel"]}
+    },
+    {
+      "name": "china-card",
+      "description": "USSR holds the China Card face up (4 ops) — but it can't be used for the space race.",
+      "status": {"active": "Ussr"},
+      "hands": {"us": ["Fidel"], "ussr": ["Comecon"]}
+    }
+  ]
+}

@@ -11,7 +11,7 @@ countries to add/remove influence in, whoever is phasing), and ten
 *turn-long* effects ("for the remainder of this turn" — Containment,
 Chernobyl, …, held in `GameStatus::effects` until the turn rolls over),
 the five *war* cards (a die roll against a target, Military Ops tracked), and eight *lasting* cards (NATO, US/Japan Pact, Formosan Resolution, We Will Bury You, Willy Brandt, Flower Power, Shuttle Diplomacy — held in `GameStatus::lasting`, never cleared by a turn rolling over — plus Solidarity's prerequisite), which can end the game outright (VP reaching ±20, DEFCON
-reaching 1, or Europe Scoring's Control tier). `CARDS.md` tracks which of
+reaching 1, or Europe Scoring's Control tier), and the *Space Race* (`src/space.rs`, below). `CARDS.md` tracks which of
 the 110 cards have their event implemented (`tests/cards_progress.rs`
 keeps it honest). Every other card's text, DEFCON degradation *other than a battleground
 coup's* (rule 6.3.4), Military Operations, and
@@ -198,6 +198,32 @@ uniformly random legal moves.
   `Realignment::can_afford`, never compare `cost` to `remaining` themselves.
   `Operation::pending_bonus` (a `Vec<OpsBonus>`) is what headers hint at.
   **Lasting effects** (`LastingEffects`/`LastingEffect`, same file) are the game-long sibling of `TurnEffects`: a `GameStatus::lasting` field (`#[serde(default, skip_serializing_if = is_empty)]`) that `Game::advance` never resets. Pure queries only: `protects(map, board, attacker, id)` (NATO for US-controlled Europe, minus France under De Gaulle and West Germany under Willy Brandt; the US/Japan pact for Japan — only the USSR is ever barred; returns the responsible `CardId`), `taiwan_battleground` (Formosan) and `shuttle_applies`. `Coup`/`Realignment` take `with_lasting` and refuse a protected target (`CoupError`/`RealignError::Protected`, and `is_legal_target` is false so the existing dimming works, judged on the live board); `War::with_lasting` does the same for Brush War vs NATO. `events::scoring::resolve` takes the effects too and lists what applied in `ScoringResult::modifiers` (shown in the score modal and log line). `EffectResult::lasting`/`cancels` start or end one (`Ctx::persist`/`cancel`); `Game::finish_effect` applies them. Three triggers live in `Game`, each logged as `Event::Triggered` (`trigger` line): Flower Power (`flower_power_check`, from `discard_played_card` for ops and `finish_war` for events), We Will Bury You (in `advance`, when the US finishes the round it was owed — `skip` is 1 if the US itself played it), and Formosan's cancel on the US playing the China Card. Shuttle Diplomacy isn't discarded when played: the scoring it modifies spends and discards it.
+- **`space`** (`src/space.rs`) — the Space Race (rule 6.4), pure rules like
+  `ongoing.rs`. `TRACK` holds boxes 1-8 (ops needed, die threshold, VP for
+  first/second in, perk); `GameStatus::space_race_us`/`ussr` are the markers (0-8)
+  and `space_attempts_us`/`ussr` the attempts made this turn (reset by
+  `Game::begin_round`'s turn rollover). **Perks are derived, never stored:**
+  `perk_holder` is the side at or past a perk's box while the opponent isn't,
+  so reaching the box cancels it with no extra state. `check` is the one
+  legality test (`SpaceError`: scoring card, the China Card — which can't be
+  spaced — too few ops, no attempts left, track complete; a card with *more*
+  ops than the box needs is fine, and the ops compared are the card's
+  *effective* ops after Containment etc.); `resolve` is the pure roll.
+  `Game::space(dice)` spends the card in play on an attempt: discards it
+  directly (not via `discard_played_card`, so Flower Power doesn't see it),
+  pays `arrival_vp` on success, logs `Event::Space`, and hands the turn over.
+  `Action::Space` is offered when `Game::can_space`. Enforced perks: Animal in
+  Space (`attempts_allowed` 2) and Space Station (`GameStatus::rounds_for`
+  gives the holder 8 action rounds; `Game::advance`/`begin_round` skip a side
+  with no round left, so the holder plays the extra rounds alone — North Sea
+  Oil goes through the same path). Man in Earth Orbit (headline first) and
+  Eagle/Bear has Landed (discard a held card) are derived and shown but have
+  no effect, since there's no headline phase or end-of-turn hand step. Cards
+  #18 Captured Nazi Scientist and #80 One Small Step use `Ctx::advance_space`
+  and report `EffectResult::space`. Views: `render/space.rs`
+  (`render_space_track`, `render_space_result`), a `Space n-m` label and perk
+  entries in the status bar, `s` in interactive mode (opens `Modal::SpaceConfirm`, `render_space_confirm`: the next box, the roll needed and why a roll is unavailable if it is — Enter rolls only when `Game::can_space`, Esc cancels for free; shown even when the roll is refused), `space`/`spacerace`/
+  debug `track us|ussr <n>` in the REPL; test states in `data/states/space.json`.
 - **`ops`** (`src/ops/`) — the game's ops-spending operations, plus (as
   `Operation::Event`) a choice card's event in progress. Four kinds
   so far, sharing the `Operation` enum (`src/ops/mod.rs`) as the seam the

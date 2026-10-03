@@ -13,6 +13,7 @@ pub mod ongoing;
 pub mod ops;
 pub mod render;
 pub mod scenario;
+pub mod space;
 pub mod states;
 pub mod status;
 

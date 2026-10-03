@@ -1,6 +1,6 @@
 use twilight_struggle::render::{operation_abandoned_line, operation_closed_line, render_card, render_country, render_hand, render_region, render_world};
 use twilight_struggle::{
-    Board, CardCatalog, ColorMode, CountryId, Coup, GuestEntity, InfluencePlacement, LinkTarget, MapLayout, Operation, Realignment, Region,
+    Board, CardCatalog, ColorMode, CountryId, Coup, GameStatus, GuestEntity, InfluencePlacement, LinkTarget, MapLayout, Operation, Realignment, Region,
     Scenario, Superpower, ViewMode, WorldMap,
 };
 
@@ -1117,4 +1117,12 @@ fn the_world_map_marks_live_countries_during_an_event_and_dims_the_rest() {
     assert!(text.contains(&format!("+{}", code("Romania"))), "an eligible country is flagged `+`: {text}");
     assert!(text.contains(&format!("~{}", code("Hungary"))), "a changed country is flagged `~`");
     assert!(text.contains("not eligible"), "the legend explains the dimming");
+}
+
+#[test]
+fn space_track_matches_snapshot() {
+    let status = GameStatus { space_race_us: 3, space_race_ussr: 2, ..GameStatus::default() };
+    let canvas = twilight_struggle::render::render_space_track(&status);
+    let expected = include_str!("snapshots/space_track.txt");
+    assert_eq!(canvas.render(ColorMode::Never), expected.trim_end_matches('\n'));
 }

@@ -29,6 +29,7 @@ use crate::country::{CountryId, Superpower};
 use crate::events::{EffectResult, ScoringResult, WarResult};
 use crate::game::{OperationKind, Victory};
 use crate::ops::{CoupResult, RollResult};
+use crate::space::SpaceResult;
 
 /// What happened, with no opinion on how it should be displayed.
 #[derive(Debug, Clone, PartialEq)]
@@ -63,6 +64,9 @@ pub enum Event {
     /// value — logged the instant it resolves, which is also when the
     /// event (and the turn) ends.
     War { result: WarResult, vp_after: i8 },
+    /// A card spent on a space race attempt, with the VP track's new value
+    /// — logged the instant it resolves, which is also when the turn ends.
+    Space { result: SpaceResult, vp_after: i8 },
     /// An operation closed — `confirm`'s or `cancel`'s own entry. A
     /// realignment's or coup's rolls are already in the log as their own
     /// entries by the time this is pushed; a placement's points arrive in

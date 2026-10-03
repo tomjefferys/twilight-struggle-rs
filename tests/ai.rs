@@ -48,6 +48,9 @@ fn assert_legal_actions_are_exact(game: &Game, map: &WorldMap, cards: &CardCatal
         assert_eq!(actual, expected, "Begin({kind:?}) disagreement");
     }
 
+    let expected_space = game.lookahead().space(&mut Dice::from_seed(0)).is_ok();
+    assert_eq!(legal.contains(&Action::Space), expected_space, "Space disagreement");
+
     let expected_event = game.lookahead().play_event(map, cards).is_ok();
     assert_eq!(legal.contains(&Action::Event), expected_event, "Event disagreement");
 

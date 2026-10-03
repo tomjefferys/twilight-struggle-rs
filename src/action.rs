@@ -45,6 +45,9 @@ pub enum Action {
     /// Resolve the card in play's own event — [`Game::play_event`]. Only
     /// offered when [`crate::events::is_implemented`] recognises it.
     Event,
+    /// Spend the card in play on a space race attempt — [`Game::space`].
+    /// Offered only when [`crate::space::check`] allows it.
+    Space,
     /// Place one point of influence here — [`Game::place`]; in an open
     /// event, the `+` step (add influence there).
     Place(CountryId),
@@ -154,6 +157,9 @@ impl Game {
                     // `Event` (pushed above, since every scoring card is
                     // implemented) is the only way to play one. Any other
                     // card can offer both.
+                    if self.can_space() {
+                        actions.push(Action::Space);
+                    }
                     if !cards.card(id).scoring {
                         actions.push(Action::Begin(OperationKind::Influence));
                         actions.push(Action::Begin(OperationKind::Realign));
@@ -191,6 +197,7 @@ impl Game {
             Action::ChooseMode(i) => self.choose_mode(map, i as usize),
             Action::Roll(id) => self.roll(map, id, dice).map(|_| ()),
             Action::Confirm => self.confirm().map(|_| ()),
+            Action::Space => self.space(dice).map(|_| ()),
             Action::Pass => self.pass(),
         }
     }

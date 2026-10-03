@@ -60,6 +60,7 @@ use crate::ops::{
 };
 use crate::ops::{Coup, CoupResult};
 use crate::scenario::Scenario;
+use crate::space::{self, SpaceError, SpaceResult};
 use crate::status::GameStatus;
 
 /// Why the game ended.
@@ -168,6 +169,7 @@ pub enum GameError {
     Placement(PlacementError),
     Realign(RealignError),
     Coup(CoupError),
+    Space(SpaceError),
 }
 
 impl fmt::Display for GameError {
@@ -204,6 +206,7 @@ impl fmt::Display for GameError {
             GameError::Placement(e) => write!(f, "{e}"),
             GameError::Realign(e) => write!(f, "{e}"),
             GameError::Coup(e) => write!(f, "{e}"),
+            GameError::Space(e) => write!(f, "{e}"),
         }
     }
 }
@@ -231,6 +234,12 @@ impl From<PlacementError> for GameError {
 impl From<RealignError> for GameError {
     fn from(e: RealignError) -> Self {
         GameError::Realign(e)
+    }
+}
+
+impl From<SpaceError> for GameError {
+    fn from(e: SpaceError) -> Self {
+        GameError::Space(e)
     }
 }
 
@@ -853,6 +862,66 @@ impl Game {
         }
     }
 
+    /// Spends the card in play on a space race attempt (rule 6.4) instead
+    /// of an operation or its event: rolls the die against the next box
+    /// and, on a roll at or under its number, moves the marker there and
+    /// pays the box's VP. Either way the card is discarded — its event
+    /// never happens, so Flower Power and the like don't see it — and the
+    /// turn is handed over. Refused for anything [`space::check`] refuses
+    /// (a scoring card, the China Card, too few ops, no attempts left),
+    /// with no card in play, while an operation is open, or once the game
+    /// is over. The ops compared are the card's *effective* ops, so
+    /// Containment and Red Scare count.
+    pub fn space(&mut self, dice: &mut Dice) -> Result<SpaceResult, GameError> {
+        self.space_check()?;
+        let card = self.card.expect("space_check found a card in play");
+        let side = self.status.active;
+        let result = space::resolve(&self.status, side, card.id, dice.roll());
+        self.log_card_selected();
+        match side {
+            Superpower::Us => self.status.space_attempts_us += 1,
+            Superpower::Ussr => self.status.space_attempts_ussr += 1,
+        }
+        if result.success {
+            space::set_position(&mut self.status, side, result.to());
+            self.apply_vp(result.vp_delta);
+        }
+        let vp_after = self.status.vp;
+        self.log.push(LogEntry {
+            turn: self.status.turn,
+            action_round: self.status.action_round,
+            side: Some(side),
+            event: Event::Space { result, vp_after },
+        });
+        self.log_game_over();
+        self.card = None;
+        self.hands.discard(card.id);
+        if self.winner.is_none() {
+            self.advance();
+        }
+        Ok(result)
+    }
+
+    /// Whether [`Game::space`] would be accepted for the card in play right
+    /// now — what [`Game::legal_actions`] and the key hints ask.
+    pub fn can_space(&self) -> bool {
+        self.space_check().is_ok()
+    }
+
+    /// [`space::check`] for the card in play, or why not.
+    pub fn space_check(&self) -> Result<(), GameError> {
+        if self.winner.is_some() {
+            return Err(GameError::GameOver);
+        }
+        if let Some(op) = &self.op {
+            return Err(GameError::OperationOpen { verb: op.verb(), remaining: op.remaining(), total: op.ops_total() });
+        }
+        let card = self.card.ok_or(GameError::NoCard)?;
+        let side = self.status.active;
+        let ops = self.status.effects.card_ops(card.ops, side).0;
+        Ok(space::check(&self.status, side, card.id == CHINA_CARD, card.scoring, ops)?)
+    }
+
     /// Forfeits the active side's turn without opening an operation.
     /// Refused if one is already open — cancel it first — if a card is
     /// in play (once a card's been taken from the hand, there's nothing
@@ -998,6 +1067,9 @@ impl Game {
         }
         if let Some(effect) = result.cancels {
             self.status.lasting.cancel(effect);
+        }
+        if let Some((side, _, to)) = result.space {
+            space::set_position(&mut self.status, side, to);
         }
         if let Some(transfer) = result.china {
             self.status.china_card = transfer.to;
@@ -1223,16 +1295,26 @@ impl Game {
         }
     }
 
-    /// Hands the turn to the other side: USSR to USA, or USA to USSR —
-    /// which also completes an action round, so it increments
-    /// `action_round`, rolling `turn` over (and flipping the China Card
-    /// face up again, wherever it's landed) and resetting `action_round`
-    /// to 1 once it passes `action_rounds_per_turn`. The only writer of
-    /// `active`/`turn`/`action_round`, called from `confirm`, `cancel`,
-    /// and `pass` — nowhere else.
+    /// Hands the turn to the next action round slot: USSR to USA within
+    /// the same round, or USA to the next round's first side that still
+    /// has a round to play ([`GameStatus::rounds_for`] — North Sea Oil
+    /// gives the US a round the USSR doesn't get, and the Space Station
+    /// box does the same for its holder). When neither side has a round
+    /// left the turn rolls over: `action_round` back to 1, the China Card
+    /// face up again, every "remainder of the turn" effect and the space
+    /// attempt counters cleared. The only writer of `active`/`turn`/
+    /// `action_round`, called from `confirm`, `cancel`, `pass` and
+    /// `space` — nowhere else.
     fn advance(&mut self) {
+        let round = self.status.action_round;
         match self.status.active {
-            Superpower::Ussr => self.status.active = Superpower::Us,
+            Superpower::Ussr => {
+                if self.status.rounds_for(Superpower::Us) >= round {
+                    self.status.active = Superpower::Us;
+                } else {
+                    self.begin_round(round + 1);
+                }
+            }
             Superpower::Us => {
                 // We Will Bury You pays once the US has finished the round
                 // it was owed in (`skip` rounds are let pass first).
@@ -1247,23 +1329,29 @@ impl Game {
                     Some(n) => self.status.lasting.we_will_bury_you = Some(n - 1),
                     None => {}
                 }
-                // North Sea Oil: the US plays one more action round this
-                // turn, on its own — the USSR sits it out.
-                if self.status.action_round == self.status.action_rounds_per_turn && self.status.effects.extra_rounds(Superpower::Us) > 0 {
-                    self.status.action_round += 1;
-                    return;
-                }
-                self.status.active = Superpower::Ussr;
-                self.status.action_round += 1;
-                if self.status.action_round > self.status.action_rounds_per_turn {
-                    self.status.action_round = 1;
-                    self.status.turn += 1;
-                    self.status.china_card_face_up = true;
-                    // Every "for the remainder of the turn" effect ends here.
-                    self.status.effects = TurnEffects::default();
-                }
+                self.begin_round(round + 1);
             }
         }
+    }
+
+    /// Starts action round `round`: the USSR goes first if it has a round
+    /// to play, else the US; if neither does, the turn rolls over.
+    fn begin_round(&mut self, round: u8) {
+        for side in [Superpower::Ussr, Superpower::Us] {
+            if self.status.rounds_for(side) >= round {
+                self.status.active = side;
+                self.status.action_round = round;
+                return;
+            }
+        }
+        self.status.active = Superpower::Ussr;
+        self.status.action_round = 1;
+        self.status.turn += 1;
+        self.status.china_card_face_up = true;
+        self.status.space_attempts_us = 0;
+        self.status.space_attempts_ussr = 0;
+        // Every "for the remainder of the turn" effect ends here.
+        self.status.effects = TurnEffects::default();
     }
 }
 

@@ -1797,3 +1797,147 @@ mod china {
         assert!(game.place(&map, map.id_by_name("Japan").unwrap()).is_err(), "only the card's own 4 ops");
     }
 }
+
+mod space {
+    use super::*;
+    use twilight_struggle::game::GameError;
+    use twilight_struggle::space::{SpaceError, SpaceResult};
+    use twilight_struggle::{Dice, CHINA_CARD};
+
+    fn load(name: &str) -> (WorldMap, CardCatalog, Game) {
+        let (map, cards, lib) = fixtures();
+        let reference = format!("space/{name}");
+        let (scenario, _) = lib.load(&map, &cards, &reference).unwrap_or_else(|e| panic!("loading {reference}: {e}"));
+        (map, cards, Game::from_scenario(&scenario))
+    }
+
+    /// A dice seed whose first roll satisfies `pred` — attempts roll exactly once.
+    fn dice_rolling(pred: impl Fn(u8) -> bool) -> Dice {
+        Dice::from_seed((0..1000u64).find(|&seed| pred(Dice::from_seed(seed).roll())).expect("some seed rolls it"))
+    }
+
+    fn attempt(game: &mut Game, cards: &CardCatalog, card: &str, dice: &mut Dice) -> Result<SpaceResult, GameError> {
+        game.play_card(cards, cards.id_by_name(card).unwrap()).unwrap();
+        game.space(dice)
+    }
+
+    #[test]
+    fn a_successful_attempt_moves_the_marker_pays_first_in_vp_discards_and_passes_the_turn() {
+        let (_, cards, mut game) = load("first-attempt");
+        let result = attempt(&mut game, &cards, "Duck and Cover", &mut dice_rolling(|r| r <= 3)).unwrap();
+        assert!(result.success);
+        assert_eq!((game.status().space_race_ussr, game.status().vp), (1, -2));
+        assert_eq!(game.status().active, Superpower::Us);
+        assert!(game.discards().contains(&cards.id_by_name("Duck and Cover").unwrap()));
+        assert_eq!(game.status().space_attempts_ussr, 1);
+    }
+
+    #[test]
+    fn a_failed_attempt_still_uses_the_card_and_the_turn() {
+        let (_, cards, mut game) = load("first-attempt");
+        let result = attempt(&mut game, &cards, "Duck and Cover", &mut dice_rolling(|r| r >= 4)).unwrap();
+        assert!(!result.success);
+        assert_eq!((game.status().space_race_ussr, game.status().vp), (0, 0));
+        assert_eq!(game.status().active, Superpower::Us);
+        assert!(game.discards().contains(&cards.id_by_name("Duck and Cover").unwrap()));
+    }
+
+    #[test]
+    fn a_card_without_enough_ops_is_refused_and_stays_in_play() {
+        let (_, cards, mut game) = load("first-attempt");
+        let err = attempt(&mut game, &cards, "Romanian Abdication", &mut Dice::from_seed(1)).unwrap_err();
+        assert!(matches!(err, GameError::Space(SpaceError::NotEnoughOps { have: 1, need: 2, .. })), "{err}");
+        assert!(game.card_in_play().is_some());
+        assert_eq!(game.status().active, Superpower::Ussr);
+    }
+
+    #[test]
+    fn arriving_second_pays_the_second_in_vp() {
+        let (_, cards, mut game) = load("second-in");
+        attempt(&mut game, &cards, "Duck and Cover", &mut dice_rolling(|r| r <= 3)).unwrap();
+        assert_eq!((game.status().space_race_ussr, game.status().vp), (1, -1));
+    }
+
+    #[test]
+    fn the_box_two_leader_may_make_a_second_attempt_until_the_opponent_arrives() {
+        let (_, cards, mut game) = load("animal-in-space-leader");
+        assert!(attempt(&mut game, &cards, "Duck and Cover", &mut dice_rolling(|r| r >= 5)).is_ok(), "a second attempt is allowed");
+        let (_, cards, mut game) = load("animal-in-space-cancelled");
+        let err = attempt(&mut game, &cards, "Duck and Cover", &mut Dice::from_seed(1)).unwrap_err();
+        assert!(matches!(err, GameError::Space(SpaceError::NoAttemptsLeft { allowed: 1 })), "{err}");
+    }
+
+    #[test]
+    fn the_china_card_cannot_be_spaced() {
+        let (_, cards, mut game) = load("china-card");
+        game.play_card(&cards, CHINA_CARD).unwrap();
+        assert!(matches!(game.space(&mut Dice::from_seed(1)), Err(GameError::Space(SpaceError::ChinaCard))));
+    }
+
+    #[test]
+    fn the_space_station_holder_plays_the_extra_rounds_alone_then_the_turn_rolls_over() {
+        let (_, _, mut game) = load("space-station-ussr");
+        game.pass().unwrap(); // US finishes AR 6
+        assert_eq!((game.status().active, game.status().action_round), (Superpower::Ussr, 7));
+        game.pass().unwrap();
+        assert_eq!((game.status().active, game.status().action_round), (Superpower::Ussr, 8), "the US has no AR 7");
+        game.pass().unwrap();
+        assert_eq!((game.status().active, game.status().action_round, game.status().turn), (Superpower::Ussr, 1, 2));
+    }
+
+    #[test]
+    fn nobody_gets_extra_rounds_once_both_reach_the_space_station() {
+        let (_, _, mut game) = load("space-station-cancelled");
+        game.pass().unwrap();
+        assert_eq!((game.status().active, game.status().action_round, game.status().turn), (Superpower::Ussr, 1, 2));
+    }
+
+    #[test]
+    fn space_attempts_reset_when_the_turn_rolls_over() {
+        let (_, cards, mut game) = load("first-attempt");
+        game.status_mut().active = Superpower::Us;
+        game.status_mut().action_round = 6;
+        game.status_mut().space_attempts_ussr = 1;
+        attempt(&mut game, &cards, "Fidel", &mut Dice::from_seed(1)).unwrap();
+        assert_eq!((game.status().turn, game.status().space_attempts_us, game.status().space_attempts_ussr), (2, 0, 0));
+    }
+
+    #[test]
+    fn captured_nazi_scientist_advances_the_player_one_box() {
+        let (map, cards, mut game) = load("nazi-scientist");
+        game.play_card(&cards, cards.id_by_name("Captured Nazi Scientist").unwrap()).unwrap();
+        game.play_event(&map, &cards).unwrap();
+        assert_eq!((game.status().space_race_us, game.status().vp), (1, 2));
+    }
+
+    #[test]
+    fn one_small_step_moves_two_boxes_with_vp_only_from_the_last_when_behind() {
+        let (map, cards, mut game) = load("one-small-step-behind");
+        game.play_card(&cards, cards.id_by_name("“One Small Step…”").unwrap()).unwrap();
+        game.play_event(&map, &cards).unwrap();
+        assert_eq!((game.status().space_race_ussr, game.status().vp), (2, 0));
+
+        let (map, cards, mut game) = load("one-small-step-not-behind");
+        game.play_card(&cards, cards.id_by_name("“One Small Step…”").unwrap()).unwrap();
+        game.play_event(&map, &cards).unwrap();
+        assert_eq!((game.status().space_race_ussr, game.status().vp), (2, 0));
+    }
+
+    #[test]
+    fn reaching_twenty_vp_in_the_space_race_wins_the_game() {
+        let (_, cards, mut game) = load("vp-win-by-space");
+        attempt(&mut game, &cards, "Duck and Cover", &mut dice_rolling(|r| r <= 3)).unwrap();
+        assert_eq!(game.status().vp, 20);
+        assert_eq!(game.winner().map(|v| v.side), Some(Superpower::Us));
+    }
+
+    #[test]
+    fn legal_actions_offer_space_only_when_it_is_allowed() {
+        let (map, cards, mut game) = load("first-attempt");
+        game.play_card(&cards, cards.id_by_name("Duck and Cover").unwrap()).unwrap();
+        assert!(game.legal_actions(&map, &cards).contains(&twilight_struggle::Action::Space));
+        game.return_card().unwrap();
+        game.play_card(&cards, cards.id_by_name("Romanian Abdication").unwrap()).unwrap();
+        assert!(!game.legal_actions(&map, &cards).contains(&twilight_struggle::Action::Space));
+    }
+}

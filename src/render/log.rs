@@ -138,6 +138,7 @@ fn action_and_detail(map: &WorldMap, cards: &CardCatalog, entry: &LogEntry) -> (
         Event::Scored { result, vp_after } => ("score", scored_detail(map, cards, result, *vp_after)),
         Event::EventResolved { result, vp_after } => ("event", event_detail(map, cards, result, *vp_after)),
         Event::War { result, vp_after } => ("war", war_detail(map, cards, result, *vp_after)),
+        Event::Space { result, vp_after } => ("space", space_detail(cards, result, *vp_after)),
         Event::GameOver(victory) => ("gameover", game_over_detail(*victory)),
     }
 }
@@ -298,6 +299,9 @@ fn event_detail(map: &WorldMap, cards: &CardCatalog, result: &EffectResult, vp_a
     if let Some(t) = &result.china {
         parts.push(format!("China Card→{} ({})", t.to, if t.face_up { "face up" } else { "face down" }));
     }
+    if let Some((side, from, to)) = result.space {
+        parts.push(format!("{side} space race {from}→{to} ({})", crate::space::space_box(to).name));
+    }
     if result.vp_delta != 0 {
         parts.push(format!("{:+} VP (now {vp_after})", result.vp_delta));
     }
@@ -307,6 +311,19 @@ fn event_detail(map: &WorldMap, cards: &CardCatalog, result: &EffectResult, vp_a
     }
     let body = if parts.is_empty() { "no effect".to_string() } else { parts.join(", ") };
     format!("{}: {body}", cards.card(result.card).name)
+}
+
+/// `Duck and Cover → Animal in Space: d6:2 need:≤4 — box 2, +0 VP (now -3)`,
+/// tagged like every other roll line.
+fn space_detail(cards: &CardCatalog, result: &crate::space::SpaceResult, vp_after: i8) -> String {
+    let target = result.target();
+    let outcome = if result.success {
+        let vp = if result.vp_delta != 0 { format!(", {:+} VP (now {vp_after})", result.vp_delta) } else { String::new() };
+        format!("reaches box {}{vp}", result.from + 1)
+    } else {
+        format!("stays at box {}", result.from)
+    };
+    format!("{} → {}: d6:{} need:≤{} — {outcome}", cards.card(result.card).name, target.name, result.roll, result.max_roll)
 }
 
 /// `Korean War → South Korea: d6:4 mod:-1 need:4+ → fails ...`, tagged like
