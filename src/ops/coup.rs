@@ -30,6 +30,8 @@ use crate::board::Board;
 use crate::country::{CountryId, Region, Superpower};
 use crate::dice::Dice;
 use crate::map::WorldMap;
+use crate::ongoing::TurnEffects;
+use crate::country::SubRegion;
 
 /// The number a coup's modified roll must strictly exceed to succeed:
 /// the target country's stability, doubled (rule 6.3.2).
@@ -44,6 +46,9 @@ pub struct CoupResult {
     pub target: CountryId,
     pub die: u8,
     pub ops: u8,
+    /// An ongoing event's adjustment to the die roll (Latin American
+    /// Death Squads): added to `die + ops` before comparing.
+    pub modifier: i8,
     pub target_number: u8,
     /// `(die + ops) - target_number` when that's positive, else 0 — the
     /// total influence swing on a success, and the reason a tie fails
@@ -69,12 +74,17 @@ impl CoupResult {
 /// — factored out from [`Coup::attempt`] so every rules test can run
 /// without touching [`Dice`] at all.
 pub fn coup_resolve(target: CountryId, acting: Superpower, die: u8, ops: u8, target_number: u8, board: &Board) -> CoupResult {
+    coup_resolve_with(target, acting, die, ops, 0, target_number, board)
+}
+
+/// [`coup_resolve`] with an ongoing event's `modifier` added to the roll.
+pub fn coup_resolve_with(target: CountryId, acting: Superpower, die: u8, ops: u8, modifier: i8, target_number: u8, board: &Board) -> CoupResult {
     let opponent = acting.opponent();
-    let modified = die as i32 + ops as i32;
+    let modified = die as i32 + ops as i32 + modifier as i32;
     let margin = (modified - target_number as i32).max(0) as u8;
     let removed = margin.min(board.influence(target, opponent));
     let added = margin - removed;
-    CoupResult { target, die, ops, target_number, margin, removed, added }
+    CoupResult { target, die, ops, modifier, target_number, margin, removed, added }
 }
 
 /// Win/fail odds for `side` couping `id` with `ops` operation points right
@@ -98,10 +108,15 @@ pub struct CoupOdds {
 /// — a coup's only modifier is the card's own Ops value, so there's no
 /// ops-free preview to compute.
 pub fn coup_odds(map: &WorldMap, board: &Board, id: CountryId, side: Superpower, ops: u8) -> CoupOdds {
+    coup_odds_with(map, board, id, side, ops, 0)
+}
+
+/// [`coup_odds`] with an ongoing event's `modifier` added to the roll.
+pub fn coup_odds_with(map: &WorldMap, board: &Board, id: CountryId, side: Superpower, ops: u8, modifier: i8) -> CoupOdds {
     let target_number = coup_target_number(map, id);
     let mut result = CoupOdds::default();
     for die in 1..=6u8 {
-        let roll = coup_resolve(id, side, die, ops, target_number, board);
+        let roll = coup_resolve_with(id, side, die, ops, modifier, target_number, board);
         if roll.success() {
             result.success += 1;
             result.removed_6ths += roll.removed as u16;
@@ -156,11 +171,14 @@ pub struct Coup {
     base: Board,
     /// Regions an ongoing event bars this side from couping in.
     banned: Vec<Region>,
+    /// Turn-long events that adjust the roll or the ops (Death Squads,
+    /// Vietnam Revolts).
+    effects: TurnEffects,
 }
 
 impl Coup {
     pub fn new(side: Superpower, ops: u8, board: &Board) -> Self {
-        Coup { side, ops_total: ops, result: None, base: board.clone(), banned: Vec::new() }
+        Coup { side, ops_total: ops, result: None, base: board.clone(), banned: Vec::new(), effects: TurnEffects::default() }
     }
 
     /// Forbids this coup from targeting any country in `regions` — what an
@@ -170,22 +188,50 @@ impl Coup {
         self
     }
 
+    /// Applies the turn-long events in force (see [`crate::ongoing`]).
+    pub fn with_effects(mut self, effects: TurnEffects) -> Self {
+        self.effects = effects;
+        self
+    }
+
     pub fn side(&self) -> Superpower {
         self.side
     }
 
+    /// The ops this coup is worth: those of the attempt once it has
+    /// resolved (which may include a Southeast Asia bonus), else the
+    /// card's own.
     pub fn ops_total(&self) -> u8 {
-        self.ops_total
+        self.result.map_or(self.ops_total, |r| r.ops)
+    }
+
+    /// The ops a coup on `id` would use: the card's, plus Vietnam Revolts'
+    /// bonus when `id` is in Southeast Asia.
+    pub fn ops_for(&self, map: &WorldMap, id: CountryId) -> u8 {
+        match self.effects.sub_region_bonus(self.side) {
+            Some((sub, n)) if map.country(id).is_in_sub_region(sub) => self.ops_total + n,
+            _ => self.ops_total,
+        }
+    }
+
+    /// The Southeast Asia-style bonus still on offer, for display.
+    pub fn sub_region_bonus(&self) -> Option<(SubRegion, u8)> {
+        self.effects.sub_region_bonus(self.side)
+    }
+
+    /// The die modifier a coup on `id` gets, with the card responsible.
+    pub fn roll_mod(&self, map: &WorldMap, id: CountryId) -> Option<(crate::cards::CardId, i8)> {
+        self.effects.coup_roll_mod(self.side, map.country(id).region)
     }
 
     /// All the ops at once, once this action's one attempt has resolved;
     /// zero until then.
     pub fn ops_spent(&self) -> u8 {
-        if self.result.is_some() { self.ops_total } else { 0 }
+        self.result.map_or(0, |r| r.ops)
     }
 
     pub fn remaining(&self) -> u8 {
-        self.ops_total - self.ops_spent()
+        self.ops_total() - self.ops_spent()
     }
 
     /// The target number and odds for a coup on `id` right now — everything
@@ -193,7 +239,8 @@ impl Coup {
     /// the caller's live board, not `base`.
     pub fn preview(&self, map: &WorldMap, board: &Board, id: CountryId) -> (u8, CoupOdds) {
         let target_number = coup_target_number(map, id);
-        let odds = coup_odds(map, board, id, self.side, self.ops_total);
+        let modifier = self.roll_mod(map, id).map_or(0, |(_, m)| m);
+        let odds = coup_odds_with(map, board, id, self.side, self.ops_for(map, id), modifier);
         (target_number, odds)
     }
 
@@ -226,7 +273,8 @@ impl Coup {
 
         let target_number = coup_target_number(map, id);
         let die = dice.roll();
-        let result = coup_resolve(id, self.side, die, self.ops_total, target_number, board);
+        let modifier = self.roll_mod(map, id).map_or(0, |(_, m)| m);
+        let result = coup_resolve_with(id, self.side, die, self.ops_for(map, id), modifier, target_number, board);
 
         if result.removed > 0 {
             board.remove_influence(id, self.side.opponent(), result.removed);
@@ -495,5 +543,53 @@ mod tests {
         board.set_influence(brezhnev, Us, 3);
         let o2 = coup_odds(&map, &board, brezhnev, Ussr, 0);
         assert_eq!(o2.success, 0, "die alone (max 6) can never exceed a target number of 8");
+    }
+
+    // --- ongoing events ----------------------------------------------------
+
+    #[test]
+    fn a_roll_modifier_shifts_the_modified_roll_and_the_odds() {
+        let map = map();
+        let mut board = Board::new(&map);
+        let colombia = id(&map, "Colombia"); // stability 1: target number 2
+        board.set_influence(colombia, Us, 5);
+        // Ops 2 beat target 2 only with a die of 1+... die+2 > 2 always; +modifier -1 on die 1 ties and fails.
+        assert_eq!(coup_odds(&map, &board, colombia, Ussr, 2).success, 6);
+        assert_eq!(coup_odds_with(&map, &board, colombia, Ussr, 2, -1).success, 5);
+        let result = coup_resolve_with(colombia, Ussr, 4, 2, -1, 2, &board);
+        assert_eq!((result.margin, result.modifier), (3, -1));
+    }
+
+    #[test]
+    fn death_squads_modify_a_coup_in_the_americas_only() {
+        use crate::ongoing::{OngoingEffect, TurnEffects};
+        let map = map();
+        let mut board = Board::new(&map);
+        board.set_influence(id(&map, "Colombia"), Us, 3);
+        board.set_influence(id(&map, "Italy"), Us, 3);
+        let mut effects = TurnEffects::default();
+        effects.apply(OngoingEffect::DeathSquads { beneficiary: Ussr });
+        let coup = Coup::new(Ussr, 2, &board).with_effects(effects);
+        assert_eq!(coup.roll_mod(&map, id(&map, "Colombia")).map(|(_, m)| m), Some(1));
+        assert_eq!(coup.roll_mod(&map, id(&map, "Italy")), None);
+        let against = Coup::new(Us, 2, &board).with_effects(effects);
+        assert_eq!(against.roll_mod(&map, id(&map, "Colombia")).map(|(_, m)| m), Some(-1));
+    }
+
+    #[test]
+    fn a_southeast_asia_bonus_adds_an_op_there_and_is_reported_once_spent() {
+        use crate::ongoing::{OngoingEffect, TurnEffects};
+        let map = map();
+        let mut board = Board::new(&map);
+        board.set_influence(id(&map, "Thailand"), Us, 2);
+        let mut effects = TurnEffects::default();
+        effects.apply(OngoingEffect::VietnamRevolts);
+        let mut coup = Coup::new(Ussr, 2, &board).with_effects(effects);
+        assert_eq!(coup.ops_for(&map, id(&map, "Thailand")), 3);
+        assert_eq!(coup.ops_for(&map, id(&map, "Poland")), 2);
+        assert_eq!(coup.ops_total(), 2, "before the attempt it is the card's own value");
+        let mut live = board.clone();
+        let result = coup.attempt(&map, &mut live, id(&map, "Thailand"), &mut Dice::from_seed(1)).unwrap();
+        assert_eq!((result.ops, coup.ops_total(), coup.ops_spent(), coup.remaining()), (3, 3, 3, 0));
     }
 }

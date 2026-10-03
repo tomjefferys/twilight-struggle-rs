@@ -165,8 +165,8 @@ fn realign_and_coup_lines_tag_every_number_with_its_source() {
     let poland = map.id_by_name("Poland").unwrap();
     let board = game.board().clone();
 
-    let acting_mods = Modifiers { adjacent_controlled: 2, more_influence: false, superpower_adjacent: false };
-    let opposing_mods = Modifiers { adjacent_controlled: 0, more_influence: true, superpower_adjacent: false };
+    let acting_mods = Modifiers { adjacent_controlled: 2, more_influence: false, superpower_adjacent: false, iran_contra: false };
+    let opposing_mods = Modifiers { adjacent_controlled: 0, more_influence: true, superpower_adjacent: false, iran_contra: false };
     let roll: RollResult = resolve(poland, Superpower::Us, 3, acting_mods, 5, opposing_mods, &board);
 
     let mut log = GameLog::new();
@@ -179,7 +179,7 @@ fn realign_and_coup_lines_tag_every_number_with_its_source() {
     assert!(realign_line.contains("mod:+1"), "opposing modifier (+1) should appear tagged mod: {realign_line:?}");
     assert!(realign_line.contains("sum:6"), "opposing sum (5+1) should appear tagged sum: {realign_line:?}");
 
-    let coup = CoupResult { target: poland, die: 4, ops: 2, target_number: 6, margin: 0, removed: 0, added: 0 };
+    let coup = CoupResult { target: poland, die: 4, ops: 2, modifier: 0, target_number: 6, margin: 0, removed: 0, added: 0 };
     let mut coup_log = GameLog::new();
     coup_log.push(LogEntry { turn: 1, action_round: 1, side: Some(Superpower::Ussr), event: Event::Coup(coup) });
     let coup_line = log_entry_line(&map, &cards, &coup_log.entries()[0]);

@@ -12,7 +12,7 @@ use crate::events::EffectResult;
 use crate::game::Victory;
 use crate::map::WorldMap;
 
-use super::{game_over_line, put_border_title, Canvas, Color, Style};
+use super::{game_over_line, ongoing_effect_line, put_border_title, wrap, Canvas, Color, Style};
 
 const EVENT_WIDTH: usize = 56;
 const PADDING: usize = 2;
@@ -46,15 +46,34 @@ pub fn render_event_result(
     if let Some((before, after)) = result.defcon {
         lines.push((format!("DEFCON {before} → {after}"), Style::color(Color::Muted).bold()));
     }
+    if let Some(effect) = &result.ongoing {
+        if !lines.is_empty() {
+            lines.push((String::new(), Style::default()));
+        }
+        let style = Style::color(side_color(effect.side())).bold();
+        // The box's title already names the card, so give just what it does.
+        let line = ongoing_effect_line(effect);
+        let what = line.split_once(": ").map_or(line.as_str(), |(_, rest)| rest);
+        for part in wrap(&format!("In effect until the turn ends: {what}"), text_width) {
+            lines.push((part, style));
+        }
+    }
     if !lines.is_empty() {
         lines.push((String::new(), Style::default()));
     }
+    // A card that only starts a turn-long effect has no VP line to show.
+    let nothing_else = result.ongoing.is_some() && result.vp_delta == 0;
     let (text, style) = match result.vp_delta.signum() {
+        _ if nothing_else => (String::new(), Style::default()),
         1 => (format!("+{} VP to the US (now {vp_after})", result.vp_delta), Style::color(Color::Us).bold()),
         -1 => (format!("+{} VP to the USSR (now {vp_after})", -result.vp_delta), Style::color(Color::Ussr).bold()),
         _ => (format!("no VP change (still {vp_after})"), Style::color(Color::Muted)),
     };
-    lines.push((text, style));
+    if !nothing_else {
+        lines.push((text, style));
+    } else {
+        lines.pop();
+    }
 
     let mut border = side_color(result.player);
     if let Some(victory) = winner {
@@ -78,4 +97,33 @@ pub fn render_event_result(
         canvas.put(1 + i, 1 + PADDING, line, *style);
     }
     canvas
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::cards::CardId;
+    use crate::ongoing::OngoingEffect;
+    use crate::render::ColorMode;
+
+    fn result(ongoing: Option<OngoingEffect>, vp_delta: i8) -> EffectResult {
+        EffectResult { card: CardId(25), player: Superpower::Us, influence: Vec::new(), vp_delta, defcon: None, ongoing }
+    }
+
+    #[test]
+    fn a_card_that_only_starts_an_effect_says_so_and_has_no_vp_line() {
+        let map = WorldMap::standard().unwrap();
+        let cards = CardCatalog::standard().unwrap();
+        let text = render_event_result(&map, &cards, &result(Some(OngoingEffect::Containment), 0), 0, None, None).render(ColorMode::Never);
+        assert!(text.contains("In effect until the turn ends: US ops +1"), "{text}");
+        assert!(!text.contains("no VP change"), "{text}");
+    }
+
+    #[test]
+    fn a_card_with_no_effect_and_no_vp_still_reports_no_vp_change() {
+        let map = WorldMap::standard().unwrap();
+        let cards = CardCatalog::standard().unwrap();
+        let text = render_event_result(&map, &cards, &result(None, 0), 3, None, None).render(ColorMode::Never);
+        assert!(text.contains("no VP change (still 3)"), "{text}");
+    }
 }

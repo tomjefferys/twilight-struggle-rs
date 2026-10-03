@@ -494,7 +494,32 @@ pub fn operation_header(op: &crate::ops::Operation) -> String {
     if let crate::ops::Operation::Event(e) = op {
         return format!("{} chooses · {}", op.side(), e.progress());
     }
-    format!("{} {} · {} of {} ops left", op.side(), op.verb(), op.remaining(), op.ops_total())
+    let bonus = match op.pending_bonus() {
+        Some((sub, n)) => format!(" (+{n} if all in {sub})"),
+        None => String::new(),
+    };
+    format!("{} {} · {} of {} ops left{bonus}", op.side(), op.verb(), op.remaining(), op.ops_total())
+}
+
+/// One turn-long event, worded for the status bar, the REPL's `status`
+/// and the event's own result — `Containment: US ops +1`. The side to
+/// colour it by is [`crate::ongoing::OngoingEffect::side`].
+pub fn ongoing_effect_line(effect: &crate::ongoing::OngoingEffect) -> String {
+    use crate::ongoing::OngoingEffect as E;
+    match effect {
+        E::VietnamRevolts => "Vietnam Revolts: USSR ops +1 if all in Southeast Asia".to_string(),
+        E::Containment => "Containment: US ops +1".to_string(),
+        E::RedScare { penalised } => format!("Red Scare/Purge: {penalised} ops -1"),
+        E::NuclearSubs => "Nuclear Subs: US battleground coups keep DEFCON".to_string(),
+        E::Brezhnev => "Brezhnev Doctrine: USSR ops +1".to_string(),
+        E::DeathSquads { beneficiary } => {
+            format!("Death Squads: {beneficiary} coups +1 / {} -1 in Central & South America", beneficiary.opponent())
+        }
+        E::NorthSeaOil => "North Sea Oil: US plays an 8th action round".to_string(),
+        E::IranContra => "Iran-Contra: US realignment rolls -1".to_string(),
+        E::Chernobyl { region } => format!("Chernobyl: USSR can't add influence in {region} with ops"),
+        E::YuriSamantha => "Yuri and Samantha: USSR +1 VP per US coup".to_string(),
+    }
 }
 
 /// The "where has this operation acted so far" half of
@@ -603,7 +628,13 @@ pub fn odds_line(side: crate::country::Superpower, odds: &crate::ops::Odds) -> S
 /// what's rolled against it — the `modifier_line` analogue for a coup,
 /// shared by the region footer, the country detail view, and the REPL.
 pub fn coup_target_line(side: crate::country::Superpower, ops: u8, target_number: u8, stability: u8) -> String {
-    format!("{side}  d6 +{ops} vs {target_number}   (stability {stability} ×2)")
+    coup_target_line_with(side, ops, 0, target_number, stability)
+}
+
+/// [`coup_target_line`] with an ongoing event's die `modifier` shown too.
+pub fn coup_target_line_with(side: crate::country::Superpower, ops: u8, modifier: i8, target_number: u8, stability: u8) -> String {
+    let modifier = if modifier == 0 { String::new() } else { format!(" {modifier:+}")};
+    format!("{side}  d6 +{ops}{modifier} vs {target_number}   (stability {stability} ×2)")
 }
 
 /// The coup odds line: success/failure share out of 6, plus the expected
@@ -625,8 +656,9 @@ pub fn coup_odds_line(side: crate::country::Superpower, odds: &crate::ops::CoupO
 pub fn coup_result_line(map: &crate::map::WorldMap, side: crate::country::Superpower, result: &crate::ops::CoupResult) -> String {
     let opponent = side.opponent();
     let country = &map.country(result.target).name;
-    let modified = result.die as u16 + result.ops as u16;
-    let dice = format!("{side} {}+{}={modified} vs {}", result.die, result.ops, result.target_number);
+    let modified = result.die as i16 + result.ops as i16 + result.modifier as i16;
+    let modifier = if result.modifier == 0 { String::new() } else { format!("{:+}", result.modifier) };
+    let dice = format!("{side} {}+{}{modifier}={modified} vs {}", result.die, result.ops, result.target_number);
     let outcome = if !result.success() {
         format!("no better than {} — the coup fails in {country}", result.target_number)
     } else if result.added == 0 {

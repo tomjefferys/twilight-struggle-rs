@@ -15,7 +15,7 @@ use crate::country::{CountryId, Superpower};
 use crate::events::scoring::{ScoringKind, SideScore, Tier};
 use crate::events::{EffectResult, ScoringResult};
 use crate::game::{OperationKind, Victory, VictoryReason};
-use crate::log::{Event, GameLog, LogEntry};
+use crate::log::{CoupAftermath, Event, GameLog, LogEntry};
 use crate::map::WorldMap;
 use crate::ops::{CoupResult, RollResult};
 
@@ -124,6 +124,7 @@ fn action_and_detail(map: &WorldMap, cards: &CardCatalog, entry: &LogEntry) -> (
             let side = entry.side.expect("a coup attempt is always stamped with the acting side");
             ("coup", coup_detail(map, side, result))
         }
+        Event::CoupAftermath(aftermath) => ("aftermath", aftermath_detail(aftermath)),
         Event::Closed { kind, committed, rolls, ops_spent, ops_total } => {
             let action = if *committed { "confirm" } else { "cancel" };
             (action, closed_detail(*kind, *rolls, *ops_spent, *ops_total))
@@ -198,7 +199,8 @@ fn coup_detail(map: &WorldMap, side: Superpower, result: &CoupResult) -> String 
     let opponent = side.opponent();
     let country = &map.country(result.target).name;
     let stability = map.country(result.target).stability;
-    let sum = result.die as u16 + result.ops as u16;
+    let sum = result.die as i16 + result.ops as i16 + result.modifier as i16;
+    let modifier = if result.modifier == 0 { String::new() } else { format!(" mod:{:+}", result.modifier) };
     let outcome = if !result.success() {
         "failed".to_string()
     } else {
@@ -209,9 +211,25 @@ fn coup_detail(map: &WorldMap, side: Superpower, result: &CoupResult) -> String 
         }
     };
     format!(
-        "{country}  d6:{} ops:+{} sum:{sum}  vs  target:{} (stability:{stability} x2)  -> {outcome}",
+        "{country}  d6:{} ops:+{}{modifier} sum:{sum}  vs  target:{} (stability:{stability} x2)  -> {outcome}",
         result.die, result.ops, result.target_number,
     )
+}
+
+/// `DEFCON 4→3, +1 VP (now -2)` — whatever a coup set off besides its own
+/// board result.
+fn aftermath_detail(aftermath: &CoupAftermath) -> String {
+    let mut parts = Vec::new();
+    if let Some((before, after)) = aftermath.defcon {
+        parts.push(format!("DEFCON {before}→{after}"));
+    }
+    if aftermath.defcon_spared {
+        parts.push("Nuclear Subs: DEFCON unchanged".to_string());
+    }
+    if let Some((delta, vp_after)) = aftermath.vp {
+        parts.push(format!("{delta:+} VP (now {vp_after})"));
+    }
+    parts.join(", ")
 }
 
 fn edit_detail(map: &WorldMap, country: CountryId, side: Superpower, before: u8, after: u8) -> String {
@@ -274,6 +292,10 @@ fn event_detail(map: &WorldMap, cards: &CardCatalog, result: &EffectResult, vp_a
     }
     if result.vp_delta != 0 {
         parts.push(format!("{:+} VP (now {vp_after})", result.vp_delta));
+    }
+    if let Some(effect) = &result.ongoing {
+        let line = super::ongoing_effect_line(effect);
+        parts.push(format!("this turn: {}", line.split_once(": ").map_or(line.as_str(), |(_, rest)| rest)));
     }
     let body = if parts.is_empty() { "no effect".to_string() } else { parts.join(", ") };
     format!("{}: {body}", cards.card(result.card).name)

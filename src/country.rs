@@ -43,7 +43,7 @@ impl fmt::Display for Superpower {
 
 /// The six regions used for control scoring. Every country belongs to
 /// exactly one.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, serde::Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, serde::Serialize, serde::Deserialize)]
 pub enum Region {
     Europe,
     Asia,

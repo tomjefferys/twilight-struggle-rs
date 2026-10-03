@@ -19,7 +19,7 @@ use std::collections::HashMap;
 use std::fmt;
 
 use crate::board::Board;
-use crate::country::{CountryId, Superpower};
+use crate::country::{CountryId, Region, SubRegion, Superpower};
 use crate::map::WorldMap;
 
 /// One step in the placement history, so undoing it can refund the exact
@@ -29,6 +29,8 @@ use crate::map::WorldMap;
 struct Step {
     id: CountryId,
     cost: u8,
+    /// Whether `id` is in the sub-region Vietnam Revolts' bonus needs.
+    in_bonus_sub: bool,
 }
 
 /// A staged influence placement: operation points a player has committed
@@ -55,6 +57,10 @@ pub struct InfluencePlacement {
     board: Board,
     history: Vec<Step>,
     pending: HashMap<CountryId, u8>,
+    /// A region an ongoing event (Chernobyl) bars this side from placing in.
+    banned: Option<Region>,
+    /// An extra op for a card spent wholly in one sub-region (Vietnam Revolts).
+    bonus: Option<(SubRegion, u8)>,
 }
 
 /// Why a placement was refused.
@@ -66,6 +72,8 @@ pub enum PlacementError {
     NoPresence { country: String, side: Superpower },
     /// Placing here would cost more than the ops remaining.
     InsufficientOps { country: String, needed: u8, remaining: u8 },
+    /// An ongoing event (Chernobyl) bars placing influence in this region.
+    Banned { country: String, region: Region },
 }
 
 impl fmt::Display for PlacementError {
@@ -75,6 +83,7 @@ impl fmt::Display for PlacementError {
                 f,
                 "{side} has no presence in or adjacent to {country}, and it doesn't border {side}"
             ),
+            PlacementError::Banned { country, region } => write!(f, "an event forbids adding influence in {region} with operations ({country})"),
             PlacementError::InsufficientOps { country, needed, remaining } => write!(
                 f,
                 "placing in {country} costs {needed} ops, but only {remaining} remain"
@@ -100,15 +109,45 @@ impl InfluencePlacement {
             board: board.clone(),
             history: Vec::new(),
             pending: HashMap::new(),
+            banned: None,
+            bonus: None,
         }
+    }
+
+    /// Forbids placing in `region` — Chernobyl's effect on the USSR.
+    pub fn with_banned_region(mut self, region: Option<Region>) -> Self {
+        self.banned = region;
+        self
+    }
+
+    /// Grants `n` extra ops while every point placed is in `sub` — Vietnam
+    /// Revolts' effect on the USSR.
+    pub fn with_bonus(mut self, bonus: Option<(SubRegion, u8)>) -> Self {
+        self.bonus = bonus;
+        self
+    }
+
+    /// The sub-region bonus on offer, for display.
+    pub fn bonus(&self) -> Option<(SubRegion, u8)> {
+        self.bonus
+    }
+
+    /// The region placement is barred in, for display.
+    pub fn banned_region(&self) -> Option<Region> {
+        self.banned
     }
 
     pub fn side(&self) -> Superpower {
         self.side
     }
 
+    /// The ops this action is worth: the card's, plus the sub-region bonus
+    /// while at least one point is placed and every one is inside it.
     pub fn ops_total(&self) -> u8 {
-        self.ops_total
+        match self.bonus {
+            Some((_, n)) if !self.history.is_empty() && self.history.iter().all(|s| s.in_bonus_sub) => self.ops_total + n,
+            _ => self.ops_total,
+        }
     }
 
     pub fn ops_spent(&self) -> u8 {
@@ -116,7 +155,7 @@ impl InfluencePlacement {
     }
 
     pub fn remaining(&self) -> u8 {
-        self.ops_total - self.ops_spent
+        self.ops_total() - self.ops_spent
     }
 
     /// Whether any point has been placed yet.
@@ -169,6 +208,9 @@ impl InfluencePlacement {
     /// in or next to it before the action began.
     pub fn is_legal_target(&self, map: &WorldMap, id: CountryId) -> bool {
         let country = map.country(id);
+        if self.banned == Some(country.region) {
+            return false;
+        }
         if self.base.influence(id, self.side) > 0 {
             return true;
         }
@@ -178,10 +220,34 @@ impl InfluencePlacement {
         country.adjacent.iter().any(|&n| self.base.influence(n, self.side) > 0)
     }
 
+    /// The ops this action would be worth if a point went into `id` next:
+    /// the sub-region bonus counts only if this point, like every earlier
+    /// one, is inside it.
+    fn available_if_placed(&self, map: &WorldMap, id: CountryId) -> u8 {
+        let in_bonus_sub = self.bonus.is_some_and(|(sub, _)| map.country(id).is_in_sub_region(sub));
+        match self.bonus {
+            Some((_, n)) if in_bonus_sub && self.history.iter().all(|s| s.in_bonus_sub) => self.ops_total + n,
+            _ => self.ops_total,
+        }
+    }
+
+    /// Whether a point in `id` would be accepted right now — a legal
+    /// target *and* affordable, counting a sub-region bonus op only where
+    /// it would really apply. What a caller enumerating moves (the AI)
+    /// should ask, rather than comparing `cost` to `remaining` itself.
+    pub fn can_place(&self, map: &WorldMap, id: CountryId) -> bool {
+        self.is_legal_target(map, id) && self.ops_spent + self.cost(map, id) <= self.available_if_placed(map, id)
+    }
+
     /// Adds one point of influence to `id`, charging the ops it costs.
     /// Refused if `id` isn't a legal target, or if the cost would exceed
     /// the ops remaining — neither changes any state.
     pub fn place(&mut self, map: &WorldMap, id: CountryId) -> Result<u8, PlacementError> {
+        if let Some(region) = self.banned
+            && map.country(id).region == region
+        {
+            return Err(PlacementError::Banned { country: map.country(id).name.clone(), region });
+        }
         if !self.is_legal_target(map, id) {
             return Err(PlacementError::NoPresence {
                 country: map.country(id).name.clone(),
@@ -189,18 +255,20 @@ impl InfluencePlacement {
             });
         }
         let cost = self.cost(map, id);
-        if cost > self.remaining() {
+        let in_bonus_sub = self.bonus.is_some_and(|(sub, _)| map.country(id).is_in_sub_region(sub));
+        let available = self.available_if_placed(map, id);
+        if self.ops_spent + cost > available {
             return Err(PlacementError::InsufficientOps {
                 country: map.country(id).name.clone(),
                 needed: cost,
-                remaining: self.remaining(),
+                remaining: available.saturating_sub(self.ops_spent),
             });
         }
 
         self.board.add_influence(id, self.side, 1);
         self.ops_spent += cost;
         *self.pending.entry(id).or_insert(0) += 1;
-        self.history.push(Step { id, cost });
+        self.history.push(Step { id, cost, in_bonus_sub });
         Ok(cost)
     }
 
@@ -493,5 +561,49 @@ mod tests {
 
         let committed = placement.commit();
         assert_eq!(committed.influence(poland, Ussr), 1);
+    }
+
+    // --- ongoing events ----------------------------------------------------
+
+    #[test]
+    fn a_banned_region_is_not_a_legal_target_and_placing_there_is_refused() {
+        let map = map();
+        let board = Board::new(&map);
+        let mut placement = InfluencePlacement::new(Ussr, 3, &board).with_banned_region(Some(crate::country::Region::Europe));
+        let poland = id(&map, "Poland");
+        assert!(!placement.is_legal_target(&map, poland));
+        assert!(!placement.can_place(&map, poland));
+        assert!(matches!(placement.place(&map, poland), Err(PlacementError::Banned { .. })));
+        assert!(placement.is_empty());
+        // Nothing else is barred.
+        let egypt = id(&map, "Egypt");
+        let mut board = Board::new(&map);
+        board.set_influence(egypt, Ussr, 1);
+        let placement = InfluencePlacement::new(Ussr, 3, &board).with_banned_region(Some(crate::country::Region::Europe));
+        assert!(placement.can_place(&map, egypt));
+    }
+
+    #[test]
+    fn the_bonus_op_needs_every_point_inside_the_sub_region() {
+        use crate::country::SubRegion;
+        let map = map();
+        let mut board = Board::new(&map);
+        board.set_influence(id(&map, "Vietnam"), Ussr, 2);
+        board.set_influence(id(&map, "Thailand"), Ussr, 1);
+        let bonus = Some((SubRegion::SoutheastAsia, 1));
+        let mut p = InfluencePlacement::new(Ussr, 2, &board).with_bonus(bonus);
+        assert_eq!((p.ops_total(), p.remaining()), (2, 2), "nothing placed yet: the card's own value");
+        p.place(&map, id(&map, "Vietnam")).unwrap();
+        p.place(&map, id(&map, "Vietnam")).unwrap();
+        assert!(p.can_place(&map, id(&map, "Thailand")), "the third point is the bonus");
+        assert!(!p.can_place(&map, id(&map, "Poland")), "...but not outside Southeast Asia");
+        p.place(&map, id(&map, "Thailand")).unwrap();
+        assert_eq!((p.ops_total(), p.remaining()), (3, 0));
+        // Taking a point back keeps the rest consistent.
+        p.unplace(id(&map, "Thailand")).unwrap();
+        assert_eq!((p.ops_total(), p.remaining()), (3, 1));
+        p.unplace(id(&map, "Vietnam")).unwrap();
+        p.unplace(id(&map, "Vietnam")).unwrap();
+        assert_eq!((p.ops_total(), p.remaining()), (2, 2), "empty again: back to the card's value");
     }
 }

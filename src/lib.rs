@@ -9,6 +9,7 @@ pub mod game;
 pub mod layout;
 pub mod log;
 pub mod map;
+pub mod ongoing;
 pub mod ops;
 pub mod render;
 pub mod scenario;
@@ -24,8 +25,9 @@ pub use dice::Dice;
 pub use events::{choice, effects, scoring, EffectResult, EventChoice, EventOutcome};
 pub use game::{Game, GameError, OperationKind, RollOutcome};
 pub use layout::{Cell, Guest, GuestEntity, LayoutError, LinkTarget, MapLayout, UndrawnLink};
-pub use log::{Event, GameLog, LogEntry};
+pub use log::{CoupAftermath, Event, GameLog, LogEntry};
 pub use map::{Found, MapError, WorldMap};
+pub use ongoing::{OngoingEffect, TurnEffects};
 pub use ops::{
     coup_odds, coup_resolve, coup_target_number, modifiers, odds, resolve, Coup, CoupError, CoupOdds, CoupResult, InfluencePlacement,
     Modifiers, Odds, Operation, PlacementError, RealignError, Realignment, RollResult,

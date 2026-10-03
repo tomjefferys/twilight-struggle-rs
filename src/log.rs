@@ -55,6 +55,10 @@ pub enum Event {
     Realign(RollResult),
     /// A coup's one attempt, logged the instant it resolves.
     Coup(CoupResult),
+    /// What a coup attempt set off beyond the board — the DEFCON drop of a
+    /// battleground coup (or Nuclear Subs sparing it) and Yuri and
+    /// Samantha's VP — pushed right after the `Coup` entry it follows.
+    CoupAftermath(CoupAftermath),
     /// An operation closed — `confirm`'s or `cancel`'s own entry. A
     /// realignment's or coup's rolls are already in the log as their own
     /// entries by the time this is pushed; a placement's points arrive in
@@ -103,6 +107,23 @@ pub enum Event {
     /// A free-text annotation — e.g. reloading the demo scenario — with no
     /// side and no board effect of its own.
     Note(String),
+}
+
+/// What a coup attempt triggered besides its own board result.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct CoupAftermath {
+    /// DEFCON `(before, after)`, when a battleground coup degraded it.
+    pub defcon: Option<(u8, u8)>,
+    /// Nuclear Subs spared the DEFCON drop a battleground coup would cost.
+    pub defcon_spared: bool,
+    /// Yuri and Samantha's VP: `(signed change, VP track after)`.
+    pub vp: Option<(i8, i8)>,
+}
+
+impl CoupAftermath {
+    pub fn is_empty(&self) -> bool {
+        *self == CoupAftermath::default()
+    }
 }
 
 /// One thing that happened, stamped with when and by whom. `side` is

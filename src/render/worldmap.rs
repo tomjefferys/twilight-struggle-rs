@@ -22,6 +22,7 @@ const WORLD_REALIGN_HINT: &str = "←→↑↓ select · Enter open · r roll ·
 /// Shown instead once a [`Coup`](crate::ops::Coup) is in progress. No
 /// `u undo` — a resolved attempt can't be taken back.
 const WORLD_COUP_HINT: &str = "←→↑↓ select · Enter open · r coup · ⌫ abandon · c done · Esc back";
+const WORLD_DESIGNATE_HINT: &str = "←→↑↓ select · Enter designate · ⌫ clear/abandon · c done · Esc back";
 const WORLD_EVENT_HINT: &str = "←→↑↓ select · Enter open · u undo · ⌫ abandon · c done · Esc back";
 
 /// The whole world on one grid, drawn to actually look like a map: real
@@ -155,14 +156,20 @@ fn footer_lines(
     if let Some(operation) = op {
         lines.push((operation_balance_line(layout, board, operation), Style::color(Color::Selected)));
     }
-    if let Some(Operation::Event(_)) = op {
-        lines.push(("+/- on a country: can add/remove there · ~ changed · dim: not eligible".to_string(), Style::color(Color::Muted)));
+    if let Some(Operation::Event(e)) = op {
+        let legend = if e.is_designation() {
+            "Enter (or a digit): designate the region · bold: designated · dim: not designated"
+        } else {
+            "+/- on a country: can add/remove there · ~ changed · dim: not eligible"
+        };
+        lines.push((legend.to_string(), Style::color(Color::Muted)));
     }
     if selected.is_some() {
         let hint = match op {
             Some(Operation::Influence(_)) => WORLD_PLACEMENT_HINT.to_string(),
             Some(Operation::Realign(_)) => WORLD_REALIGN_HINT.to_string(),
             Some(Operation::Coup(_)) => WORLD_COUP_HINT.to_string(),
+            Some(Operation::Event(e)) if e.is_designation() => WORLD_DESIGNATE_HINT.to_string(),
             Some(Operation::Event(_)) => WORLD_EVENT_HINT.to_string(),
             None => format!("{WORLD_HINT} · {BEGIN_HINT}"),
         };
@@ -357,7 +364,7 @@ fn draw_chip(
         Some(Operation::Coup(_)) if touched => '#',
         Some(Operation::Event(_)) if touched => '~',
         // Not yet touched but live: `+` if the next step adds, `-` if it removes.
-        Some(Operation::Event(e)) if event_eligible == Some(true) => match e.suggestion(map, id) {
+        Some(Operation::Event(e)) if event_eligible == Some(true) && !e.is_designation() => match e.suggestion(map, id) {
             Some((crate::events::choice::Sign::Minus, _)) => '-',
             _ => '+',
         },

@@ -1,0 +1,486 @@
+{
+  "states": [
+    {
+      "name": "containment",
+      "description": "US to act with Containment: afterwards every US ops card is worth +1 (max 4) for the rest of the turn.",
+      "status": {
+        "active": "Us"
+      },
+      "hands": {
+        "us": [
+          "Containment"
+        ],
+        "ussr": [
+          "Nuclear Test Ban"
+        ]
+      }
+    },
+    {
+      "name": "red-scare",
+      "description": "USSR to act with Red Scare/Purge: afterwards every US ops card is worth -1 (min 1) for the rest of the turn.",
+      "status": {
+        "active": "Ussr"
+      },
+      "hands": {
+        "us": [
+          "NATO"
+        ],
+        "ussr": [
+          "Red Scare/Purge"
+        ]
+      }
+    },
+    {
+      "name": "nuclear-subs",
+      "description": "US to act with Nuclear Subs: afterwards US coups in battlegrounds leave DEFCON alone this turn.",
+      "status": {
+        "active": "Us"
+      },
+      "hands": {
+        "us": [
+          "Nuclear Subs"
+        ],
+        "ussr": [
+          "Nuclear Test Ban"
+        ]
+      }
+    },
+    {
+      "name": "brezhnev-doctrine",
+      "description": "USSR to act with Brezhnev Doctrine: afterwards every USSR ops card is worth +1 (max 4) this turn.",
+      "status": {
+        "active": "Ussr"
+      },
+      "hands": {
+        "us": [
+          "NATO"
+        ],
+        "ussr": [
+          "Brezhnev Doctrine"
+        ]
+      }
+    },
+    {
+      "name": "latin-american-death-squads",
+      "description": "USSR to act with Latin American Death Squads: USSR coups in Central/South America get +1, US ones -1, this turn.",
+      "status": {
+        "active": "Ussr"
+      },
+      "hands": {
+        "us": [
+          "NATO"
+        ],
+        "ussr": [
+          "Latin American Death Squads"
+        ]
+      }
+    },
+    {
+      "name": "north-sea-oil",
+      "description": "US to act with North Sea Oil, in the 6th of 6 action rounds: the US gets a 7th round of its own.",
+      "status": {
+        "active": "Us",
+        "action_round": 6
+      },
+      "hands": {
+        "us": [
+          "North Sea Oil"
+        ],
+        "ussr": [
+          "Nuclear Test Ban"
+        ]
+      }
+    },
+    {
+      "name": "iran-contra-scandal",
+      "description": "USSR to act with Iran-Contra Scandal: US realignment rolls get -1 for the rest of the turn.",
+      "status": {
+        "active": "Ussr"
+      },
+      "hands": {
+        "us": [
+          "NATO"
+        ],
+        "ussr": [
+          "Iran-Contra Scandal"
+        ]
+      }
+    },
+    {
+      "name": "yuri-and-samantha",
+      "description": "USSR to act with Yuri and Samantha: the USSR gets 1 VP per US coup for the rest of the turn.",
+      "status": {
+        "active": "Ussr"
+      },
+      "hands": {
+        "us": [
+          "NATO"
+        ],
+        "ussr": [
+          "Yuri and Samantha"
+        ]
+      }
+    },
+    {
+      "name": "vietnam-revolts",
+      "description": "USSR to act with Vietnam Revolts: +2 USSR in Vietnam, and +1 ops for a card spent wholly in Southeast Asia this turn.",
+      "status": {
+        "active": "Ussr"
+      },
+      "hands": {
+        "us": [
+          "NATO"
+        ],
+        "ussr": [
+          "Vietnam Revolts"
+        ]
+      }
+    },
+    {
+      "name": "chernobyl",
+      "description": "US to act with Chernobyl: the US designates one region (digits 1-6) the USSR can't add influence to with ops this turn.",
+      "status": {
+        "active": "Us"
+      },
+      "hands": {
+        "us": [
+          "Chernobyl"
+        ],
+        "ussr": [
+          "Nuclear Test Ban"
+        ]
+      }
+    },
+    {
+      "name": "containment-active",
+      "description": "Containment is in force; US to act holding Truman Doctrine (1 ops, worth 2) and Marshall Plan (4 ops, still 4). Italy US 1.",
+      "status": {
+        "active": "Us",
+        "effects": {
+          "containment": true
+        }
+      },
+      "influence": {
+        "Italy": [
+          1,
+          0
+        ]
+      },
+      "hands": {
+        "us": [
+          "Truman Doctrine",
+          "Marshall Plan"
+        ],
+        "ussr": [
+          "Nuclear Test Ban"
+        ]
+      }
+    },
+    {
+      "name": "red-scare-active",
+      "description": "Red Scare/Purge is in force against the US; US to act holding Truman Doctrine (1 ops, still 1) and Marshall Plan (4 ops, worth 3). Italy US 1.",
+      "status": {
+        "active": "Us",
+        "effects": {
+          "red_scare": "Us"
+        }
+      },
+      "influence": {
+        "Italy": [
+          1,
+          0
+        ]
+      },
+      "hands": {
+        "us": [
+          "Truman Doctrine",
+          "Marshall Plan"
+        ],
+        "ussr": [
+          "Nuclear Test Ban"
+        ]
+      }
+    },
+    {
+      "name": "containment-and-red-scare-active",
+      "description": "Containment and Red Scare/Purge are both in force on the US: they cancel. US to act holding Marshall Plan (still 4). Italy US 1.",
+      "status": {
+        "active": "Us",
+        "effects": {
+          "containment": true,
+          "red_scare": "Us"
+        }
+      },
+      "influence": {
+        "Italy": [
+          1,
+          0
+        ]
+      },
+      "hands": {
+        "us": [
+          "Marshall Plan"
+        ],
+        "ussr": [
+          "Nuclear Test Ban"
+        ]
+      }
+    },
+    {
+      "name": "vietnam-revolts-active",
+      "description": "Vietnam Revolts is in force; USSR to act holding Fidel (2 ops, worth 3 if spent wholly in Southeast Asia). Vietnam USSR 2, Thailand USSR 1, Poland USSR 1.",
+      "status": {
+        "active": "Ussr",
+        "effects": {
+          "vietnam_revolts": true
+        }
+      },
+      "influence": {
+        "Vietnam": [
+          0,
+          2
+        ],
+        "Thailand": [
+          0,
+          1
+        ],
+        "Poland": [
+          0,
+          1
+        ]
+      },
+      "hands": {
+        "us": [
+          "NATO"
+        ],
+        "ussr": [
+          "Fidel"
+        ]
+      }
+    },
+    {
+      "name": "chernobyl-europe-active",
+      "description": "Chernobyl bars the USSR from adding influence in Europe with ops; USSR to act holding Fidel (2 ops). Poland USSR 2, Egypt USSR 1.",
+      "status": {
+        "active": "Ussr",
+        "effects": {
+          "chernobyl": "Europe"
+        }
+      },
+      "influence": {
+        "Poland": [
+          0,
+          2
+        ],
+        "Egypt": [
+          0,
+          1
+        ]
+      },
+      "hands": {
+        "us": [
+          "NATO"
+        ],
+        "ussr": [
+          "Fidel"
+        ]
+      }
+    },
+    {
+      "name": "death-squads-active",
+      "description": "Death Squads favour the USSR; USSR to act holding Fidel (2 ops). Colombia US 2, Italy US 2 - a coup in the former gets +1, the latter nothing.",
+      "status": {
+        "active": "Ussr",
+        "effects": {
+          "death_squads": "Ussr"
+        }
+      },
+      "influence": {
+        "Colombia": [
+          2,
+          0
+        ],
+        "Italy": [
+          2,
+          0
+        ]
+      },
+      "hands": {
+        "us": [
+          "NATO"
+        ],
+        "ussr": [
+          "Fidel"
+        ]
+      }
+    },
+    {
+      "name": "death-squads-against-active",
+      "description": "Death Squads favour the USSR; US to act holding Marshall Plan (4 ops). Colombia USSR 2 - the US coup there rolls -1.",
+      "status": {
+        "active": "Us",
+        "effects": {
+          "death_squads": "Ussr"
+        }
+      },
+      "influence": {
+        "Colombia": [
+          0,
+          2
+        ]
+      },
+      "hands": {
+        "us": [
+          "Marshall Plan"
+        ],
+        "ussr": [
+          "Nuclear Test Ban"
+        ]
+      }
+    },
+    {
+      "name": "iran-contra-active",
+      "description": "Iran-Contra is in force; US to act holding Marshall Plan (4 ops). Italy US 1 / USSR 1 for a realignment.",
+      "status": {
+        "active": "Us",
+        "effects": {
+          "iran_contra": true
+        }
+      },
+      "influence": {
+        "Italy": [
+          1,
+          1
+        ]
+      },
+      "hands": {
+        "us": [
+          "Marshall Plan"
+        ],
+        "ussr": [
+          "Nuclear Test Ban"
+        ]
+      }
+    },
+    {
+      "name": "nuclear-subs-active",
+      "description": "Nuclear Subs is in force, DEFCON 4; US to act holding Truman Doctrine (1 op). Poland USSR 3 - a battleground coup that leaves DEFCON alone.",
+      "status": {
+        "active": "Us",
+        "defcon": 4,
+        "effects": {
+          "nuclear_subs": true
+        }
+      },
+      "influence": {
+        "Poland": [
+          0,
+          3
+        ]
+      },
+      "hands": {
+        "us": [
+          "Truman Doctrine"
+        ],
+        "ussr": [
+          "Nuclear Test Ban"
+        ]
+      }
+    },
+    {
+      "name": "us-battleground-coup",
+      "description": "DEFCON 4, no Nuclear Subs; US to act holding Truman Doctrine (1 op). Poland USSR 3 - the battleground coup drops DEFCON to 3.",
+      "status": {
+        "active": "Us",
+        "defcon": 4
+      },
+      "influence": {
+        "Poland": [
+          0,
+          3
+        ]
+      },
+      "hands": {
+        "us": [
+          "Truman Doctrine"
+        ],
+        "ussr": [
+          "Nuclear Test Ban"
+        ]
+      }
+    },
+    {
+      "name": "battleground-coup-defcon-2",
+      "description": "DEFCON 2; USSR to act holding Fidel (2 ops). West Germany US 3 - a battleground coup takes DEFCON to 1, a loss for the phasing USSR.",
+      "status": {
+        "active": "Ussr",
+        "defcon": 2
+      },
+      "influence": {
+        "West Germany": [
+          3,
+          0
+        ]
+      },
+      "hands": {
+        "us": [
+          "NATO"
+        ],
+        "ussr": [
+          "Fidel"
+        ]
+      }
+    },
+    {
+      "name": "yuri-active",
+      "description": "Yuri and Samantha is in force; US to act holding Truman Doctrine (1 op). Czechoslovakia USSR 2 - any US coup pays the USSR 1 VP.",
+      "status": {
+        "active": "Us",
+        "effects": {
+          "yuri_samantha": true
+        }
+      },
+      "influence": {
+        "Czechoslovakia": [
+          0,
+          2
+        ]
+      },
+      "hands": {
+        "us": [
+          "Truman Doctrine"
+        ],
+        "ussr": [
+          "Nuclear Test Ban"
+        ]
+      }
+    },
+    {
+      "name": "north-sea-oil-final-round",
+      "description": "North Sea Oil is in force in the 6th of 6 action rounds; US to act holding Truman Doctrine and Marshall Plan. After this the US plays a 7th round alone.",
+      "status": {
+        "active": "Us",
+        "turn": 3,
+        "action_round": 6,
+        "effects": {
+          "north_sea_oil": true
+        }
+      },
+      "influence": {
+        "Italy": [
+          1,
+          0
+        ]
+      },
+      "hands": {
+        "us": [
+          "Truman Doctrine",
+          "Marshall Plan"
+        ],
+        "ussr": [
+          "Nuclear Test Ban"
+        ]
+      }
+    }
+  ]
+}

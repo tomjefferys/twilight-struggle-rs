@@ -17,6 +17,7 @@ use crate::board::Board;
 use crate::cards::CardId;
 use crate::country::{CountryId, Region, Superpower};
 use crate::map::WorldMap;
+use crate::ongoing::OngoingEffect;
 use crate::status::GameStatus;
 
 /// One country's influence for one side, before and after an event —
@@ -44,6 +45,8 @@ pub struct EffectResult {
     pub influence: Vec<InfluenceChange>,
     pub vp_delta: i8,
     pub defcon: Option<(u8, u8)>,
+    /// A turn-long effect the event starts (see [`crate::ongoing`]).
+    pub ongoing: Option<OngoingEffect>,
 }
 
 /// What one card's effect function sees and mutates: the board as it was
@@ -62,6 +65,7 @@ struct Ctx<'a> {
     changes: Vec<InfluenceChange>,
     vp_delta: i8,
     defcon: Option<(u8, u8)>,
+    ongoing: Option<OngoingEffect>,
 }
 
 impl Ctx<'_> {
@@ -122,6 +126,11 @@ impl Ctx<'_> {
         self.defcon = Some((self.status.defcon, after.clamp(1, 5)));
     }
 
+    /// Starts a turn-long effect, in force until the turn ends.
+    fn start(&mut self, effect: OngoingEffect) {
+        self.ongoing = Some(effect);
+    }
+
     /// Battleground countries `side` controls, optionally restricted to
     /// some regions.
     fn controlled_battlegrounds(&self, side: Superpower, regions: Option<&[Region]>) -> i8 {
@@ -143,22 +152,31 @@ type Effect = fn(&mut Ctx);
 const EFFECTS: &[(u8, Effect)] = &[
     (4, duck_and_cover),
     (8, fidel),
+    (9, vietnam_revolts),
     (12, romanian_abdication),
     (15, nasser),
     (17, de_gaulle_leads_france),
+    (25, containment),
+    (31, red_scare_purge),
     (34, nuclear_test_ban),
+    (41, nuclear_subs),
     (48, kitchen_debates),
+    (51, brezhnev_doctrine),
     (52, portuguese_empire_crumbles),
     (54, allende),
     (64, panama_canal_returned),
     (65, camp_david_accords),
     (68, john_paul_ii_elected_pope),
+    (69, latin_american_death_squads),
     (72, sadat_expels_soviets),
     (78, alliance_for_progress),
     (82, iranian_hostage_crisis),
     (83, the_iron_lady),
     (84, reagan_bombs_libya),
+    (86, north_sea_oil),
+    (93, iran_contra_scandal),
     (97, an_evil_empire),
+    (109, yuri_and_samantha),
     (110, awacs_sale_to_saudis),
 ];
 
@@ -175,9 +193,9 @@ pub fn is_effect_card(card: CardId) -> bool {
 /// name the map doesn't know, which `tests` below pins for every card.
 pub fn resolve(map: &WorldMap, board: &Board, status: &GameStatus, card: CardId) -> Option<EffectResult> {
     let effect = effect_for(card)?;
-    let mut ctx = Ctx { map, before: board, working: board.clone(), status, changes: Vec::new(), vp_delta: 0, defcon: None };
+    let mut ctx = Ctx { map, before: board, working: board.clone(), status, changes: Vec::new(), vp_delta: 0, defcon: None, ongoing: None };
     effect(&mut ctx);
-    Some(EffectResult { card, player: status.active, influence: ctx.changes, vp_delta: ctx.vp_delta, defcon: ctx.defcon })
+    Some(EffectResult { card, player: status.active, influence: ctx.changes, vp_delta: ctx.vp_delta, defcon: ctx.defcon, ongoing: ctx.ongoing })
 }
 
 // ---- the cards, in printed-number order ----
@@ -192,6 +210,12 @@ fn duck_and_cover(c: &mut Ctx) {
 /// #8 Fidel
 fn fidel(c: &mut Ctx) {
     c.take_control("Cuba", Superpower::Ussr);
+}
+
+/// #9 Vietnam Revolts: +2 USSR in Vietnam; ops spent wholly in Southeast Asia get +1 this turn.
+fn vietnam_revolts(c: &mut Ctx) {
+    c.add("Vietnam", Superpower::Ussr, 2);
+    c.start(OngoingEffect::VietnamRevolts);
 }
 
 /// #12 Romanian Abdication
@@ -212,6 +236,17 @@ fn de_gaulle_leads_france(c: &mut Ctx) {
     c.add("France", Superpower::Ussr, 1);
 }
 
+/// #25 Containment: US ops cards get +1 ops (max 4) for the rest of the turn.
+fn containment(c: &mut Ctx) {
+    c.start(OngoingEffect::Containment);
+}
+
+/// #31 Red Scare/Purge: the opponent's ops cards get -1 ops (min 1) for the rest of the turn.
+fn red_scare_purge(c: &mut Ctx) {
+    let penalised = c.player().opponent();
+    c.start(OngoingEffect::RedScare { penalised });
+}
+
 /// #34 Nuclear Test Ban: the player receives VP from the *current* level, then improves it by 2.
 fn nuclear_test_ban(c: &mut Ctx) {
     let player = c.player();
@@ -219,11 +254,21 @@ fn nuclear_test_ban(c: &mut Ctx) {
     c.set_defcon(c.status.defcon + 2);
 }
 
+/// #41 Nuclear Subs: US battleground coups don't degrade DEFCON for the rest of the turn.
+fn nuclear_subs(c: &mut Ctx) {
+    c.start(OngoingEffect::NuclearSubs);
+}
+
 /// #48 Kitchen Debates: 2 VP to the US if it controls strictly more battlegrounds worldwide.
 fn kitchen_debates(c: &mut Ctx) {
     if c.controlled_battlegrounds(Superpower::Us, None) > c.controlled_battlegrounds(Superpower::Ussr, None) {
         c.award_vp(Superpower::Us, 2);
     }
+}
+
+/// #51 Brezhnev Doctrine: USSR ops cards get +1 ops (max 4) for the rest of the turn.
+fn brezhnev_doctrine(c: &mut Ctx) {
+    c.start(OngoingEffect::Brezhnev);
 }
 
 /// #52 Portuguese Empire Crumbles
@@ -258,6 +303,12 @@ fn john_paul_ii_elected_pope(c: &mut Ctx) {
     c.add("Poland", Superpower::Us, 1);
 }
 
+/// #69 Latin American Death Squads: the player's coups in Central/South America get +1, the opponent's -1.
+fn latin_american_death_squads(c: &mut Ctx) {
+    let beneficiary = c.player();
+    c.start(OngoingEffect::DeathSquads { beneficiary });
+}
+
 /// #72 Sadat Expels Soviets
 fn sadat_expels_soviets(c: &mut Ctx) {
     c.set("Egypt", Superpower::Ussr, 0);
@@ -289,9 +340,24 @@ fn reagan_bombs_libya(c: &mut Ctx) {
     c.award_vp(Superpower::Us, n as i8);
 }
 
+/// #86 North Sea Oil: the US plays an eighth action round this turn.
+fn north_sea_oil(c: &mut Ctx) {
+    c.start(OngoingEffect::NorthSeaOil);
+}
+
+/// #93 Iran-Contra Scandal: US realignment rolls get -1 for the rest of the turn.
+fn iran_contra_scandal(c: &mut Ctx) {
+    c.start(OngoingEffect::IranContra);
+}
+
 /// #97 “An Evil Empire”
 fn an_evil_empire(c: &mut Ctx) {
     c.award_vp(Superpower::Us, 1);
+}
+
+/// #109 Yuri and Samantha: the USSR gets 1 VP per US coup for the rest of the turn.
+fn yuri_and_samantha(c: &mut Ctx) {
+    c.start(OngoingEffect::YuriSamantha);
 }
 
 /// #110 AWACS Sale to Saudis

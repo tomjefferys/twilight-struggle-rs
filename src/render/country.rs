@@ -8,7 +8,7 @@ use crate::ops::Operation;
 
 use super::chip::{ChipGrid, ChipRole, CHIP_H, REGION_CHIP_W};
 use super::{
-    control_glyph, coup_odds_line, coup_target_line, modifier_line, nz, odds_line, operation_header, operation_touched_line,
+    control_glyph, coup_odds_line, coup_target_line_with, modifier_line, nz, odds_line, operation_header, operation_touched_line,
     put_border_title, Canvas, Color, Style, ViewMode, BEGIN_HINT,
 };
 
@@ -21,7 +21,7 @@ fn hint() -> String {
 const PLACEMENT_HINT: &str = "←→↑↓ select · +/= place · u undo · ⌫ abandon · c confirm · Esc back";
 const REALIGN_HINT: &str = "←→↑↓ select · r roll · ⌫ abandon · c done · Esc back";
 const COUP_HINT: &str = "←→↑↓ select · r coup · ⌫ abandon · c done · Esc back";
-const EVENT_HINT: &str = "←→↑↓ select · + add · - remove · u undo · 1/2 mode · ⌫ abandon · c done";
+const EVENT_HINT: &str = "←→↑↓ select · + add · - remove · u undo · 1-9 mode · ⌫ abandon · c done";
 
 /// What occupies one cell of the neighbourhood mini-map: either a country
 /// (the one viewed, or one of its neighbours) or a superpower guest chip.
@@ -237,7 +237,7 @@ pub fn render_country(map: &WorldMap, layout: &MapLayout, board: &Board, id: Cou
             }
             Operation::Coup(c) => {
                 let (target_number, odds) = c.preview(map, board, id);
-                rows.push((coup_target_line(c.side(), c.ops_total(), target_number, country.stability), Style::color(Color::Selected)));
+                rows.push((coup_target_line_with(c.side(), c.ops_for(map, id), c.roll_mod(map, id).map_or(0, |(_, m)| m), target_number, country.stability), Style::color(Color::Selected)));
                 rows.push((coup_odds_line(c.side(), &odds), Style::color(Color::Muted)));
             }
         }

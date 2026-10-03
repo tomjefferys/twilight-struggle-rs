@@ -7,7 +7,7 @@ use crate::map::WorldMap;
 use crate::ops::Operation;
 
 use super::chip::{ChipGrid, ChipRole, REGION_CHIP_W};
-use super::{coup_odds_line, coup_target_line, modifier_line, odds_line, operation_balance_line, Canvas, Color, Style, BEGIN_HINT};
+use super::{coup_odds_line, coup_target_line_with, modifier_line, odds_line, operation_balance_line, Canvas, Color, Style, BEGIN_HINT};
 
 const LEFT_MARGIN: usize = 2;
 const TOP_MARGIN: usize = 2; // title line + blank
@@ -37,7 +37,7 @@ const COUP_HINT: &str = "←→↑↓ select · Enter target · ⌫ abandon · c
 /// country, `1`/`2` pick a mode on a card that has two.
 /// What the small marks on a chip mean while an event's choices are open.
 const EVENT_LEGEND: &str = "double border: can act here · dim: not eligible · ↑N/↓N: can add/remove N · +N/-N: staged";
-const EVENT_HINT: &str = "←→↑↓ select · Enter open · + add · - remove · u undo · 1/2 mode · ⌫ abandon · c done";
+const EVENT_HINT: &str = "←→↑↓ select · Enter open · + add · - remove · u undo · 1-9 mode · ⌫ abandon · c done";
 
 /// A geographic zoom into one region: every country in it drawn as a box
 /// on its layout grid cell, connected to its in-region neighbours by line
@@ -239,7 +239,13 @@ fn build_footer_lines(
         if let (Operation::Coup(coup), Some(id)) = (operation, selected) {
             let (target_number, odds) = coup.preview(map, board, id);
             lines.push((
-                coup_target_line(coup.side(), coup.ops_total(), target_number, map.country(id).stability),
+                coup_target_line_with(
+                    coup.side(),
+                    coup.ops_for(map, id),
+                    coup.roll_mod(map, id).map_or(0, |(_, m)| m),
+                    target_number,
+                    map.country(id).stability,
+                ),
                 Style::color(Color::Selected),
             ));
             lines.push((coup_odds_line(coup.side(), &odds), Style::color(Color::Muted)));

@@ -3,6 +3,7 @@ use std::fmt;
 use serde::{Deserialize, Serialize};
 
 use crate::country::Superpower;
+use crate::ongoing::TurnEffects;
 
 /// The VP track's own cap (rule 5.5) — reaching either end wins the game
 /// outright ([`crate::game::Game::apply_vp`]), so a valid [`GameStatus`]
@@ -96,6 +97,9 @@ pub struct GameStatus {
     pub military_ops_ussr: i8,
     pub china_card: Superpower,
     pub china_card_face_up: bool,
+    /// Card events in force until the turn ends (see [`crate::ongoing`]).
+    #[serde(skip_serializing_if = "TurnEffects::is_empty")]
+    pub effects: TurnEffects,
 }
 
 impl GameStatus {
@@ -122,7 +126,11 @@ impl GameStatus {
         if !ACTION_ROUNDS_PER_TURN_RANGE.contains(&self.action_rounds_per_turn) {
             return Err(StatusError::ActionRoundsPerTurnOutOfRange(self.action_rounds_per_turn));
         }
-        if self.action_round < 1 || self.action_round > self.action_rounds_per_turn {
+        // North Sea Oil gives the US one action round past the usual count.
+        let extra_round = self.action_round == self.action_rounds_per_turn + 1
+            && self.active == Superpower::Us
+            && self.effects.extra_rounds(Superpower::Us) > 0;
+        if self.action_round < 1 || (self.action_round > self.action_rounds_per_turn && !extra_round) {
             return Err(StatusError::ActionRoundOutOfRange {
                 action_round: self.action_round,
                 action_rounds_per_turn: self.action_rounds_per_turn,
@@ -147,6 +155,7 @@ impl Default for GameStatus {
             military_ops_ussr: 0,
             china_card: Superpower::Ussr,
             china_card_face_up: true,
+            effects: TurnEffects::default(),
         }
     }
 }

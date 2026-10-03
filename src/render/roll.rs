@@ -12,6 +12,7 @@
 
 use crate::country::{CountryId, Superpower};
 use crate::game::RollOutcome;
+use crate::log::CoupAftermath;
 use crate::map::WorldMap;
 use crate::ops::Modifiers;
 
@@ -38,6 +39,10 @@ pub struct RollReport {
     /// `(US influence, USSR influence)` in the target, as they stood the
     /// instant before this roll.
     pub before: (u8, u8),
+    /// What a coup attempt set off beyond its own result — a DEFCON drop,
+    /// Nuclear Subs sparing it, Yuri and Samantha's VP. Always `None` for
+    /// a realignment.
+    pub aftermath: Option<CoupAftermath>,
 }
 
 impl RollReport {
@@ -109,8 +114,9 @@ pub fn render_roll_result(map: &WorldMap, report: &RollReport, queue_pos: Option
             title = format!("Coup · {country}");
             let acting = report.side;
             let opposing = acting.opponent();
-            let modified = result.die as i32 + result.ops as i32;
-            lines.push((format!("{acting}  rolled {} + {} ops = {modified}", result.die, result.ops), Style::default()));
+            let modified = result.die as i32 + result.ops as i32 + result.modifier as i32;
+            let modifier = if result.modifier == 0 { String::new() } else { format!(" {:+}", result.modifier) };
+            lines.push((format!("{acting}  rolled {} + {} ops{modifier} = {modified}", result.die, result.ops), Style::default()));
             lines.push((format!("  vs target {} (stability {stability} ×2)", result.target_number), Style::color(Color::Muted)));
             lines.push((String::new(), Style::default()));
 
@@ -150,6 +156,21 @@ pub fn render_roll_result(map: &WorldMap, report: &RollReport, queue_pos: Option
     if before_control != after_control {
         let text = format!("Control: {} → {}", control_label(before_control), control_label(after_control));
         push_text(&mut lines, &text, Style::default().bold(), text_width);
+    }
+
+    if let Some(aftermath) = report.aftermath.filter(|a| !a.is_empty()) {
+        lines.push((String::new(), Style::default()));
+        if let Some((before, after)) = aftermath.defcon {
+            push_text(&mut lines, &format!("DEFCON {before} → {after} (battleground coup)"), Style::color(Color::Muted).bold(), text_width);
+        }
+        if aftermath.defcon_spared {
+            push_text(&mut lines, "Nuclear Subs: DEFCON unchanged", Style::color(Color::Muted).bold(), text_width);
+        }
+        if let Some((delta, vp_after)) = aftermath.vp {
+            let side = if delta > 0 { Superpower::Us } else { Superpower::Ussr };
+            let text = format!("Yuri and Samantha: {:+} VP to the {side} (now {vp_after})", delta.abs());
+            push_text(&mut lines, &text, Style::color(side_color(side)).bold(), text_width);
+        }
     }
 
     lines.push((String::new(), Style::default()));
@@ -241,6 +262,7 @@ mod tests {
     use super::*;
     use crate::country::Superpower::*;
     use crate::map::{Found, WorldMap};
+    use crate::log::CoupAftermath;
     use crate::ops::{CoupResult, RollResult};
     use crate::render::ColorMode;
 
@@ -256,7 +278,7 @@ mod tests {
     }
 
     fn zero_mods() -> Modifiers {
-        Modifiers { adjacent_controlled: 0, more_influence: false, superpower_adjacent: false }
+        Modifiers { adjacent_controlled: 0, more_influence: false, superpower_adjacent: false, iran_contra: false }
     }
 
     #[test]
@@ -266,13 +288,13 @@ mod tests {
         let result = RollResult {
             target: id,
             acting_die: 4,
-            acting_mods: Modifiers { adjacent_controlled: 0, more_influence: true, superpower_adjacent: false },
+            acting_mods: Modifiers { adjacent_controlled: 0, more_influence: true, superpower_adjacent: false, iran_contra: false },
             opposing_die: 2,
             opposing_mods: zero_mods(),
             loser: Some(Us),
             removed: 3,
         };
-        let report = RollReport { side: Ussr, outcome: RollOutcome::Realign(result), before: (3, 1) };
+        let report = RollReport { side: Ussr, outcome: RollOutcome::Realign(result), before: (3, 1), aftermath: None };
         let canvas = render_roll_result(&map, &report, None);
         let text = canvas.render(ColorMode::Never);
         assert!(text.contains("USSR WINS"), "{text}");
@@ -300,7 +322,7 @@ mod tests {
             loser: Some(Us),
             removed: 0,
         };
-        let report = RollReport { side: Us, outcome: RollOutcome::Realign(result), before: (0, 2) };
+        let report = RollReport { side: Us, outcome: RollOutcome::Realign(result), before: (0, 2), aftermath: None };
         let canvas = render_roll_result(&map, &report, None);
         let text = canvas.render(ColorMode::Never);
         assert!(text.contains("USSR WINS the roll"), "{text}");
@@ -322,7 +344,7 @@ mod tests {
             loser: None,
             removed: 0,
         };
-        let report = RollReport { side: Ussr, outcome: RollOutcome::Realign(result), before: (2, 2) };
+        let report = RollReport { side: Ussr, outcome: RollOutcome::Realign(result), before: (2, 2), aftermath: None };
         let canvas = render_roll_result(&map, &report, None);
         let text = canvas.render(ColorMode::Never);
         assert!(text.contains("TIE"), "{text}");
@@ -336,8 +358,8 @@ mod tests {
         // Poland's stability is 3: USSR controls it at (0, 3) (3 >= 0+3),
         // and a coup that fully clears USSR's influence while adding 3 of
         // its own (3 >= 0+3) flips control the other way.
-        let result = CoupResult { target: id, die: 6, ops: 5, target_number: 5, margin: 6, removed: 3, added: 3 };
-        let report = RollReport { side: Us, outcome: RollOutcome::Coup(result), before: (0, 3) };
+        let result = CoupResult { target: id, die: 6, ops: 5, modifier: 0, target_number: 5, margin: 6, removed: 3, added: 3 };
+        let report = RollReport { side: Us, outcome: RollOutcome::Coup(result), before: (0, 3), aftermath: None };
         let canvas = render_roll_result(&map, &report, Some((1, 2)));
         let text = canvas.render(ColorMode::Never);
         assert!(text.contains("COUP SUCCEEDS"), "{text}");
@@ -354,12 +376,39 @@ mod tests {
     fn a_failed_coup_names_the_shortfall_and_changes_nothing() {
         let map = map();
         let id = poland(&map);
-        let result = CoupResult { target: id, die: 1, ops: 2, target_number: 6, margin: 0, removed: 0, added: 0 };
-        let report = RollReport { side: Us, outcome: RollOutcome::Coup(result), before: (0, 2) };
+        let result = CoupResult { target: id, die: 1, ops: 2, modifier: 0, target_number: 6, margin: 0, removed: 0, added: 0 };
+        let report = RollReport { side: Us, outcome: RollOutcome::Coup(result), before: (0, 2), aftermath: None };
         let canvas = render_roll_result(&map, &report, None);
         let text = canvas.render(ColorMode::Never);
         assert!(text.contains("COUP FAILS"), "{text}");
         assert!(!text.contains("Control:"), "{text}");
         assert!(!text.contains("influence in Poland"), "{text}");
+    }
+
+    #[test]
+    fn a_coup_aftermath_lists_the_defcon_drop_and_yuris_vp() {
+        let map = map();
+        let id = poland(&map);
+        let result = CoupResult { target: id, die: 6, ops: 2, modifier: 0, target_number: 5, margin: 3, removed: 3, added: 0 };
+        let aftermath = CoupAftermath { defcon: Some((4, 3)), defcon_spared: false, vp: Some((-1, -2)) };
+        let report = RollReport { side: Us, outcome: RollOutcome::Coup(result), before: (0, 3), aftermath: Some(aftermath) };
+        let text = render_roll_result(&map, &report, None).render(ColorMode::Never);
+        assert!(text.contains("DEFCON 4 → 3"), "{text}");
+        assert!(text.contains("Yuri and Samantha: +1 VP to the USSR (now -2)"), "{text}");
+
+        let spared = CoupAftermath { defcon_spared: true, ..Default::default() };
+        let report = RollReport { aftermath: Some(spared), ..report };
+        let text = render_roll_result(&map, &report, None).render(ColorMode::Never);
+        assert!(text.contains("Nuclear Subs: DEFCON unchanged"), "{text}");
+    }
+
+    #[test]
+    fn a_coup_roll_modifier_is_part_of_the_modified_roll_shown() {
+        let map = map();
+        let id = poland(&map);
+        let result = CoupResult { target: id, die: 3, ops: 2, modifier: 1, target_number: 5, margin: 1, removed: 1, added: 0 };
+        let report = RollReport { side: Ussr, outcome: RollOutcome::Coup(result), before: (2, 0), aftermath: None };
+        let text = render_roll_result(&map, &report, None).render(ColorMode::Never);
+        assert!(text.contains("rolled 3 + 2 ops +1 = 6"), "{text}");
     }
 }
