@@ -7,6 +7,7 @@
 use crate::board::Board;
 use crate::cards::Card;
 use crate::country::Superpower;
+use crate::events;
 use crate::game::Victory;
 use crate::layout::MapLayout;
 use crate::ops::Operation;
@@ -81,6 +82,10 @@ pub fn render_status_bar(
             (Some(card), None) if card.scoring => {
                 (format!("playing {} — e score · ⌫ return card", card.name), Style::color(Color::Selected))
             }
+            (Some(card), None) if events::is_implemented(card.id) => (
+                format!("playing {} ({} ops) — e event · i influence · a realign · o coup · ⌫ return card", card.name, card.ops),
+                Style::color(Color::Selected),
+            ),
             (Some(card), None) => (
                 format!("playing {} ({} ops) — i influence · a realign · o coup · ⌫ return card", card.name, card.ops),
                 Style::color(Color::Selected),

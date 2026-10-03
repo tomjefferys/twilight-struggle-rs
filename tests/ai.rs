@@ -137,7 +137,8 @@ fn pass_and_begin_are_mutually_exclusive_with_each_other() {
 /// Across many seeds, a full random walk of alternating turns: every
 /// action `legal_actions` lists at every step applies cleanly to a
 /// lookahead clone (soundness), the list is never empty, and `play_turn`
-/// always hands the turn to the other side.
+/// always hands the turn to the other side (unless an event just ended
+/// the game).
 #[test]
 fn random_play_stays_sound_and_always_ends_the_turn() {
     for seed in 0..15u64 {
@@ -158,12 +159,21 @@ fn random_play_stays_sound_and_always_ends_the_turn() {
             }
 
             play_turn(&mut ai, &mut game, &map, &cards, &mut dice).expect("play_turn should only apply actions legal_actions listed");
+            if game.winner().is_some() {
+                // An event can end the game mid-turn (VP cap, DEFCON 1) —
+                // `active` never changes then, and there's nothing left to play.
+                break;
+            }
             assert_ne!(game.active(), before, "seed {seed}: play_turn did not hand the turn over");
         }
 
         // The brute-force differential check too, at whatever state 40
         // alternating random turns happened to land on.
-        assert_legal_actions_are_exact(&game, &map, &cards, &card_ids);
+        // (A finished game lists nothing by design — covered by
+        // `a_finished_game_lists_no_legal_actions`.)
+        if game.winner().is_none() {
+            assert_legal_actions_are_exact(&game, &map, &cards, &card_ids);
+        }
     }
 }
 

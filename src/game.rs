@@ -67,6 +67,9 @@ pub enum VictoryReason {
     /// Europe Scoring's Control tier (rule 10.1) — the one region card
     /// whose Control is an outright win rather than a VP value.
     EuropeControl,
+    /// DEFCON reached 1 (rule 5.1): the side that played the event
+    /// degrading it loses, so `Victory::side` is its opponent.
+    Defcon,
 }
 
 /// The game is over: who won, and why.
@@ -676,9 +679,11 @@ impl Game {
 
     /// Resolves the event text of whichever card is currently in play —
     /// the other thing a played card can fund, alongside [`Game::begin`].
-    /// Only a scoring card's event is implemented so far
+    /// Only scoring cards and the fixed-effect cards are implemented so far
     /// ([`crate::events::is_implemented`]); refused otherwise with
-    /// [`GameError::EventNotImplemented`]. Also refused with no card in
+    /// [`GameError::EventNotImplemented`]. Either side may play any card's
+    /// event, its opponent's included — the event does what the card says,
+    /// whoever plays it. Also refused with no card in
     /// play ([`GameError::NoCard`]), while an operation is open
     /// ([`GameError::OperationOpen`] — nothing currently implemented
     /// needs this, since every scoring card has 0 ops and so can never
@@ -706,7 +711,7 @@ impl Game {
         if !events::is_implemented(card.id) {
             return Err(GameError::EventNotImplemented { card: card.id });
         }
-        let outcome = events::resolve(map, &self.board, card.id).expect("is_implemented checked above");
+        let outcome = events::resolve(map, &self.board, &self.status, card.id).expect("is_implemented checked above");
         self.log_card_selected();
 
         match &outcome {
@@ -722,14 +727,26 @@ impl Game {
                     side: Some(self.status.active),
                     event: Event::Scored { result: result.clone(), vp_after },
                 });
-                if let Some(victory) = self.winner {
-                    self.log.push(LogEntry {
-                        turn: self.status.turn,
-                        action_round: self.status.action_round,
-                        side: Some(self.status.active),
-                        event: Event::GameOver(victory),
-                    });
+                self.log_game_over();
+            }
+            EventOutcome::Effect(result) => {
+                for change in &result.influence {
+                    self.board.set_influence(change.country, change.side, change.after);
                 }
+                // DEFCON before VP, so a DEFCON-1 loss outranks whatever
+                // VP the same card also awards (`set_winner` keeps the first).
+                if let Some((_, after)) = result.defcon {
+                    self.apply_defcon(after);
+                }
+                self.apply_vp(result.vp_delta);
+                let vp_after = self.status.vp;
+                self.log.push(LogEntry {
+                    turn: self.status.turn,
+                    action_round: self.status.action_round,
+                    side: Some(self.status.active),
+                    event: Event::EventResolved { result: result.clone(), vp_after },
+                });
+                self.log_game_over();
             }
         }
 
@@ -738,6 +755,28 @@ impl Game {
             self.advance();
         }
         Ok(outcome)
+    }
+
+    /// Pushes [`Event::GameOver`] if [`Game::winner`] is set.
+    fn log_game_over(&mut self) {
+        if let Some(victory) = self.winner {
+            self.log.push(LogEntry {
+                turn: self.status.turn,
+                action_round: self.status.action_round,
+                side: Some(self.status.active),
+                event: Event::GameOver(victory),
+            });
+        }
+    }
+
+    /// Sets DEFCON to `level` (clamped to the track), ending the game
+    /// against the active side if it reaches 1 — only the active side's
+    /// own event can have just moved it, so they're the one who lost.
+    fn apply_defcon(&mut self, level: u8) {
+        self.status.defcon = level.clamp(1, 5);
+        if self.status.defcon == 1 {
+            self.set_winner(self.status.active.opponent(), VictoryReason::Defcon);
+        }
     }
 
     /// Adds `delta` to the VP track, clamped to ±20 (rule 5.5's cap —
@@ -1613,6 +1652,7 @@ mod tests {
         let outcome = game.play_event(&map, &cards).unwrap();
         match outcome {
             EventOutcome::Scoring(result) => assert_eq!(result.vp_delta, -3),
+            EventOutcome::Effect(_) => panic!("a scoring card should resolve as a scoring event"),
         }
         assert_eq!(game.status().vp, -3, "presence-only USSR should cost the US side 3 VP");
         assert_eq!(game.card_in_play(), None, "the event should discard the card that funded it");

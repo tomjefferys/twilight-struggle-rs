@@ -10,6 +10,7 @@
 pub mod card;
 mod chip;
 pub mod country;
+pub mod event;
 pub mod hand;
 pub mod log;
 pub mod region;
@@ -21,6 +22,7 @@ pub mod worldmap;
 
 pub use card::render_card;
 pub use country::render_country;
+pub use event::render_event_result;
 pub use hand::{render_hand, HAND_ROWS, HAND_WIDTH};
 pub use log::{log_entry_line, log_text, render_log};
 pub use region::render_region;
@@ -469,6 +471,7 @@ pub fn game_over_line(victory: crate::game::Victory) -> String {
     let reason = match victory.reason {
         crate::game::VictoryReason::Vp => "VP",
         crate::game::VictoryReason::EuropeControl => "Europe control",
+        crate::game::VictoryReason::Defcon => "DEFCON 1",
     };
     format!("GAME OVER — {} wins ({reason})", victory.side)
 }

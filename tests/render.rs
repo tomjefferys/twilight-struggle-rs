@@ -1008,3 +1008,17 @@ fn card_detail_matches_snapshot() {
     let expected = include_str!("snapshots/card_red_scare.txt");
     assert_eq!(canvas.render(ColorMode::Never), expected.trim_end_matches('\n'));
 }
+
+#[test]
+fn event_result_modal_matches_snapshot() {
+    use twilight_struggle::render::render_event_result;
+    use twilight_struggle::{effects, StateLibrary};
+    let map = WorldMap::standard().unwrap();
+    let cards = cards();
+    let (scenario, _) = StateLibrary::standard().load(&map, &cards, "events/fidel").unwrap();
+    let card = cards.id_by_name("Fidel").unwrap();
+    let result = effects::resolve(&map, &scenario.board, &scenario.status, card).unwrap();
+    let canvas = render_event_result(&map, &cards, &result, scenario.status.vp, None, None);
+    let expected = include_str!("snapshots/event_fidel.txt");
+    assert_eq!(canvas.render(ColorMode::Never), expected.trim_end_matches('\n'));
+}

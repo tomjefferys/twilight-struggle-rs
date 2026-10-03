@@ -1,0 +1,8 @@
+┏━ Fidel ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┓
+┃  Cuba  USA influence 2 → 0                           ┃
+┃  Cuba  USSR influence 1 → 3                          ┃
+┃                                                      ┃
+┃  no VP change (still 0)                              ┃
+┃                                                      ┃
+┃                                   Enter to continue  ┃
+┗━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━┛

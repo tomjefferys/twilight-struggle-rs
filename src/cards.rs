@@ -151,6 +151,7 @@ pub struct Card {
 }
 
 impl Card {
+
     /// How this card's ops value is shown wherever space is tight (the
     /// hand strip's mini-card boxes, the zoom view's own title) — its
     /// digit, `S` for a scoring card (whose `ops` is always 0 and never

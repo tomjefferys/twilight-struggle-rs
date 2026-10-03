@@ -4,9 +4,12 @@ A Rust CLI implementation of the board game *Twilight Struggle*. Currently
 focused on the data model and terminal display, a handful of the
 ops-spending actions (influence placement, realignment, coups), enforced
 alternating turns, playing a card from each side's hand for its ops
-value, and — the first slice of card *events* — the seven scoring cards,
-which can end the game outright (VP reaching ±20, or Europe Scoring's
-Control tier). Every other card's text, DEFCON, Military Operations, and
+value, and — the first slices of card *events* — the seven scoring cards
+and nineteen fixed-effect cards (influence/VP/DEFCON only, no choices or
+rolls), which can end the game outright (VP reaching ±20, DEFCON
+reaching 1, or Europe Scoring's Control tier). `CARDS.md` tracks which of
+the 110 cards have their event implemented (`tests/cards_progress.rs`
+keeps it honest). Every other card's text, DEFCON *degradation rules*, Military Operations, and
 redealing are still out of scope, as is the headline phase and an
 opponent's card's ops-and-event dual use. A first AI opponent plays
 uniformly random legal moves.
@@ -219,8 +222,29 @@ uniformly random legal moves.
   is the single entry point `Game::play_event` calls, returning an
   `EventOutcome`; `events::is_implemented` is what `Game::play_event` and
   `Game::legal_actions` both check before calling it, or offering
-  `Action::Event`, respectively. Scoring cards are the first (and so far
-  only) stage:
+  `Action::Event`, respectively. Two stages so far:
+  - `events::effects` resolves nineteen cards whose text only moves
+    influence, VP, or DEFCON by fixed amounts (see `CARDS.md`) into an
+    `EffectResult` — `influence: Vec<InfluenceChange>` (country, side,
+    before, after; no-op changes omitted), a signed `vp_delta` (positive
+    favours the US, like `GameStatus::vp`), and `defcon: Option<(before,
+    after)>` — as a pure function of `(map, board, status, card)` that
+    applies nothing itself; `Game::play_event` writes it. Countries are
+    looked up by name and the lookup panics on a typo, pinned by a unit
+    test that resolves every card on a blank board. The "prevents/allows
+    card #N" clauses on some cards aren't modelled: they only matter once
+    that other card exists, and a played event's card already sits in
+    `Hands`'s removed pile. Either side may play any card's event,
+    its opponent's included — the event does what the card says whoever
+    plays it (Duck and Cover pays the US even when the USSR plays it).
+    Playing an opponent's card for its ops *as well* is still out of
+    scope. DEFCON reaching 1 ends the game against the phasing player —
+    whoever is playing the action round, not the card's side
+    (`VictoryReason::Defcon`); DEFCON is applied before VP, so that
+    loss outranks any VP the same card awards. A new card of this kind
+    adds one function (`fn(&mut Ctx)`, reading as the card's rules text through `Ctx`'s `add`/`remove`/`set`/`take_control`/`award_vp`/`set_defcon` helpers) and one line in `effects`'s `EFFECTS` table — `is_effect_card` and `resolve` both read it, so there's no second list — a state in
+    `data/states/events.json` with a test in `tests/states.rs`, and a ✅
+    in `CARDS.md`.
   - `events::scoring` (rule 10.1) resolves any of the seven scoring cards
     into a per-side breakdown plus the VP swing it produces — pure
     functions of `(map, board, card)`, mirroring `ops::realign`'s own
@@ -359,11 +383,11 @@ uniformly random legal moves.
   needs, since it simply doesn't choose the action it'd be undoing) or
   `cancel` (every board outcome it can produce is already reachable
   through `confirm` alone). With a card in play and no operation open,
-  `Event` is offered whenever `events::is_implemented` recognises it, and
-  the three `Begin` kinds whenever the card isn't a scoring card (one has
-  no ops for `Begin` to spend; the other, so far, has no implemented
-  event) — never both, since nothing implemented yet is both. That
-  exclusion is also most of what guarantees the list is never empty and a
+  `Event` is offered whenever `events::is_implemented` recognises it
+  (whichever side's card it is), and the three `Begin` kinds
+  whenever the card isn't a scoring card (one has no ops for `Begin` to
+  spend) — so a fixed-effect card offers both. A scoring card offering
+  only `Event` is most of what guarantees the list is never empty and a
   random walk through it can't stall: every action either spends ops or
   closes/opens a step, so repeated `legal_actions`/`apply` calls always
   reach a `Confirm` or `Pass` that hands the turn over — except once
@@ -429,7 +453,9 @@ uniformly random legal moves.
   point on as one funding an operation), then `Event::Scored` — the
   result plus the VP track's new value, since the result alone only
   carries the *change* — and, if the event just ended the game,
-  `Event::GameOver` right after it. `Game::board_mut` is the one mutator
+  `Event::GameOver` right after it; a fixed-effect card pushes
+  `Event::EventResolved { result, vp_after }` in `Scored`'s place
+  (`event` line in the rendered log). `Game::board_mut` is the one mutator
   `Game` can't observe by itself (`set`/`add`/`remove` in `main.rs` bypass
   the operation system entirely), so `Game::record_edit` and
   `Game::record_note` exist for a caller to report an edit or an
@@ -552,6 +578,11 @@ uniformly random legal moves.
     and why) — both dense one-liners for this view specifically; the
     interactive map's own modal (`score.rs` below) spells the same result
     out as a titled box instead.
+  - `event.rs` — `render_event_result`, `score.rs`'s analogue for a
+    fixed-effect card: a titled box with one row per influence change,
+    the DEFCON move, the VP swing and new total, and a game-over line if
+    it ended the game (`winner` is passed in, since the result alone
+    can't say). Same `(n, total)` queue position as the other modals.
   - `statusbar.rs` — the two-row turn/operation bar `interactive.rs` draws
     above every map screen: turn/AR/active side (its own colour)/DEFCON/
     VP, then one of four states for the card/operation row — a set
@@ -561,7 +592,8 @@ uniformly random legal moves.
     card in play (a prompt naming the keys to select and play one); a
     card in play with no operation open yet (its name and the keys to
     spend or return it — `e score` in place of the ops keys for a
-    scoring card, since it has none to spend); or an open operation
+    scoring card, since it has none to spend; `e event` ahead of them
+    for a card whose own event is implemented); or an open operation
     (`operation_balance_line`, reused rather than reworded, prefixed with
     the card's name). The only view besides `world.rs` that reads a
     `GameStatus`, deliberately its own
@@ -900,7 +932,7 @@ uniformly random legal moves.
   as a synonym) — every other key is swallowed while one's up, the same
   modal precedence the zoom overlay has, and the two can never be open
   together (both close the other the instant they'd open). The two share
-  one queue (`modal: VecDeque<Modal>`, `Modal::Roll`/`Modal::Score`)
+  one queue (`modal: VecDeque<Modal>`, `Modal::Roll`/`Modal::Score`/`Modal::Event`)
   rather than a single slot, since a single keypress can still only
   produce one at a time but an AI's turn can make several (a multi-op
   realignment's rolls; never, so far, a mix of the two kinds, since a
@@ -997,7 +1029,7 @@ deliberate exception, for debug-mode test states specifically.
 - `backup/` — earlier full snapshots of the world map, kept in case a
   future change needs to compare against or revert to an earlier version.
 - `states/` — named test states (`src/states.rs`'s own `StateLibrary`),
-  one JSON file per topic (`scoring.json` is the first), each holding a
+  one JSON file per topic (`scoring.json` is the first, then `events.json` for the fixed-effect cards), each holding a
   `{"states": [...]}` array of several named `Scenario` snapshots. Read
   from disk at runtime, not `include_str!`-embedded — see `states.rs`'s
   own doc above for why.

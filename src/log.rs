@@ -26,7 +26,7 @@
 
 use crate::cards::CardId;
 use crate::country::{CountryId, Superpower};
-use crate::events::ScoringResult;
+use crate::events::{EffectResult, ScoringResult};
 use crate::game::{OperationKind, Victory};
 use crate::ops::{CoupResult, RollResult};
 
@@ -79,6 +79,11 @@ pub enum Event {
     /// the VP track's new value, since `result.vp_delta` alone doesn't
     /// say what it landed on.
     Scored { result: ScoringResult, vp_after: i8 },
+    /// A fixed-effect card's event resolved (`events::effects`) — the
+    /// same moment and position as `Scored`, with the VP track's new
+    /// value for the same reason. DEFCON's own before/after is already
+    /// carried by the result.
+    EventResolved { result: EffectResult, vp_after: i8 },
     /// The game ended — pushed by [`crate::game::Game::play_event`]
     /// immediately after the `Scored` entry that caused it, the one
     /// entry type with no side of its own (the log's `side` field is set
