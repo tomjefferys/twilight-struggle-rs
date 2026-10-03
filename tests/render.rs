@@ -1022,3 +1022,60 @@ fn event_result_modal_matches_snapshot() {
     let expected = include_str!("snapshots/event_fidel.txt");
     assert_eq!(canvas.render(ColorMode::Never), expected.trim_end_matches('\n'));
 }
+
+// ---------------------------------------------------------------------
+// Choice events: an open `Operation::Event` names its chooser, dims the
+// countries it can't touch, and advertises what `+`/`-` do on the
+// selected one.
+// ---------------------------------------------------------------------
+
+/// Comecon (USSR) opened and one pick made, Hungary selected.
+fn comecon_session() -> (WorldMap, MapLayout, Board, Operation, CountryId) {
+    use twilight_struggle::events::EventChoice;
+    use twilight_struggle::{CardId, StateLibrary};
+    let (map, layout) = standard();
+    let cards = cards();
+    let (scenario, _) = StateLibrary::standard().load(&map, &cards, "choices/comecon").unwrap();
+    let card: CardId = cards.id_by_name("Comecon").unwrap();
+    let mut choice = EventChoice::new(&map, &scenario.board, &scenario.status, card).unwrap();
+    let hungary = map.id_by_name("Hungary").unwrap();
+    choice.step(&map, hungary, twilight_struggle::choice::Sign::Plus).unwrap();
+    (map, layout, scenario.board, Operation::Event(choice), hungary)
+}
+
+#[test]
+fn event_region_view_matches_snapshot() {
+    let (map, layout, board, op, hungary) = comecon_session();
+    let canvas = render_region(&map, &layout, &board, Region::Europe, Some(hungary), Some(&op));
+    let expected = include_str!("snapshots/event_comecon_region.txt");
+    assert_eq!(canvas.render(ColorMode::Never), expected.trim_end_matches('\n'));
+}
+
+#[test]
+fn an_event_footer_names_the_chooser_and_what_plus_and_minus_do_here() {
+    let (map, layout, board, op, hungary) = comecon_session();
+    let text = render_region(&map, &layout, &board, Region::Europe, Some(hungary), Some(&op)).render(ColorMode::Never);
+    assert!(text.contains("USSR chooses"), "{text}");
+    assert!(text.contains("- undo here"), "Hungary already has a staged add: {text}");
+    // Poland is US-controlled, so it isn't offered.
+    let poland = map.id_by_name("Poland").unwrap();
+    let text = render_region(&map, &layout, &board, Region::Europe, Some(poland), Some(&op)).render(ColorMode::Never);
+    assert!(text.contains("not an eligible country"), "{text}");
+}
+
+#[test]
+fn an_ineligible_country_is_dimmed_during_an_event() {
+    let (map, layout, board, op, hungary) = comecon_session();
+    let text = render_region(&map, &layout, &board, Region::Europe, Some(hungary), Some(&op)).render(ColorMode::Always);
+    let poland_line = line_containing(&text, "Poland");
+    assert!(poland_line.contains("\x1b[2m") || poland_line.contains(";2m"), "{poland_line:?}");
+}
+
+#[test]
+fn the_country_view_shows_the_event_prompt_and_hint() {
+    let (map, layout, board, op, hungary) = comecon_session();
+    let text = render_country(&map, &layout, &board, hungary, Some(&op), ViewMode::Interactive).render(ColorMode::Never);
+    assert!(text.contains("USSR chooses"), "{text}");
+    assert!(text.contains("add 1 USSR influence to each of 4"), "{text}");
+    assert!(text.contains("+ add"), "{text}");
+}

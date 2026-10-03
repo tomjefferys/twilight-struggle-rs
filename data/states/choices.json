@@ -1,0 +1,449 @@
+{
+  "states": [
+    {
+      "name": "socialist-governments",
+      "description": "USSR plays Socialist Governments: remove 3 US influence from Western Europe, at most 2 per country. France holds US 3, Italy US 1, West Germany US 5, Poland US 2 (not Western Europe). USSR chooses.",
+      "status": {
+        "active": "Ussr"
+      },
+      "influence": {
+        "France": [3, 0],
+        "Italy": [1, 0],
+        "West Germany": [5, 0],
+        "Poland": [2, 0]
+      },
+      "hands": {
+        "us": [
+          "NATO"
+        ],
+        "ussr": [
+          "Socialist Governments"
+        ]
+      }
+    },
+    {
+      "name": "comecon",
+      "description": "USSR plays Comecon: +1 USSR in each of 4 non-US-controlled Eastern European countries. Poland is US-controlled (US 5), so it is excluded. USSR chooses.",
+      "status": {
+        "active": "Ussr"
+      },
+      "influence": {
+        "Poland": [5, 0]
+      },
+      "hands": {
+        "us": [
+          "NATO"
+        ],
+        "ussr": [
+          "Comecon"
+        ]
+      }
+    },
+    {
+      "name": "warsaw-pact",
+      "description": "USSR plays Warsaw Pact Formed. Mode 1 removes all US influence from 4 Eastern European countries (East Germany US 2, Poland US 3, Hungary US 1, Romania US 1, Bulgaria US 2, Czechoslovakia none); mode 2 adds 5 USSR, max 2 per country. USSR chooses.",
+      "status": {
+        "active": "Ussr"
+      },
+      "influence": {
+        "East Germany": [2, 0],
+        "Poland": [3, 0],
+        "Hungary": [1, 0],
+        "Romania": [1, 0],
+        "Bulgaria": [2, 0]
+      },
+      "hands": {
+        "us": [
+          "NATO"
+        ],
+        "ussr": [
+          "Warsaw Pact Formed"
+        ]
+      }
+    },
+    {
+      "name": "truman-doctrine",
+      "description": "US plays Truman Doctrine: remove all USSR influence from ONE uncontrolled European country. Italy has USSR 1 (uncontrolled); Greece USSR 2 and Poland USSR 3 are USSR-controlled, so not eligible. US chooses.",
+      "status": {
+        "active": "Us"
+      },
+      "influence": {
+        "Italy": [0, 1],
+        "Greece": [0, 2],
+        "Poland": [0, 3]
+      },
+      "hands": {
+        "us": [
+          "Truman Doctrine"
+        ],
+        "ussr": [
+          "Fidel"
+        ]
+      }
+    },
+    {
+      "name": "truman-doctrine-nothing-to-do",
+      "description": "US plays Truman Doctrine with no uncontrolled European country holding USSR influence: the event resolves at once, changing nothing.",
+      "status": {
+        "active": "Us"
+      },
+      "influence": {
+        "Poland": [0, 3]
+      },
+      "hands": {
+        "us": [
+          "Truman Doctrine"
+        ],
+        "ussr": [
+          "Fidel"
+        ]
+      }
+    },
+    {
+      "name": "independent-reds",
+      "description": "US plays Independent Reds: raise US influence to the USSR's in ONE of Yugoslavia/Romania/Bulgaria/Hungary/Czechoslovakia. Romania US 1 / USSR 3; Hungary US 2 / USSR 1 (already ahead). US chooses.",
+      "status": {
+        "active": "Us"
+      },
+      "influence": {
+        "Romania": [1, 3],
+        "Hungary": [2, 1]
+      },
+      "hands": {
+        "us": [
+          "Independent Reds"
+        ],
+        "ussr": [
+          "Fidel"
+        ]
+      }
+    },
+    {
+      "name": "marshall-plan",
+      "description": "US plays Marshall Plan: +1 US in each of 7 non-USSR-controlled Western European countries. West Germany is USSR-controlled (USSR 5), so it is excluded. US chooses.",
+      "status": {
+        "active": "Us"
+      },
+      "influence": {
+        "West Germany": [0, 5]
+      },
+      "hands": {
+        "us": [
+          "Marshall Plan"
+        ],
+        "ussr": [
+          "Fidel"
+        ]
+      }
+    },
+    {
+      "name": "suez-crisis",
+      "description": "USSR plays Suez Crisis: remove 4 US influence from France, the UK and Israel, max 2 per country. France US 3, UK US 1, Israel US 4. USSR chooses.",
+      "status": {
+        "active": "Ussr"
+      },
+      "influence": {
+        "France": [3, 0],
+        "UK": [1, 0],
+        "Israel": [4, 0]
+      },
+      "hands": {
+        "us": [
+          "NATO"
+        ],
+        "ussr": [
+          "Suez Crisis"
+        ]
+      }
+    },
+    {
+      "name": "east-european-unrest-early",
+      "description": "US plays East European Unrest in the Early War (turn 1): remove 1 USSR influence from each of 3 Eastern European countries. US chooses.",
+      "status": {
+        "active": "Us",
+        "turn": 1
+      },
+      "influence": {
+        "Poland": [0, 2],
+        "Hungary": [0, 3],
+        "Romania": [0, 1],
+        "Bulgaria": [0, 1]
+      },
+      "hands": {
+        "us": [
+          "East European Unrest"
+        ],
+        "ussr": [
+          "Fidel"
+        ]
+      }
+    },
+    {
+      "name": "east-european-unrest-late",
+      "description": "The same position in the Late War (turn 8): remove 2 USSR influence from each of 3 countries (Romania/Bulgaria only have 1 to lose). US chooses.",
+      "status": {
+        "active": "Us",
+        "turn": 8
+      },
+      "influence": {
+        "Poland": [0, 2],
+        "Hungary": [0, 3],
+        "Romania": [0, 1],
+        "Bulgaria": [0, 1]
+      },
+      "hands": {
+        "us": [
+          "East European Unrest"
+        ],
+        "ussr": [
+          "Fidel"
+        ]
+      }
+    },
+    {
+      "name": "decolonization",
+      "description": "USSR plays Decolonization: +1 USSR in each of 4 countries in Africa and/or Southeast Asia. USSR chooses.",
+      "status": {
+        "active": "Ussr"
+      },
+      "influence": {
+        "Nigeria": [2, 0]
+      },
+      "hands": {
+        "us": [
+          "NATO"
+        ],
+        "ussr": [
+          "Decolonization"
+        ]
+      }
+    },
+    {
+      "name": "de-stalinization",
+      "description": "USSR plays De-Stalinization: move up to 4 USSR influence from anywhere to non-US-controlled countries, max 2 added per country. Poland USSR 3, Czechoslovakia USSR 2; Canada is US-controlled (US 5). A 'may' card. USSR chooses.",
+      "status": {
+        "active": "Ussr"
+      },
+      "influence": {
+        "Poland": [0, 3],
+        "Czechoslovakia": [0, 2],
+        "Canada": [5, 0]
+      },
+      "hands": {
+        "us": [
+          "NATO"
+        ],
+        "ussr": [
+          "De-Stalinization"
+        ]
+      }
+    },
+    {
+      "name": "south-african-unrest",
+      "description": "USSR plays South African Unrest. Mode 1: +2 USSR in South Africa. Mode 2: +1 in South Africa and +2 in one adjacent country (Angola or Botswana). USSR chooses.",
+      "status": {
+        "active": "Ussr"
+      },
+      "influence": {
+        "South Africa": [1, 0]
+      },
+      "hands": {
+        "us": [
+          "NATO"
+        ],
+        "ussr": [
+          "South African Unrest"
+        ]
+      }
+    },
+    {
+      "name": "muslim-revolution",
+      "description": "USSR plays Muslim Revolution: remove all US influence from 2 of Sudan/Iran/Iraq/Egypt/Libya/Saudi Arabia/Syria/Jordan. USSR chooses.",
+      "status": {
+        "active": "Ussr"
+      },
+      "influence": {
+        "Iran": [3, 0],
+        "Iraq": [2, 0],
+        "Egypt": [1, 0],
+        "Syria": [1, 0],
+        "Israel": [4, 0]
+      },
+      "hands": {
+        "us": [
+          "NATO"
+        ],
+        "ussr": [
+          "Muslim Revolution"
+        ]
+      }
+    },
+    {
+      "name": "colonial-rear-guards",
+      "description": "US plays Colonial Rear Guards: +1 US in each of 4 countries in Africa and/or Southeast Asia. US chooses.",
+      "status": {
+        "active": "Us"
+      },
+      "influence": {
+        "Nigeria": [2, 0]
+      },
+      "hands": {
+        "us": [
+          "Colonial Rear Guards"
+        ],
+        "ussr": [
+          "Fidel"
+        ]
+      }
+    },
+    {
+      "name": "puppet-governments",
+      "description": "US plays Puppet Governments: +1 US in each of up to 3 countries with no US or USSR influence. Poland (USSR 1) and Italy (US 1) are excluded. A 'may' card. US chooses.",
+      "status": {
+        "active": "Us"
+      },
+      "influence": {
+        "Poland": [0, 1],
+        "Italy": [1, 0]
+      },
+      "hands": {
+        "us": [
+          "Puppet Governments"
+        ],
+        "ussr": [
+          "Fidel"
+        ]
+      }
+    },
+    {
+      "name": "oas-founded",
+      "description": "US plays OAS Founded: +2 US influence in any countries in Central and/or South America. US chooses.",
+      "status": {
+        "active": "Us"
+      },
+      "influence": {
+        "Cuba": [0, 3]
+      },
+      "hands": {
+        "us": [
+          "OAS Founded"
+        ],
+        "ussr": [
+          "Fidel"
+        ]
+      }
+    },
+    {
+      "name": "liberation-theology",
+      "description": "USSR plays Liberation Theology: +3 USSR in Central America, max 2 per country. USSR chooses.",
+      "status": {
+        "active": "Ussr"
+      },
+      "influence": {
+        "Cuba": [0, 3]
+      },
+      "hands": {
+        "us": [
+          "NATO"
+        ],
+        "ussr": [
+          "Liberation Theology"
+        ]
+      }
+    },
+    {
+      "name": "the-reformer-behind",
+      "description": "USSR plays The Reformer while BEHIND on VP (US +3): add 4 USSR influence to Europe, max 2 per country. USSR chooses.",
+      "status": {
+        "active": "Ussr",
+        "vp": 3
+      },
+      "influence": {
+        "Poland": [0, 1]
+      },
+      "hands": {
+        "us": [
+          "NATO"
+        ],
+        "ussr": [
+          "The Reformer"
+        ]
+      }
+    },
+    {
+      "name": "the-reformer-ahead",
+      "description": "USSR plays The Reformer while AHEAD on VP (USSR +3): add 6 USSR influence to Europe, max 2 per country. USSR chooses.",
+      "status": {
+        "active": "Ussr",
+        "vp": -3
+      },
+      "influence": {
+        "Poland": [0, 1]
+      },
+      "hands": {
+        "us": [
+          "NATO"
+        ],
+        "ussr": [
+          "The Reformer"
+        ]
+      }
+    },
+    {
+      "name": "marine-barracks-bombing",
+      "description": "USSR plays Marine Barracks Bombing: all US influence in Lebanon goes at once, then remove 2 more US influence from Middle East countries. Lebanon US 3, Israel US 2, Jordan US 1. USSR chooses.",
+      "status": {
+        "active": "Ussr"
+      },
+      "influence": {
+        "Lebanon": [3, 0],
+        "Israel": [2, 0],
+        "Jordan": [1, 0]
+      },
+      "hands": {
+        "us": [
+          "NATO"
+        ],
+        "ussr": [
+          "Marine Barracks Bombing"
+        ]
+      }
+    },
+    {
+      "name": "special-relationship-uk-us-controlled",
+      "description": "US plays Special Relationship with the UK US-controlled (US 5): +1 US in one country adjacent to the UK (Canada, Norway, Benelux, France). NATO isn't implemented, so only this branch exists. US chooses.",
+      "status": {
+        "active": "Us"
+      },
+      "influence": {
+        "UK": [5, 0]
+      },
+      "hands": {
+        "us": [
+          "Special Relationship"
+        ],
+        "ussr": [
+          "Fidel"
+        ]
+      }
+    },
+    {
+      "name": "special-relationship-uk-not-controlled",
+      "description": "US plays Special Relationship with the UK NOT US-controlled: nothing to do, resolves at once.",
+      "status": {
+        "active": "Us"
+      },
+      "influence": {
+        "UK": [2, 0]
+      },
+      "hands": {
+        "us": [
+          "Special Relationship"
+        ],
+        "ussr": [
+          "Fidel"
+        ]
+      }
+    }
+  ]
+}

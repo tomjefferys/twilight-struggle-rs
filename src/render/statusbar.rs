@@ -62,12 +62,18 @@ pub fn render_status_bar(
     winner: Option<Victory>,
     width: usize,
 ) -> Canvas {
+    // An open event's chooser (the card's own side) is who's really to
+    // act, even when the other side is phasing.
+    let to_act = match op {
+        Some(Operation::Event(e)) => e.chooser(),
+        _ => status.active,
+    };
     let turn_line = format!(
         "TURN {} · AR {}/{} · {} to act · DEFCON {} · VP {}",
         status.turn,
         status.action_round,
         status.action_rounds_per_turn,
-        status.active,
+        to_act,
         status.defcon,
         vp_line(status.vp),
     );
@@ -75,6 +81,14 @@ pub fn render_status_bar(
         (game_over_line(victory), side_style(victory.side).bold())
     } else {
         match (card, op) {
+            (_, Some(operation @ Operation::Event(e))) => {
+                let name = card.map(|c| c.name.as_str()).unwrap_or("?");
+                let keys = if e.mode().is_none() { "1/2 choose mode" } else { "+ add · - remove · u undo · c done" };
+                (
+                    format!("{name} · {} · {keys}", operation_balance_line(layout, board, operation)),
+                    side_style(e.chooser()).bold(),
+                )
+            }
             (_, Some(operation)) => {
                 let name = card.map(|c| c.name.as_str()).unwrap_or("?");
                 (format!("{name} · {}", operation_balance_line(layout, board, operation)), Style::color(Color::Selected))
@@ -97,7 +111,7 @@ pub fn render_status_bar(
     let content_width = width.max(turn_line.chars().count()).max(op_line.chars().count()).max(1);
     let mut canvas = Canvas::new(content_width, STATUS_BAR_ROWS);
 
-    draw_turn_line(&mut canvas, status);
+    draw_turn_line(&mut canvas, status, to_act);
     canvas.put(1, 0, &op_line, op_style);
     canvas.put(2, 0, &"─".repeat(content_width), Style::color(Color::Muted));
 
@@ -114,7 +128,7 @@ fn side_style(side: Superpower) -> Style {
 /// Row 0, drawn as several `put` calls rather than one string so the
 /// active side's own name can carry its own colour (`Color::Us`/`Ussr`)
 /// and bold weight while the rest of the row stays plain.
-fn draw_turn_line(canvas: &mut Canvas, status: &GameStatus) {
+fn draw_turn_line(canvas: &mut Canvas, status: &GameStatus, to_act: Superpower) {
     let mut col = 0;
     let mut put = |canvas: &mut Canvas, text: &str, style: Style| {
         canvas.put(0, col, text, style);
@@ -122,11 +136,11 @@ fn draw_turn_line(canvas: &mut Canvas, status: &GameStatus) {
     };
 
     put(canvas, &format!("TURN {} · AR {}/{} · ", status.turn, status.action_round, status.action_rounds_per_turn), Style::default());
-    let side_style = match status.active {
+    let side_style = match to_act {
         Superpower::Us => Style::color(Color::Us).bold(),
         Superpower::Ussr => Style::color(Color::Ussr).bold(),
     };
-    put(canvas, &format!("{} to act", status.active), side_style);
+    put(canvas, &format!("{to_act} to act"), side_style);
     put(canvas, &format!(" · DEFCON {} · VP {}", status.defcon, vp_line(status.vp)), Style::default());
 }
 
@@ -275,5 +289,23 @@ mod tests {
         for line in canvas.render(ColorMode::Never).lines() {
             assert!(line.chars().count() <= width, "line {line:?} exceeds width {width}");
         }
+    }
+
+    #[test]
+    fn an_open_event_names_its_chooser_as_the_side_to_act_even_when_the_other_side_is_phasing() {
+        let (map, layout) = fixtures();
+        let cards = CardCatalog::standard().unwrap();
+        let board = Board::new(&map);
+        let status = GameStatus { active: Superpower::Us, ..status() };
+        // The US is phasing, but Comecon is the USSR's card.
+        let comecon = cards.card(CardId(14));
+        let choice = crate::events::EventChoice::new(&map, &board, &status, comecon.id).unwrap();
+        let op = Operation::Event(choice);
+        let text = render_status_bar(&layout, &board, &status, Some(comecon), Some(&op), None, 80).render(ColorMode::Never);
+        let first = text.lines().next().unwrap();
+        assert!(first.contains("USSR to act"), "{first}");
+        assert!(!first.contains("USA to act"), "{first}");
+        assert!(text.contains("USSR chooses"), "{text}");
+        assert!(text.contains("+ add · - remove"), "{text}");
     }
 }

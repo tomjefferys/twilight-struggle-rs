@@ -47,9 +47,11 @@ use std::fmt;
 
 use crate::board::Board;
 use crate::cards::{CardCatalog, CardId, Hands, CHINA_CARD};
-use crate::country::{CountryId, Superpower};
+use crate::country::{CountryId, Region, Superpower};
 use crate::dice::Dice;
-use crate::events::{self, EventOutcome};
+use crate::events::choice::{EventChoiceError, Sign};
+use crate::events::EventChoice;
+use crate::events::{self, EffectResult, EventOutcome};
 use crate::log::{Event, GameLog, LogEntry};
 use crate::map::WorldMap;
 use crate::ops::{
@@ -140,6 +142,17 @@ pub enum GameError {
     /// [`Game::play_card`], [`Game::begin`], or [`Game::pass`] refused:
     /// [`Game::winner`] is already set, so there's nothing left to do.
     GameOver,
+    /// [`Game::confirm`] refused an event: it must be carried out as fully
+    /// as it can be, and `left` says what still can be.
+    EventIncomplete { left: String },
+    /// [`Game::cancel`] refused an event — its text has to be carried out;
+    /// undo picks with `u`/`-`, or (for the side that played it)
+    /// [`Game::abandon`] with nothing picked.
+    CannotCancelEvent,
+    /// [`Game::abandon`] refused an event: picks have been made, or it's
+    /// the opponent's card being resolved by its owner.
+    CannotAbandonEvent,
+    Event(EventChoiceError),
     Placement(PlacementError),
     Realign(RealignError),
     Coup(CoupError),
@@ -165,6 +178,10 @@ impl fmt::Display for GameError {
             GameError::ChinaCardFaceDown => write!(f, "the China Card is face down and can't be played yet"),
             GameError::EventNotImplemented { card } => write!(f, "card #{card}'s event isn't implemented yet"),
             GameError::GameOver => write!(f, "the game is already over"),
+            GameError::EventIncomplete { left } => write!(f, "the event isn't finished yet — {left}"),
+            GameError::CannotCancelEvent => write!(f, "an event can't be cancelled — finish it, or undo your picks"),
+            GameError::CannotAbandonEvent => write!(f, "this event can't be abandoned now — undo your picks, or finish it"),
+            GameError::Event(e) => write!(f, "{e}"),
             GameError::Placement(e) => write!(f, "{e}"),
             GameError::Realign(e) => write!(f, "{e}"),
             GameError::Coup(e) => write!(f, "{e}"),
@@ -173,6 +190,12 @@ impl fmt::Display for GameError {
 }
 
 impl std::error::Error for GameError {}
+
+impl From<EventChoiceError> for GameError {
+    fn from(e: EventChoiceError) -> Self {
+        GameError::Event(e)
+    }
+}
 
 impl From<PlacementError> for GameError {
     fn from(e: PlacementError) -> Self {
@@ -212,6 +235,9 @@ struct PlayedCard {
     /// [`Game::play_card`] time so [`Game::begin`] can refuse it without
     /// needing a [`CardCatalog`] of its own.
     scoring: bool,
+    /// Cached from the catalog the same way: whether playing this card's
+    /// *event* removes it from the game (rule 4.4) instead of discarding it.
+    removed_after_event: bool,
 }
 
 /// The live game: status (including whose turn it is), the committed
@@ -429,6 +455,17 @@ impl Game {
         self.op.as_ref()
     }
 
+    /// Who has to act next: the chooser of an open event
+    /// ([`Operation::Event`] — the card's own side, whoever is phasing),
+    /// otherwise [`Game::active`]. This, not `active`, is what an AI or a
+    /// status bar should read to know whose move it is.
+    pub fn decider(&self) -> Superpower {
+        match &self.op {
+            Some(Operation::Event(e)) => e.chooser(),
+            _ => self.status.active,
+        }
+    }
+
     /// The open operation, narrowed to an [`InfluencePlacement`] — `None`
     /// if no operation is open or a different kind is. Lets a caller keep
     /// reading placement-specific detail (`pending`, `board`, …) after a
@@ -487,7 +524,7 @@ impl Game {
         } else {
             Some(self.hands.remove(side, id).ok_or(GameError::NotInHand)?)
         };
-        self.card = Some(PlayedCard { id, ops: card.ops, hand_index, logged: false, scoring: card.scoring });
+        self.card = Some(PlayedCard { id, ops: card.ops, hand_index, logged: false, scoring: card.scoring, removed_after_event: card.removed_after_event });
         Ok(())
     }
 
@@ -529,7 +566,12 @@ impl Game {
         self.op = Some(match kind {
             OperationKind::Influence => Operation::Influence(InfluencePlacement::new(side, ops, &self.board)),
             OperationKind::Realign => Operation::Realign(Realignment::new(side, ops, &self.board)),
-            OperationKind::Coup => Operation::Coup(Coup::new(side, ops, &self.board)),
+            OperationKind::Coup => {
+                // The Reformer (#87), once played, bars the USSR from coups
+                // in Europe for the rest of the game.
+                let banned = if side == Superpower::Ussr && self.hands.removed().contains(&CardId(87)) { vec![Region::Europe] } else { Vec::new() };
+                Operation::Coup(Coup::new(side, ops, &self.board).with_banned_regions(banned))
+            }
         });
         Ok(())
     }
@@ -540,6 +582,29 @@ impl Game {
     pub fn place(&mut self, map: &WorldMap, id: CountryId) -> Result<u8, GameError> {
         match &mut self.op {
             Some(Operation::Influence(p)) => Ok(p.place(map, id)?),
+            Some(Operation::Event(e)) => Ok(e.step(map, id, Sign::Plus).map(|()| 0)?),
+            Some(op) => Err(GameError::WrongKind { open: op.verb() }),
+            None => Err(GameError::NoOperation),
+        }
+    }
+
+    /// The `-` key: takes back one pending point in `id` of an influence
+    /// placement (refunding its cost), or — in an event — removes
+    /// influence there if the event allows it, else takes back a staged
+    /// add. See [`EventChoice::step`](crate::ops::EventChoice::step).
+    pub fn unplace(&mut self, map: &WorldMap, id: CountryId) -> Result<(), GameError> {
+        match &mut self.op {
+            Some(Operation::Influence(p)) => p.unplace(id).map(|_| ()).ok_or(GameError::NothingToUndo),
+            Some(Operation::Event(e)) => Ok(e.step(map, id, Sign::Minus)?),
+            Some(op) => Err(GameError::WrongKind { open: op.verb() }),
+            None => Err(GameError::NoOperation),
+        }
+    }
+
+    /// Chooses which way to play an open multi-mode event (0-based).
+    pub fn choose_mode(&mut self, map: &WorldMap, mode: usize) -> Result<(), GameError> {
+        match &mut self.op {
+            Some(Operation::Event(e)) => Ok(e.choose_mode(map, mode)?),
             Some(op) => Err(GameError::WrongKind { open: op.verb() }),
             None => Err(GameError::NoOperation),
         }
@@ -580,6 +645,7 @@ impl Game {
     pub fn undo(&mut self, map: &WorldMap) -> Result<CountryId, GameError> {
         match &mut self.op {
             Some(Operation::Influence(p)) => p.undo_last(map).ok_or(GameError::NothingToUndo),
+            Some(Operation::Event(e)) => e.undo_last(map).ok_or(GameError::NothingToUndo),
             Some(Operation::Realign(_)) => Err(GameError::CannotUndo { verb: "realignment roll" }),
             Some(Operation::Coup(_)) => Err(GameError::CannotUndo { verb: "coup" }),
             None => Err(GameError::NoOperation),
@@ -597,6 +663,16 @@ impl Game {
     /// …) — its `board()` now equals the committed board, not a
     /// speculative one, since the operation is over.
     pub fn confirm(&mut self) -> Result<Operation, GameError> {
+        if let Some(Operation::Event(e)) = &self.op {
+            if !e.is_complete() {
+                return Err(GameError::EventIncomplete { left: e.progress_left() });
+            }
+            let op = self.op.take().expect("checked Some above");
+            let Operation::Event(e) = &op else { unreachable!() };
+            let result = e.into_result(&self.status);
+            self.finish_effect(result);
+            return Ok(op);
+        }
         let op = self.op.take().ok_or(GameError::NoOperation)?;
         if let Operation::Influence(p) = &op {
             self.board = p.board().clone();
@@ -612,6 +688,9 @@ impl Game {
     /// stay there — there's nothing to discard), and hands the turn to
     /// the other side.
     pub fn cancel(&mut self) -> Result<Operation, GameError> {
+        if matches!(self.op, Some(Operation::Event(_))) {
+            return Err(GameError::CannotCancelEvent);
+        }
         let op = self.op.take().ok_or(GameError::NoOperation)?;
         self.log_close(&op, false);
         self.discard_played_card();
@@ -642,6 +721,15 @@ impl Game {
             // reveal — always safe to discard, no matter how many points
             // are pending.
             Some(Operation::Influence(_)) => Ok(self.op.take().expect("checked Some above")),
+            // An event can be backed out of only by the side that chose to
+            // play it, and only before anything has been picked.
+            Some(Operation::Event(e)) => {
+                if e.is_pristine() && e.chooser() == self.status.active {
+                    Ok(self.op.take().expect("checked Some above"))
+                } else {
+                    Err(GameError::CannotAbandonEvent)
+                }
+            }
             Some(op) => {
                 let ops_spent = op.ops_spent();
                 if ops_spent > 0 {
@@ -700,7 +788,7 @@ impl Game {
     /// `removed_after_event` card, removes it from the game entirely —
     /// see [`crate::cards::Hands::remove_from_game`]) and hands the turn
     /// to the other side, same as [`Game::confirm`]/[`Game::cancel`].
-    pub fn play_event(&mut self, map: &WorldMap, cards: &CardCatalog) -> Result<EventOutcome, GameError> {
+    pub fn play_event(&mut self, map: &WorldMap, _cards: &CardCatalog) -> Result<EventOutcome, GameError> {
         if self.winner.is_some() {
             return Err(GameError::GameOver);
         }
@@ -711,11 +799,27 @@ impl Game {
         if !events::is_implemented(card.id) {
             return Err(GameError::EventNotImplemented { card: card.id });
         }
+
+        // A choice card doesn't resolve in one call: it opens a session
+        // its chooser (the card's own side) works through, and only
+        // `confirm` applies it — unless there is nothing it can do at
+        // all, in which case it resolves on the spot.
+        if let Some(choice) = EventChoice::new(map, &self.board, &self.status, card.id) {
+            if choice.resolves_immediately(map) {
+                let result = choice.into_result(&self.status);
+                self.finish_effect(result.clone());
+                return Ok(EventOutcome::Effect(result));
+            }
+            let chooser = choice.chooser();
+            self.op = Some(Operation::Event(choice));
+            return Ok(EventOutcome::Pending { card: card.id, chooser });
+        }
+
         let outcome = events::resolve(map, &self.board, &self.status, card.id).expect("is_implemented checked above");
-        self.log_card_selected();
 
         match &outcome {
             EventOutcome::Scoring(result) => {
+                self.log_card_selected();
                 self.apply_vp(result.vp_delta);
                 if let Some(side) = result.automatic_victory {
                     self.set_winner(side, VictoryReason::EuropeControl);
@@ -728,33 +832,45 @@ impl Game {
                     event: Event::Scored { result: result.clone(), vp_after },
                 });
                 self.log_game_over();
-            }
-            EventOutcome::Effect(result) => {
-                for change in &result.influence {
-                    self.board.set_influence(change.country, change.side, change.after);
+                self.discard_or_remove_event_card();
+                if self.winner.is_none() {
+                    self.advance();
                 }
-                // DEFCON before VP, so a DEFCON-1 loss outranks whatever
-                // VP the same card also awards (`set_winner` keeps the first).
-                if let Some((_, after)) = result.defcon {
-                    self.apply_defcon(after);
-                }
-                self.apply_vp(result.vp_delta);
-                let vp_after = self.status.vp;
-                self.log.push(LogEntry {
-                    turn: self.status.turn,
-                    action_round: self.status.action_round,
-                    side: Some(self.status.active),
-                    event: Event::EventResolved { result: result.clone(), vp_after },
-                });
-                self.log_game_over();
             }
+            EventOutcome::Effect(result) => self.finish_effect(result.clone()),
+            EventOutcome::Pending { .. } => unreachable!("only choice cards are pending, handled above"),
         }
+        Ok(outcome)
+    }
 
-        self.discard_or_remove_event_card(cards);
+    /// Applies a finished fixed-effect or choice event — influence, then
+    /// DEFCON, then VP — logs it, discards (or removes) the card, and
+    /// hands the turn over unless that ended the game. The one path both
+    /// [`Game::play_event`] (fixed effects) and [`Game::confirm`] (a
+    /// finished choice) use.
+    fn finish_effect(&mut self, result: EffectResult) {
+        self.log_card_selected();
+        for change in &result.influence {
+            self.board.set_influence(change.country, change.side, change.after);
+        }
+        // DEFCON before VP, so a DEFCON-1 loss outranks whatever
+        // VP the same card also awards (`set_winner` keeps the first).
+        if let Some((_, after)) = result.defcon {
+            self.apply_defcon(after);
+        }
+        self.apply_vp(result.vp_delta);
+        let vp_after = self.status.vp;
+        self.log.push(LogEntry {
+            turn: self.status.turn,
+            action_round: self.status.action_round,
+            side: Some(self.status.active),
+            event: Event::EventResolved { result, vp_after },
+        });
+        self.log_game_over();
+        self.discard_or_remove_event_card();
         if self.winner.is_none() {
             self.advance();
         }
-        Ok(outcome)
     }
 
     /// Pushes [`Event::GameOver`] if [`Game::winner`] is set.
@@ -864,6 +980,7 @@ impl Game {
             }
             Operation::Realign(r) => (OperationKind::Realign, r.history().len() as u8, r.ops_spent(), r.ops_total()),
             Operation::Coup(c) => (OperationKind::Coup, c.result().is_some() as u8, c.ops_spent(), c.ops_total()),
+            Operation::Event(_) => unreachable!("an event closes through finish_effect, never log_close"),
         };
         push(Event::Closed { kind, committed, rolls, ops_spent, ops_total });
     }
@@ -890,9 +1007,9 @@ impl Game {
     /// instead of the discard pile if its *event* is
     /// `removed_after_event` (rule 4.4) — never the China Card, since
     /// none of the cards [`events::is_implemented`] recognises is it.
-    fn discard_or_remove_event_card(&mut self, cards: &CardCatalog) {
+    fn discard_or_remove_event_card(&mut self) {
         let Some(card) = self.card.take() else { return };
-        if cards.card(card.id).removed_after_event {
+        if card.removed_after_event {
             self.hands.remove_from_game(card.id);
         } else {
             self.hands.discard(card.id);
@@ -1652,7 +1769,7 @@ mod tests {
         let outcome = game.play_event(&map, &cards).unwrap();
         match outcome {
             EventOutcome::Scoring(result) => assert_eq!(result.vp_delta, -3),
-            EventOutcome::Effect(_) => panic!("a scoring card should resolve as a scoring event"),
+            EventOutcome::Effect(_) | EventOutcome::Pending { .. } => panic!("a scoring card should resolve as a scoring event"),
         }
         assert_eq!(game.status().vp, -3, "presence-only USSR should cost the US side 3 VP");
         assert_eq!(game.card_in_play(), None, "the event should discard the card that funded it");
@@ -1679,8 +1796,8 @@ mod tests {
     fn play_event_refuses_a_card_whose_event_is_not_implemented_yet() {
         let map = map();
         let cards = cards();
-        let mut game = Game::from_scenario(&scenario(&map, &cards));
-        let sg = play(&mut game, &cards, "Socialist Governments");
+        let mut game = Game::from_scenario(&scenario_with_extra_card(&map, &cards, Ussr, "Blockade"));
+        let sg = play(&mut game, &cards, "Blockade");
         assert!(matches!(
             game.play_event(&map, &cards),
             Err(GameError::EventNotImplemented { card }) if card == sg

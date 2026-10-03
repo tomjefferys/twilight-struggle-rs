@@ -33,7 +33,7 @@ const COMMANDS: &[&str] = &[
     "map", "world", "worldmap", "wm", "region", "country", "set", "add", "remove", "clear", "blank", "load", "save", "states", "play",
     "influence", "realign", "coup", "event", "place", "roll", "undo", "confirm", "cancel", "abandon", "status", "pass", "ai", "hand",
     "card", "log", "history", "export", "seed", "width", "color", "debug", "vp", "defcon", "turn", "ar", "active", "china", "give",
-    "discard", "exile", "help",
+    "discard", "exile", "help", "+", "-", "take", "mode",
 ];
 
 struct Session {
@@ -227,7 +227,13 @@ fn main() {
 /// If `session.ai_side` names whoever's active right now, plays that turn
 /// — a no-op otherwise (no AI side set, or it's the human's turn).
 fn maybe_run_ai_turn(session: &mut Session) {
-    if session.ai_side == Some(session.game.active()) {
+    // `decider`, not `active`: an event's chooser is the card's own side.
+    // A few rounds, since one human move can hand the AI an event to
+    // resolve *and* then its own turn straight after.
+    for _ in 0..3 {
+        if session.ai_side != Some(session.game.decider()) || session.game.winner().is_some() {
+            return;
+        }
         run_ai_turn(session);
     }
 }
@@ -239,7 +245,7 @@ fn maybe_run_ai_turn(session: &mut Session) {
 /// `session.ai_side` names the active side) and for the bare `ai` command,
 /// which plays one turn regardless of `ai_side`.
 fn run_ai_turn(session: &mut Session) {
-    let side = session.game.active();
+    let side = session.game.decider();
     println!("{side} (AI) plays:");
     let before = session.game.log().len();
     if let Err(e) = ai::play_turn(&mut session.ai, &mut session.game, &session.map, &session.cards, &mut session.dice) {
@@ -281,7 +287,11 @@ fn prompt(session: &Session) -> String {
         None => String::new(),
     };
     let debug = if session.debug { "[debug] " } else { "" };
-    format!("{debug}{} AR {}/{} {card}> ", session.game.active(), status.action_round, status.action_rounds_per_turn)
+    let choosing = match session.game.operation() {
+        Some(Operation::Event(e)) => format!("{} choosing ", e.chooser()),
+        _ => String::new(),
+    };
+    format!("{debug}{} AR {}/{} {card}{choosing}> ", session.game.active(), status.action_round, status.action_rounds_per_turn)
 }
 
 fn detect_width() -> usize {
@@ -629,7 +639,9 @@ fn run_command(session: &mut Session, line: &str) {
         "realign" => run_begin_command(session, OperationKind::Realign, &words),
         "coup" => run_begin_command(session, OperationKind::Coup, &words),
         "event" => run_event_command(session),
-        "place" => run_place_command(session, &words),
+        "place" | "+" => run_place_command(session, &words),
+        "-" | "take" => run_unplace_command(session, &words),
+        "mode" => run_mode_command(session, &words),
         "roll" => run_roll_command(session, &words),
         "undo" => run_undo_command(session),
         "confirm" => run_confirm_command(session),
@@ -920,6 +932,106 @@ fn run_event_command(session: &mut Session) {
             let canvas = render_event_result(&session.map, &session.cards, &result, vp_after, winner, None);
             println!("{}", canvas.render(session.color));
         }
+        Ok(EventOutcome::Pending { .. }) => print_event_prompt(session),
+        Err(e) => println!("{e}"),
+    }
+}
+
+/// Tells whoever has to choose what the open event asks, and where.
+fn print_event_prompt(session: &Session) {
+    let Some(Operation::Event(e)) = session.game.operation() else { return };
+    let card = session.game.card_in_play().map(|id| session.cards.card(id).name.as_str()).unwrap_or("?");
+    println!("{card} — {} chooses: {}", e.chooser(), e.prompt());
+    if e.mode().is_none() {
+        println!("pick a mode with: mode <n>");
+        return;
+    }
+    let steps = e.forward_steps(&session.map);
+    let list: Vec<String> = steps
+        .iter()
+        .map(|&(id, sign)| {
+            let n = e.can_forward(&session.map, id, sign).unwrap_or(0);
+            format!("{} {}{n}", session.map.country(id).name, if sign == twilight_struggle::events::choice::Sign::Plus { '+' } else { '-' })
+        })
+        .collect();
+    println!("available: {}", if list.is_empty() { "nothing — confirm to finish".to_string() } else { list.join(", ") });
+    println!("use + <country> / - <country> (u undoes the last pick, confirm finishes) — {}", e.progress());
+}
+
+/// The last `EventResolved` log entry, printed the way `event` prints a
+/// fixed-effect card's result — what a confirmed choice event produced.
+fn print_last_event_result(session: &Session) {
+    if let Some(entry) = session.game.log().entries().iter().rev().find(|e| matches!(e.event, twilight_struggle::Event::EventResolved { .. }))
+        && let twilight_struggle::Event::EventResolved { result, vp_after } = &entry.event
+    {
+        let canvas = render_event_result(&session.map, &session.cards, result, *vp_after, session.game.winner(), None);
+        println!("{}", canvas.render(session.color));
+    }
+}
+
+/// Parses `<country words> [n]` for `+`/`-`/`place`/`take`.
+fn parse_country_and_count(session: &Session, rest: &[&str]) -> Option<(twilight_struggle::CountryId, u8)> {
+    let (country_words, amount) = match rest.split_last() {
+        Some((&last, init)) if !init.is_empty() && last.parse::<u8>().is_ok() => (init, last.parse::<u8>().unwrap()),
+        _ => (rest, 1),
+    };
+    let query = country_words.join(" ");
+    match session.map.find(&query) {
+        Found::One(id) => Some((id, amount)),
+        Found::None => {
+            println!("no country matches {query:?}");
+            None
+        }
+        Found::Ambiguous(ids) => {
+            print_ambiguous(session, &ids);
+            None
+        }
+    }
+}
+
+/// `-`/`take <country> [n]`: while placing influence, takes back a pending
+/// point in that country; while resolving an event, removes influence
+/// there if the event allows it (or takes back a staged add).
+fn run_unplace_command(session: &mut Session, words: &[&str]) {
+    if session.game.operation().is_none() {
+        println!("nothing open — start a placement (influence) or an event first");
+        return;
+    }
+    let rest = &words[1..];
+    if rest.is_empty() {
+        println!("usage: - <country> [n]");
+        return;
+    }
+    let Some((id, amount)) = parse_country_and_count(session, rest) else { return };
+    let name = session.map.country(id).name.clone();
+    for _ in 0..amount {
+        if let Err(e) = session.game.unplace(&session.map, id) {
+            println!("{e}");
+            return;
+        }
+    }
+    println!("{name} {}", operation_touched_summary(session, id));
+    print_operation_banner(session);
+}
+
+fn operation_touched_summary(session: &Session, id: twilight_struggle::CountryId) -> String {
+    match session.game.operation() {
+        Some(op) => {
+            let (us, ussr) = (op.delta(session.game.board(), id, Superpower::Us), op.delta(session.game.board(), id, Superpower::Ussr));
+            format!("(US {us:+}, USSR {ussr:+} pending)")
+        }
+        None => String::new(),
+    }
+}
+
+/// `mode <n>`: chooses which way to play an open multi-mode event (1-based).
+fn run_mode_command(session: &mut Session, words: &[&str]) {
+    let Some(n) = words.get(1).and_then(|s| s.parse::<usize>().ok()).filter(|&n| n >= 1) else {
+        println!("usage: mode <n>   (1-based)");
+        return;
+    };
+    match session.game.choose_mode(&session.map, n - 1) {
+        Ok(()) => print_event_prompt(session),
         Err(e) => println!("{e}"),
     }
 }
@@ -929,6 +1041,23 @@ fn run_event_command(session: &mut Session) {
 fn run_place_command(session: &mut Session, words: &[&str]) {
     match session.game.operation() {
         Some(Operation::Influence(_)) => {}
+        Some(Operation::Event(_)) => {
+            let rest = &words[1..];
+            if rest.is_empty() {
+                println!("usage: + <country> [n]");
+                return;
+            }
+            let Some((id, amount)) = parse_country_and_count(session, rest) else { return };
+            for _ in 0..amount {
+                if let Err(e) = session.game.place(&session.map, id) {
+                    println!("{e}");
+                    return;
+                }
+            }
+            println!("{} {}", session.map.country(id).name, operation_touched_summary(session, id));
+            print_operation_banner(session);
+            return;
+        }
         Some(op) => {
             println!("a {} session is open, not a placement — `place` only works while placing influence", op.verb());
             return;
@@ -1080,6 +1209,10 @@ fn run_card_command(session: &Session, words: &[&str]) {
 
 fn run_undo_command(session: &mut Session) {
     match session.game.undo(&session.map) {
+        Ok(id) if matches!(session.game.operation(), Some(Operation::Event(_))) => {
+            println!("undid the last pick in {}", session.map.country(id).name);
+            print_operation_banner(session);
+        }
         Ok(id) => {
             let total = session.game.placement().map_or(0, |p| p.ops_total());
             println!("undid a point in {} — {} of {total} ops left", session.map.country(id).name, session.game.ops_available());
@@ -1120,6 +1253,7 @@ fn run_confirm_command(session: &mut Session) {
                 );
             }
         }
+        Ok(Operation::Event(_)) => print_last_event_result(session),
         Ok(Operation::Coup(coup)) => {
             let side = coup.side();
             let total = coup.ops_total();
@@ -1155,6 +1289,7 @@ fn run_cancel_command(session: &mut Session) {
                 realignment.remaining(),
             );
         }
+        Ok(Operation::Event(_)) => unreachable!("Game::cancel refuses an event"),
         Ok(Operation::Coup(coup)) => match coup.result() {
             Some(result) => println!(
                 "closed — the coup on {} already resolved on the board and can't be undone",
@@ -1349,7 +1484,24 @@ Commands:
                           no influence there, in a neighbour, or a border
                           with your own superpower
   undo                    take back the last point placed, refunding it
+  - <country> [n]         take back a pending point in that country while
+                          placing influence; while resolving an event,
+                          REMOVES influence there (or takes back a staged
+                          add). `take` is an alias. Press - in the map too
 
+  event                   play the card in play for its text. Cards with a
+                          choice (Comecon, Marshall Plan, Truman Doctrine…)
+                          open a session for the CARD'S OWN side to choose
+                          — whoever is phasing — listing which countries
+                          can take how much. Then: + <country> [n] adds
+                          (also `place`), - <country> [n] removes, mode <n>
+                          picks a way to play a two-mode card (Warsaw Pact,
+                          South African Unrest), undo takes back the last
+                          pick, and confirm finishes once the event has been
+                          carried out as fully as it can be (\"may\" cards —
+                          De-Stalinization, Puppet Governments — can stop
+                          early). An event can't be cancelled; abandon backs
+                          out before the first pick (the side that played it)
   realign                 start realigning for the active side, spending
                           the card already in play; view a country
                           (country <name>, region, or worldmap) to see the

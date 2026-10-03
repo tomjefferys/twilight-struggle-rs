@@ -158,7 +158,15 @@ fn random_play_stays_sound_and_always_ends_the_turn() {
                 });
             }
 
-            play_turn(&mut ai, &mut game, &map, &cards, &mut dice).expect("play_turn should only apply actions legal_actions listed");
+            // One `play_turn` call stops when the *decision* changes hands —
+            // a choice event passes it to the card's own side mid-turn — so
+            // keep going until the phasing side itself changes.
+            for _ in 0..4 {
+                play_turn(&mut ai, &mut game, &map, &cards, &mut dice).expect("play_turn should only apply actions legal_actions listed");
+                if game.active() != before || game.winner().is_some() {
+                    break;
+                }
+            }
             if game.winner().is_some() {
                 // An event can end the game mid-turn (VP cap, DEFCON 1) —
                 // `active` never changes then, and there's nothing left to play.
@@ -256,4 +264,68 @@ fn a_random_walk_ends_cleanly_at_game_over() {
 
     assert!(game.winner().is_some());
     assert!(game.legal_actions(&map, &cards).is_empty());
+}
+
+/// A US player (phasing) plays the USSR's Comecon: the *USSR* makes the
+/// choices, so an AI playing the USSR is asked to choose even though the
+/// US is still the active side — and `play_turn` hands control back the
+/// moment the event closes.
+#[test]
+fn the_ai_makes_the_choices_for_its_own_card_when_the_human_is_phasing() {
+    let map = WorldMap::standard().unwrap();
+    let cards = CardCatalog::standard().unwrap();
+    let lib = twilight_struggle::StateLibrary::standard();
+    let (mut scenario, _) = lib.load(&map, &cards, "choices/comecon").unwrap();
+    let comecon = cards.id_by_name("Comecon").unwrap();
+    scenario.status.active = Superpower::Us;
+    scenario.hands.push_to_hand(Superpower::Us, comecon);
+    let mut game = Game::from_scenario(&scenario);
+    game.play_card(&cards, comecon).unwrap();
+    game.play_event(&map, &cards).unwrap();
+    assert_eq!(game.active(), Superpower::Us);
+    assert_eq!(game.decider(), Superpower::Ussr);
+
+    // Only forward steps and (once complete) Confirm are ever offered.
+    let legal = game.legal_actions(&map, &cards);
+    assert!(legal.iter().all(|a| matches!(a, Action::Place(_))), "{legal:?}");
+    assert!(!legal.contains(&Action::Confirm), "nothing picked yet");
+
+    let mut ai = RandomAi::from_seed(3);
+    let mut dice = Dice::from_seed(3);
+    play_turn(&mut ai, &mut game, &map, &cards, &mut dice).unwrap();
+    assert!(game.operation().is_none(), "the AI finished the event");
+    assert_eq!(game.active(), Superpower::Ussr, "the US's action round is over");
+    let placed = ["East Germany", "Czechoslovakia", "Hungary", "Romania", "Bulgaria", "Yugoslavia", "Finland", "Austria"]
+        .iter()
+        .filter(|n| game.board().influence(map.id_by_name(n).unwrap(), Superpower::Ussr) > 0)
+        .count();
+    assert_eq!(placed, 4, "Comecon places exactly 4 (Poland is US-controlled)");
+}
+
+/// The other direction: the USSR is phasing and plays the US's Truman
+/// Doctrine, so the *US* is the one offered the choices — `legal_actions`
+/// lists steps for `Game::decider`, never for the phasing side.
+#[test]
+fn legal_actions_are_for_the_decider_not_the_phasing_side() {
+    let map = WorldMap::standard().unwrap();
+    let cards = CardCatalog::standard().unwrap();
+    let lib = twilight_struggle::StateLibrary::standard();
+    let (mut scenario, _) = lib.load(&map, &cards, "choices/truman-doctrine").unwrap();
+    let truman = cards.id_by_name("Truman Doctrine").unwrap();
+    scenario.status.active = Superpower::Ussr;
+    scenario.hands.push_to_hand(Superpower::Ussr, truman);
+    let mut game = Game::from_scenario(&scenario);
+    game.play_card(&cards, truman).unwrap();
+    game.apply(Action::Event, &map, &cards, &mut Dice::from_seed(1)).unwrap();
+    assert_eq!(game.decider(), Superpower::Us);
+    assert_eq!(game.active(), Superpower::Ussr);
+
+    let italy = map.id_by_name("Italy").unwrap();
+    let legal = game.legal_actions(&map, &cards);
+    assert_eq!(legal, vec![Action::Unplace(italy)], "Truman can only wipe uncontrolled Italy, and can't confirm until it has");
+
+    // `play_turn` is told the same thing: it plays for the decider.
+    let mut ai = RandomAi::from_seed(1);
+    play_turn(&mut ai, &mut game, &map, &cards, &mut Dice::from_seed(1)).unwrap();
+    assert_eq!(game.board().influence(italy, Superpower::Ussr), 0);
 }

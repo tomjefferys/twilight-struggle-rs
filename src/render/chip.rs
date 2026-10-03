@@ -134,7 +134,7 @@ impl ChipGrid {
         canvas.put(row + 2, col + self.chip_w - 6, &format!("st{}", country.stability), Style::color(Color::Muted));
 
         if let Some(operation) = op {
-            draw_operation_badge(canvas, row, col, self.chip_w, operation, board, id);
+            draw_operation_badge(canvas, row, col, self.chip_w, operation, map, board, id);
         }
     }
 
@@ -204,13 +204,36 @@ impl ChipGrid {
 /// has *also* cost the acting side its own influence there — a second,
 /// left-relative slot at `col + 6` (free on every chip, since influence
 /// and the control glyph occupy cols 1-5 and `st<n>` sits flush right).
-fn draw_operation_badge(canvas: &mut Canvas, row: usize, col: usize, chip_w: usize, operation: &Operation, board: &Board, id: CountryId) {
+#[allow(clippy::too_many_arguments)]
+fn draw_operation_badge(canvas: &mut Canvas, row: usize, col: usize, chip_w: usize, operation: &Operation, map: &WorldMap, board: &Board, id: CountryId) {
     let right_slot = col + chip_w - 3;
     match operation {
         Operation::Influence(p) => {
             let pending = p.pending(id) as i8;
             if pending > 0 {
                 canvas.put(row + 2, right_slot, &format_delta(pending), Style::color(Color::Selected).bold());
+            }
+        }
+        Operation::Event(e) => {
+            // What the event has changed here (`+N`/`-N`, in the moved side's
+            // own colour); otherwise (dim `↑N`/`↓N`) the step `+`/`-` would take next, so
+            // every country the chooser can use shows how much it can
+            // take before a pick is made.
+            let (us, ussr) = (operation.delta(board, id, Superpower::Us), operation.delta(board, id, Superpower::Ussr));
+            let shown = if us != 0 { Some((us, Superpower::Us)) } else if ussr != 0 { Some((ussr, Superpower::Ussr)) } else { None };
+            match shown {
+                Some((d, side)) => {
+                    let style = Style::color(if side == Superpower::Us { Color::Us } else { Color::Ussr }).bold();
+                    canvas.put(row + 2, right_slot, &format_delta(d), style);
+                }
+                None => {
+                    if let Some((sign, n)) = e.suggestion(map, id) {
+                        // `↑N` / `↓N` rather than `+N` / `-N`, so what a chip
+                        // *can* take never reads as what's been staged on it.
+                        let arrow = if sign == crate::events::choice::Sign::Plus { '↑' } else { '↓' };
+                        canvas.put(row + 2, right_slot, &format!("{arrow}{}", n.min(9)), Style::color(Color::Muted));
+                    }
+                }
             }
         }
         Operation::Realign(_) | Operation::Coup(_) => {

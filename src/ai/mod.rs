@@ -43,7 +43,9 @@ const MAX_ACTIONS_PER_TURN: usize = 1000;
 
 /// Plays `ai`'s side's turn to completion: repeatedly lists
 /// [`Game::legal_actions`], asks `ai` to [`Ai::choose`] one, and
-/// [`Game::apply`]s it, stopping the moment [`Game::active`] changes —
+/// [`Game::apply`]s it, stopping the moment [`Game::active`] or
+/// [`Game::decider`] changes (the latter when an event hands its choices
+/// to the other side) —
 /// or, now that a scoring event can end the game mid-turn without ever
 /// changing whose turn it technically is, the moment [`Game::winner`] is
 /// set, since `legal_actions` would otherwise come back empty and
@@ -56,9 +58,12 @@ const MAX_ACTIONS_PER_TURN: usize = 1000;
 /// actions is the only way that can happen, since `legal_actions` only
 /// ever lists moves `apply` accepts.
 pub fn play_turn(ai: &mut dyn Ai, game: &mut Game, map: &WorldMap, cards: &CardCatalog, dice: &mut Dice) -> Result<(), GameError> {
-    let side = game.active();
+    // `decider`, not `active`: an event's chooser is the card's own side,
+    // so a turn can pass the move to the other side and back mid-turn.
+    let side = game.decider();
+    let phasing = game.active();
     for _ in 0..MAX_ACTIONS_PER_TURN {
-        if game.active() != side || game.winner().is_some() {
+        if game.active() != phasing || game.decider() != side || game.winner().is_some() {
             return Ok(());
         }
         let legal = game.legal_actions(map, cards);

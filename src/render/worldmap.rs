@@ -22,6 +22,7 @@ const WORLD_REALIGN_HINT: &str = "←→↑↓ select · Enter open · r roll ·
 /// Shown instead once a [`Coup`](crate::ops::Coup) is in progress. No
 /// `u undo` — a resolved attempt can't be taken back.
 const WORLD_COUP_HINT: &str = "←→↑↓ select · Enter open · r coup · ⌫ abandon · c done · Esc back";
+const WORLD_EVENT_HINT: &str = "←→↑↓ select · Enter open · u undo · ⌫ abandon · c done · Esc back";
 
 /// The whole world on one grid, drawn to actually look like a map: real
 /// landmass shading underneath (rasterized once from public-domain
@@ -159,6 +160,7 @@ fn footer_lines(
             Some(Operation::Influence(_)) => WORLD_PLACEMENT_HINT.to_string(),
             Some(Operation::Realign(_)) => WORLD_REALIGN_HINT.to_string(),
             Some(Operation::Coup(_)) => WORLD_COUP_HINT.to_string(),
+            Some(Operation::Event(_)) => WORLD_EVENT_HINT.to_string(),
             None => format!("{WORLD_HINT} · {BEGIN_HINT}"),
         };
         lines.push((hint, Style::color(Color::Muted)));
@@ -339,6 +341,7 @@ fn draw_chip(
         Some(Operation::Influence(_)) if touched => '+',
         Some(Operation::Realign(_)) if touched => '!',
         Some(Operation::Coup(_)) if touched => '#',
+        Some(Operation::Event(_)) if touched => '~',
         _ if country.battleground => '*',
         _ => ' ',
     };

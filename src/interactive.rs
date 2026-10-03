@@ -18,6 +18,7 @@ use twilight_struggle::render::{
 };
 use twilight_struggle::events::{EffectResult, ScoringResult};
 use twilight_struggle::game::Victory;
+use twilight_struggle::ops::Operation;
 use twilight_struggle::{
     ai, Board, CardCatalog, CardId, ColorMode, CountryId, Dice, Direction, Event, EventOutcome, Game, GameError, LogEntry, MapLayout,
     OperationKind, RandomAi, Region, RollOutcome, Superpower, ViewMode, WorldMap, CHINA_CARD,
@@ -281,8 +282,21 @@ pub fn run(
                             zoomed = false;
                             modal.push_back(Modal::Event(result, vp_after, game.winner()));
                         }
+                        // A choice card: the chooser's picks happen next, on
+                        // the map — the status bar names who and what.
+                        Ok(EventOutcome::Pending { .. }) => {
+                            zoomed = false;
+                            message = None;
+                        }
                         Err(e) => message = Some(e.to_string()),
                     },
+                    KeyCode::Char(d @ '1'..='9') => {
+                        if let Some(Operation::Event(_)) = game.operation()
+                            && let Err(e) = game.choose_mode(map, d as usize - '1' as usize)
+                        {
+                            message = Some(e.to_string());
+                        }
+                    }
                     KeyCode::Char('p') => {
                         let passing = game.active();
                         message = Some(match game.pass() {
@@ -297,6 +311,12 @@ pub fn run(
                         message = Some(match game.confirm() {
                             Ok(op) => {
                                 zoomed = false;
+                                if let Operation::Event(_) = op {
+                                    let entries = game.log().entries();
+                                    if let Some(at) = entries.iter().rposition(|e| matches!(e.event, Event::EventResolved { .. })) {
+                                        queue_turn_modals(&mut modal, game.board(), &entries[at..]);
+                                    }
+                                }
                                 operation_closed_line(&op, true, game.active())
                             }
                             Err(e) => e.to_string(),
@@ -353,11 +373,18 @@ pub fn run(
                             KeyCode::Right => step_or_jump(map, layout, &mut last_selected, region, selected, Direction::Right),
                             KeyCode::Up => step_or_jump(map, layout, &mut last_selected, region, selected, Direction::Up),
                             KeyCode::Down => step_or_jump(map, layout, &mut last_selected, region, selected, Direction::Down),
-                            KeyCode::Char('+') | KeyCode::Char('=') => {
-                                if let Err(GameError::Placement(e)) = game.place(map, *selected) {
-                                    message = Some(format!("{}: {e}", map.country(*selected).name));
+                            KeyCode::Char('+') | KeyCode::Char('=') => match game.place(map, *selected) {
+                                Err(GameError::Placement(e)) => message = Some(format!("{}: {e}", map.country(*selected).name)),
+                                Err(e @ GameError::Event(_)) => message = Some(e.to_string()),
+                                _ => {}
+                            },
+                            KeyCode::Char('-') => match game.unplace(map, *selected) {
+                                Err(e @ GameError::Event(_)) => message = Some(e.to_string()),
+                                Err(GameError::NothingToUndo) => {
+                                    message = Some(format!("{}: nothing pending here to take back", map.country(*selected).name))
                                 }
-                            }
+                                _ => {}
+                            },
                             KeyCode::Enter | KeyCode::Char('r') => {
                                 screen = Screen::Country { region: *region, selected: *selected };
                             }
@@ -372,11 +399,18 @@ pub fn run(
                             KeyCode::Right => step_or_jump(map, layout, &mut last_selected, region, selected, Direction::Right),
                             KeyCode::Up => step_or_jump(map, layout, &mut last_selected, region, selected, Direction::Up),
                             KeyCode::Down => step_or_jump(map, layout, &mut last_selected, region, selected, Direction::Down),
-                            KeyCode::Char('+') | KeyCode::Char('=') => {
-                                if let Err(GameError::Placement(e)) = game.place(map, *selected) {
-                                    message = Some(format!("{}: {e}", map.country(*selected).name));
+                            KeyCode::Char('+') | KeyCode::Char('=') => match game.place(map, *selected) {
+                                Err(GameError::Placement(e)) => message = Some(format!("{}: {e}", map.country(*selected).name)),
+                                Err(e @ GameError::Event(_)) => message = Some(e.to_string()),
+                                _ => {}
+                            },
+                            KeyCode::Char('-') => match game.unplace(map, *selected) {
+                                Err(e @ GameError::Event(_)) => message = Some(e.to_string()),
+                                Err(GameError::NothingToUndo) => {
+                                    message = Some(format!("{}: nothing pending here to take back", map.country(*selected).name))
                                 }
-                            }
+                                _ => {}
+                            },
                             KeyCode::Char('r') => {
                                 let side = game.active();
                                 let before = (game.board().influence(*selected, Superpower::Us), game.board().influence(*selected, Superpower::Ussr));
@@ -430,21 +464,31 @@ fn maybe_run_ai_turn(
     zoomed: &mut bool,
     modal: &mut VecDeque<Modal>,
 ) {
-    if ai_side != Some(game.active()) || game.winner().is_some() {
-        return;
+    // `decider`, not `active`: an event's chooser is the card's own side. A
+    // few rounds, since one human move can hand the AI an event to resolve
+    // and then its own turn straight after.
+    let mut lines: Vec<String> = Vec::new();
+    let mut played = false;
+    for _ in 0..3 {
+        if ai_side != Some(game.decider()) || game.winner().is_some() {
+            break;
+        }
+        played = true;
+        let before = game.log().len();
+        let outcome = ai::play_turn(ai, game, map, cards, dice);
+        let new_entries = &game.log().entries()[before..];
+        lines.extend(new_entries.iter().map(|entry| log_entry_line(map, cards, entry)));
+        if let Err(e) = outcome {
+            lines.push(format!("AI error: {e}"));
+        }
+        queue_turn_modals(modal, game.board(), new_entries);
     }
-    let side = game.active();
-    let before = game.log().len();
-    let outcome = ai::play_turn(ai, game, map, cards, dice);
-    let new_entries = &game.log().entries()[before..];
-    let mut lines: Vec<String> = new_entries.iter().map(|entry| log_entry_line(map, cards, entry)).collect();
-    if let Err(e) = outcome {
-        lines.push(format!("AI error: {e}"));
+    if played {
+        let side = ai_side.expect("played implies an AI side");
+        *message = Some(format!("{side} (AI) plays: {}", lines.join(" · ")));
+        *sticky = true;
+        *zoomed = false;
     }
-    queue_turn_modals(modal, game.board(), new_entries);
-    *message = Some(format!("{side} (AI) plays: {}", lines.join(" · ")));
-    *sticky = true;
-    *zoomed = false;
 }
 
 /// Rebuilds a [`RollReport`] for every [`Event::Realign`]/[`Event::Coup`]

@@ -27,7 +27,7 @@
 use std::fmt;
 
 use crate::board::Board;
-use crate::country::{CountryId, Superpower};
+use crate::country::{CountryId, Region, Superpower};
 use crate::dice::Dice;
 use crate::map::WorldMap;
 
@@ -120,6 +120,9 @@ pub enum CoupError {
     NoOpponentInfluence { country: String, side: Superpower },
     /// This action has already resolved its one attempt.
     AlreadyResolved { country: String },
+    /// An ongoing event forbids `side` coups in `country`'s region (The
+    /// Reformer: no more USSR coups in Europe).
+    Banned { country: String, region: Region },
 }
 
 impl fmt::Display for CoupError {
@@ -128,6 +131,7 @@ impl fmt::Display for CoupError {
             CoupError::NoOpponentInfluence { country, side } => {
                 write!(f, "{} has no influence in {country} for {side} to coup", side.opponent())
             }
+            CoupError::Banned { country, region } => write!(f, "an event forbids coups in {region} ({country})"),
             CoupError::AlreadyResolved { country } => {
                 write!(f, "this coup has already resolved its one attempt (against {country})")
             }
@@ -150,11 +154,20 @@ pub struct Coup {
     /// The board as it stood when this action started — display only.
     /// `delta` reads it; legality never does.
     base: Board,
+    /// Regions an ongoing event bars this side from couping in.
+    banned: Vec<Region>,
 }
 
 impl Coup {
     pub fn new(side: Superpower, ops: u8, board: &Board) -> Self {
-        Coup { side, ops_total: ops, result: None, base: board.clone() }
+        Coup { side, ops_total: ops, result: None, base: board.clone(), banned: Vec::new() }
+    }
+
+    /// Forbids this coup from targeting any country in `regions` — what an
+    /// ongoing event (The Reformer) does to its victim.
+    pub fn with_banned_regions(mut self, regions: Vec<Region>) -> Self {
+        self.banned = regions;
+        self
     }
 
     pub fn side(&self) -> Superpower {
@@ -191,8 +204,8 @@ impl Coup {
     /// [`Realignment::is_legal_target`](super::Realignment::is_legal_target),
     /// that's `attempt`'s job, so a spent session doesn't dim every
     /// country in the region.
-    pub fn is_legal_target(&self, _map: &WorldMap, board: &Board, id: CountryId) -> bool {
-        board.influence(id, self.side.opponent()) > 0
+    pub fn is_legal_target(&self, map: &WorldMap, board: &Board, id: CountryId) -> bool {
+        !self.banned.contains(&map.country(id).region) && board.influence(id, self.side.opponent()) > 0
     }
 
     /// Resolves this action's one attempt against `id`, spending every op
@@ -202,6 +215,10 @@ impl Coup {
     pub fn attempt(&mut self, map: &WorldMap, board: &mut Board, id: CountryId, dice: &mut Dice) -> Result<CoupResult, CoupError> {
         if self.result.is_some() {
             return Err(CoupError::AlreadyResolved { country: map.country(id).name.clone() });
+        }
+        let region = map.country(id).region;
+        if self.banned.contains(&region) {
+            return Err(CoupError::Banned { country: map.country(id).name.clone(), region });
         }
         if !self.is_legal_target(map, board, id) {
             return Err(CoupError::NoOpponentInfluence { country: map.country(id).name.clone(), side: self.side });

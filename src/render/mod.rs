@@ -461,6 +461,9 @@ pub(crate) fn control_glyph(controller: Option<crate::country::Superpower>) -> c
 /// influence (a later roll there went the other way) gets that named
 /// too; a pure tie reads as "tied" rather than a bare `+0`.
 pub fn operation_balance_line(layout: &crate::layout::MapLayout, board: &crate::board::Board, op: &crate::ops::Operation) -> String {
+    if let crate::ops::Operation::Event(e) = op {
+        return format!("{} · {} · {}", operation_header(op), e.prompt(), operation_touched_line(layout, board, op));
+    }
     format!("{} · {}", operation_header(op), operation_touched_line(layout, board, op))
 }
 
@@ -481,6 +484,9 @@ pub fn game_over_line(victory: crate::game::Victory) -> String {
 /// draws [`operation_touched_line`] as a row inside instead of gluing the
 /// two together on one line the way the region and world-map footers do.
 pub fn operation_header(op: &crate::ops::Operation) -> String {
+    if let crate::ops::Operation::Event(e) = op {
+        return format!("{} chooses · {}", op.side(), e.progress());
+    }
     format!("{} {} · {} of {} ops left", op.side(), op.verb(), op.remaining(), op.ops_total())
 }
 
@@ -509,6 +515,16 @@ fn touched_country_summary(
     let name = layout.short_name(id);
     match op {
         crate::ops::Operation::Influence(p) => format!("{name} +{}", p.pending(id)),
+        crate::ops::Operation::Event(_) => {
+            let changes: Vec<String> = [crate::country::Superpower::Us, crate::country::Superpower::Ussr]
+                .into_iter()
+                .filter_map(|s| match op.delta(board, id, s) {
+                    0 => None,
+                    d => Some(format!("{s}{d:+}")),
+                })
+                .collect();
+            format!("{name} {}", changes.join("/"))
+        }
         crate::ops::Operation::Realign(_) | crate::ops::Operation::Coup(_) => {
             let side = op.side();
             let opponent = side.opponent();
@@ -625,6 +641,9 @@ pub fn coup_result_line(map: &crate::map::WorldMap, side: crate::country::Superp
 /// several kind-specific sentences instead; this is the one-row version
 /// [`crate::interactive`] shows without leaving the map.
 pub fn operation_closed_line(op: &crate::ops::Operation, committed: bool, next: crate::country::Superpower) -> String {
+    if let crate::ops::Operation::Event(_) = op {
+        return format!("{} event resolved — {next} to act", op.side());
+    }
     let verdict = if committed { "confirmed" } else { "cancelled" };
     format!("{} {} {verdict} · {} of {} ops spent — {next} to act", op.side(), op.verb(), op.ops_spent(), op.ops_total())
 }
