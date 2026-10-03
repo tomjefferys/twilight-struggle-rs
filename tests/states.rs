@@ -1288,3 +1288,162 @@ mod turn_effects {
         }
     }
 }
+
+// The five war cards (`data/states/wars.json`): the first events that roll.
+mod wars {
+    use super::fixtures;
+    use twilight_struggle::events::WarResult;
+    use twilight_struggle::{CardCatalog, CountryId, Dice, EventOutcome, Game, GameError, Operation, RollOutcome, Superpower, WorldMap};
+
+    fn id(map: &WorldMap, name: &str) -> CountryId {
+        map.id_by_name(name).unwrap()
+    }
+
+    /// A seed whose first roll is `die`.
+    fn seed_for(die: u8) -> u64 {
+        (0..1000).find(|&s| Dice::from_seed(s).roll() == die).unwrap()
+    }
+
+    fn load(name: &str, card: &str) -> (WorldMap, CardCatalog, Game) {
+        let (map, cards, lib) = fixtures();
+        let (scenario, _) = lib.load(&map, &cards, &format!("wars/{name}")).unwrap();
+        let mut game = Game::from_scenario(&scenario);
+        game.play_card(&cards, cards.id_by_name(card).unwrap()).unwrap();
+        (map, cards, game)
+    }
+
+    /// Plays the card's event and rolls `die` on `target`, as `e` then `r` would.
+    fn declare(game: &mut Game, map: &WorldMap, cards: &CardCatalog, target: &str, die: u8) -> WarResult {
+        assert!(matches!(game.play_event(map, cards).unwrap(), EventOutcome::Pending { .. }));
+        let RollOutcome::War(result) = game.roll(map, id(map, target), &mut Dice::from_seed(seed_for(die))).unwrap() else { panic!() };
+        result
+    }
+
+    #[test]
+    fn korean_war_wins_on_a_modified_four_and_replaces_us_influence() {
+        let (map, cards, mut game) = load("korean-war", "Korean War");
+        // Japan is US-controlled: a 5 becomes a 4, which wins.
+        let result = declare(&mut game, &map, &cards, "South Korea", 5);
+        assert!(result.success);
+        assert_eq!(result.modifier.total(), -1);
+        let sk = id(&map, "South Korea");
+        assert_eq!((game.board().influence(sk, Superpower::Us), game.board().influence(sk, Superpower::Ussr)), (0, 3));
+        assert_eq!(game.status().vp, -2);
+        assert_eq!(game.status().military_ops_ussr, 2);
+        assert_eq!(game.active(), Superpower::Us, "the turn passes");
+        assert!(game.removed_from_game().contains(&cards.id_by_name("Korean War").unwrap()));
+    }
+
+    #[test]
+    fn korean_war_fails_below_four_and_changes_nothing_but_the_track() {
+        let (map, cards, mut game) = load("korean-war", "Korean War");
+        let result = declare(&mut game, &map, &cards, "South Korea", 4);
+        assert!(!result.success, "a 4 is a 3 after Japan");
+        assert_eq!(game.status().vp, 0);
+        let sk = id(&map, "South Korea");
+        assert_eq!(game.board().influence(sk, Superpower::Us), 2);
+        assert_eq!(game.status().military_ops_ussr, 2);
+    }
+
+    #[test]
+    fn two_us_neighbours_need_a_six() {
+        let (map, cards, mut game) = load("korean-war-two-us-neighbours", "Korean War");
+        let result = declare(&mut game, &map, &cards, "South Korea", 5);
+        assert!(!result.success);
+        let (map, cards, mut game) = load("korean-war-two-us-neighbours", "Korean War");
+        let result = declare(&mut game, &map, &cards, "South Korea", 6);
+        assert!(result.success);
+    }
+
+    #[test]
+    fn a_winning_war_can_end_the_game_on_vp() {
+        let (map, cards, mut game) = load("korean-war-vp-win", "Korean War");
+        declare(&mut game, &map, &cards, "South Korea", 6);
+        assert_eq!(game.status().vp, -20);
+        let victory = game.winner().expect("20 VP ends the game");
+        assert_eq!(victory.side, Superpower::Ussr);
+        assert_eq!(game.active(), Superpower::Ussr, "no handover once the game is over");
+    }
+
+    #[test]
+    fn arab_israeli_counts_a_us_controlled_israel() {
+        let (map, cards, mut game) = load("arab-israeli-war", "Arab-Israeli War");
+        let result = declare(&mut game, &map, &cards, "Israel", 4);
+        assert!(result.modifier.target_itself);
+        assert!(!result.success);
+    }
+
+    #[test]
+    fn camp_david_prevents_arab_israeli_war() {
+        let (map, cards, mut game) = load("arab-israeli-war-after-camp-david", "Arab-Israeli War");
+        assert!(matches!(game.play_event(&map, &cards), Err(GameError::EventPrevented { .. })));
+        assert!(!game.legal_actions(&map, &cards).contains(&twilight_struggle::Action::Event));
+    }
+
+    #[test]
+    fn indo_pakistani_war_opens_a_session_the_player_can_back_out_of() {
+        let (map, cards, mut game) = load("indo-pakistani-war-us", "Indo-Pakistani War");
+        assert!(matches!(game.play_event(&map, &cards).unwrap(), EventOutcome::Pending { .. }));
+        assert!(matches!(game.operation(), Some(Operation::War(_))));
+        assert!(matches!(game.confirm(), Err(GameError::WarNotRolled)));
+        assert!(matches!(game.cancel(), Err(GameError::WarNotRolled)));
+        // Only India and Pakistan are targets.
+        let mut dice = Dice::from_seed(1);
+        assert!(matches!(game.roll(&map, id(&map, "Poland"), &mut dice), Err(GameError::War(_))));
+        game.abandon().unwrap();
+        assert!(game.operation().is_none() && game.card_in_play().is_some());
+        assert!(game.log().entries().is_empty(), "an abandoned war leaves no trace");
+    }
+
+    #[test]
+    fn rolling_on_the_chosen_target_resolves_and_closes_the_event() {
+        let (map, cards, mut game) = load("indo-pakistani-war-us", "Indo-Pakistani War");
+        game.play_event(&map, &cards).unwrap();
+        let india = id(&map, "India");
+        // Pakistan is USSR-controlled, so attacking India is -1: a 5 wins.
+        let RollOutcome::War(result) = game.roll(&map, india, &mut Dice::from_seed(seed_for(5))).unwrap() else { panic!() };
+        assert!(result.success && result.side == Superpower::Us);
+        assert_eq!((game.board().influence(india, Superpower::Us), game.board().influence(india, Superpower::Ussr)), (3, 0));
+        assert_eq!(game.status().vp, 2);
+        assert_eq!(game.status().military_ops_us, 2);
+        assert!(game.operation().is_none());
+        assert_eq!(game.active(), Superpower::Ussr);
+        assert!(game.discards().contains(&cards.id_by_name("Indo-Pakistani War").unwrap()), "not removed after its event");
+    }
+
+    #[test]
+    fn brush_war_wins_on_three_for_one_vp_and_adds_three_mil_ops() {
+        let (map, cards, mut game) = load("brush-war-ussr", "Brush War");
+        game.play_event(&map, &cards).unwrap();
+        // Iran is US-controlled (-1): a 4 is a 3, which wins.
+        let RollOutcome::War(result) = game.roll(&map, id(&map, "Afghanistan"), &mut Dice::from_seed(seed_for(4))).unwrap() else { panic!() };
+        assert!(result.success);
+        assert_eq!(game.status().vp, -1);
+        assert_eq!(game.status().military_ops_ussr, 3);
+    }
+
+    #[test]
+    fn iran_iraq_war_is_removed_after_its_event() {
+        let (map, cards, mut game) = load("iran-iraq-war-us", "Iran-Iraq War");
+        game.play_event(&map, &cards).unwrap();
+        game.roll(&map, id(&map, "Iraq"), &mut Dice::from_seed(seed_for(6))).unwrap();
+        assert!(game.removed_from_game().contains(&cards.id_by_name("Iran-Iraq War").unwrap()));
+    }
+
+    #[test]
+    fn a_random_walk_through_every_war_state_finishes_the_turn() {
+        let (map, cards, lib) = fixtures();
+        for entry in lib.list().unwrap().iter().filter(|e| e.file == "wars") {
+            let (scenario, _) = lib.load(&map, &cards, &entry.reference()).unwrap();
+            let mut game = Game::from_scenario(&scenario);
+            let mut ai = twilight_struggle::RandomAi::from_seed(5);
+            let mut dice = Dice::from_seed(5);
+            for _ in 0..10 {
+                if game.winner().is_some() || game.hand(game.decider()).is_empty() && game.card_in_play().is_none() {
+                    break;
+                }
+                twilight_struggle::play_turn(&mut ai, &mut game, &map, &cards, &mut dice).unwrap_or_else(|e| panic!("{}: {e}", entry.reference()));
+            }
+        }
+    }
+}

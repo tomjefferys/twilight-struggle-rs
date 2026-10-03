@@ -8,6 +8,7 @@ use crate::ops::Operation;
 
 use super::chip::{ChipGrid, ChipRole, CHIP_H, REGION_CHIP_W};
 use super::{
+    war_line,
     control_glyph, coup_odds_line, coup_target_line_with, modifier_line, nz, odds_line, operation_header, operation_touched_line,
     put_border_title, Canvas, Color, Style, ViewMode, BEGIN_HINT,
 };
@@ -20,6 +21,7 @@ fn hint() -> String {
 }
 const PLACEMENT_HINT: &str = "←→↑↓ select · +/= place · u undo · ⌫ abandon · c confirm · Esc back";
 const REALIGN_HINT: &str = "←→↑↓ select · r roll · ⌫ abandon · c done · Esc back";
+const WAR_HINT: &str = "←→↑↓ select · r declare war · ⌫ abandon · Esc back";
 const COUP_HINT: &str = "←→↑↓ select · r coup · ⌫ abandon · c done · Esc back";
 const EVENT_HINT: &str = "←→↑↓ select · + add · - remove · u undo · 1-9 mode · ⌫ abandon · c done";
 
@@ -211,6 +213,7 @@ pub fn render_country(map: &WorldMap, layout: &MapLayout, board: &Board, id: Cou
                     format!("no {} influence to remove", operation.side().opponent())
                 }
                 Operation::Event(e) => e.hint(map, id),
+                Operation::War(_) => "not a legal target for this war".to_string(),
             };
             rows.push((reason, Style::color(Color::Muted)));
         }
@@ -235,6 +238,11 @@ pub fn render_country(map: &WorldMap, layout: &MapLayout, board: &Board, id: Cou
                 rows.push((modifier_line(r.side().opponent(), &opposing), Style::color(Color::Muted)));
                 rows.push((odds_line(r.side(), &odds), Style::color(Color::Muted)));
             }
+            Operation::War(w) => {
+                if operation.is_legal_target(map, board, id) {
+                    rows.push((war_line(map, board, w, id), Style::color(Color::Selected)));
+                }
+            }
             Operation::Coup(c) => {
                 let (target_number, odds) = c.preview(map, board, id);
                 rows.push((coup_target_line_with(c.side(), c.ops_for(map, id), c.roll_mod(map, id).map_or(0, |(_, m)| m), target_number, country.stability), Style::color(Color::Selected)));
@@ -249,6 +257,7 @@ pub fn render_country(map: &WorldMap, layout: &MapLayout, board: &Board, id: Cou
         Some(Operation::Realign(_)) => REALIGN_HINT.to_string(),
         Some(Operation::Coup(_)) => COUP_HINT.to_string(),
         Some(Operation::Event(_)) => EVENT_HINT.to_string(),
+        Some(Operation::War(_)) => WAR_HINT.to_string(),
         None => hint(),
     });
 

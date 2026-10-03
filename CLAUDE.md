@@ -10,7 +10,7 @@ rolls), twenty *choice* cards (the card's own side picks the
 countries to add/remove influence in, whoever is phasing), and ten
 *turn-long* effects ("for the remainder of this turn" — Containment,
 Chernobyl, …, held in `GameStatus::effects` until the turn rolls over),
-which can end the game outright (VP reaching ±20, DEFCON
+and the five *war* cards (a die roll against a target, Military Ops tracked), which can end the game outright (VP reaching ±20, DEFCON
 reaching 1, or Europe Scoring's Control tier). `CARDS.md` tracks which of
 the 110 cards have their event implemented (`tests/cards_progress.rs`
 keeps it honest). Every other card's text, DEFCON degradation *other than a battleground
@@ -312,6 +312,24 @@ uniformly random legal moves.
     chosen and then only that region's, so the existing double-border /
     muting shows the designation; the world map's flag slot stays plain
     (no `+`/`-`) and its legend says "digit: designate that region".
+  - `events::war` (`src/events/war.rs`) — the five war cards (#11, #13, #24,
+    #36, #102): the first events that **roll a die**, so a `WarSpec` table (beneficiary — fixed or the
+    player — target set, success threshold, VP, Military Ops, and whether
+    the target itself lowers the roll) plus pure `resolve`/`modifier`/`odds`
+    free functions, like `ops::coup`'s. Every war card opens
+    `Operation::War(War)` for the player (`EventOutcome::Pending`), which
+    `Game::roll` on a target resolves *and closes* (`finish_war`: influence, VP, the beneficiary's
+    `military_ops_*` clamped 0–5, `Event::War`, discard/remove, hand the turn
+    over — no `confirm`; `confirm`/`cancel` are refused with `WarNotRolled`,
+    `abandon` is free before the roll). The AI sees it as `Action::Roll`
+    per target. `events::is_prevented` is the first modelled "prevents"
+    clause (Camp David in `Hands::removed` bars #13; `GameError::EventPrevented`,
+    and `Action::Event` isn't offered). Brush War's NATO clause isn't modelled.
+    In interactive mode `e` jumps to the country screen of a lone
+    target (Korean, Arab-Israeli) or to the region view of the first target
+    (preferring the current region) with non-targets dimmed; `r` rolls on the
+    country screen. Views: `render::render_war_result` modal (`Modal::War`), `war_line` in
+    the region footer/country panel, a `war` log line.
   - `events::effects` (the second stage) resolves nineteen cards whose text only moves
     influence, VP, or DEFCON by fixed amounts (see `CARDS.md`) into an
     `EffectResult` — `influence: Vec<InfluenceChange>` (country, side,

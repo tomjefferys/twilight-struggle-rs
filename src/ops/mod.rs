@@ -20,6 +20,7 @@ mod realign;
 
 pub use coup::{coup_odds, coup_odds_with, coup_resolve, coup_resolve_with, coup_target_number, Coup, CoupError, CoupOdds, CoupResult};
 pub use crate::events::choice::EventChoice;
+pub use crate::events::war::War;
 pub use influence::{InfluencePlacement, PlacementError};
 pub use realign::{modifiers, odds, resolve, Modifiers, Odds, RealignError, Realignment, RollResult};
 
@@ -43,6 +44,10 @@ pub enum Operation {
     /// ops, and its [`Operation::side`] is the *chooser* (the card's own
     /// side), not necessarily the phasing player.
     Event(EventChoice),
+    /// A chosen-target war card's event awaiting its target — see
+    /// [`War`]. Spends no ops; `Game::roll` on a target resolves it and
+    /// closes it (and the turn) in one step.
+    War(War),
 }
 
 impl Operation {
@@ -52,6 +57,7 @@ impl Operation {
             Operation::Realign(r) => r.side(),
             Operation::Coup(c) => c.side(),
             Operation::Event(e) => e.chooser(),
+            Operation::War(w) => w.side(),
         }
     }
 
@@ -60,7 +66,7 @@ impl Operation {
             Operation::Influence(p) => p.ops_total(),
             Operation::Realign(r) => r.ops_total(),
             Operation::Coup(c) => c.ops_total(),
-            Operation::Event(_) => 0,
+            Operation::Event(_) | Operation::War(_) => 0,
         }
     }
 
@@ -72,7 +78,7 @@ impl Operation {
             Operation::Influence(p) => p.bonus().filter(|_| p.is_empty()),
             Operation::Realign(r) => r.sub_region_bonus().filter(|_| r.ops_spent() == 0),
             Operation::Coup(c) => c.sub_region_bonus().filter(|_| c.ops_spent() == 0),
-            Operation::Event(_) => None,
+            Operation::Event(_) | Operation::War(_) => None,
         }
     }
 
@@ -81,7 +87,7 @@ impl Operation {
             Operation::Influence(p) => p.ops_spent(),
             Operation::Realign(r) => r.ops_spent(),
             Operation::Coup(c) => c.ops_spent(),
-            Operation::Event(_) => 0,
+            Operation::Event(_) | Operation::War(_) => 0,
         }
     }
 
@@ -90,7 +96,7 @@ impl Operation {
             Operation::Influence(p) => p.remaining(),
             Operation::Realign(r) => r.remaining(),
             Operation::Coup(c) => c.remaining(),
-            Operation::Event(_) => 0,
+            Operation::Event(_) | Operation::War(_) => 0,
         }
     }
 
@@ -101,7 +107,7 @@ impl Operation {
         match self {
             Operation::Influence(p) => Some(p.board()),
             Operation::Realign(_) => None,
-            Operation::Coup(_) => None,
+            Operation::Coup(_) | Operation::War(_) => None,
             Operation::Event(e) => Some(e.board()),
         }
     }
@@ -117,6 +123,7 @@ impl Operation {
             Operation::Influence(p) => p.is_legal_target(map, id),
             Operation::Realign(r) => r.is_legal_target(map, board, id),
             Operation::Coup(c) => c.is_legal_target(map, board, id),
+            Operation::War(w) => w.is_legal_target(map, id),
             // A designation (Chernobyl) has no countries to pick: every
             // region is a candidate until one is chosen, then only it.
             Operation::Event(e) if e.is_designation() => e.designated_region().is_none_or(|r| map.country(id).region == r),
@@ -148,6 +155,7 @@ impl Operation {
             Operation::Realign(r) => r.delta(board, id, side),
             Operation::Coup(c) => c.delta(board, id, side),
             Operation::Event(e) => e.delta(id, side),
+            Operation::War(_) => 0,
         }
     }
 
@@ -166,6 +174,7 @@ impl Operation {
             Operation::Realign(r) => r.touched(),
             Operation::Coup(c) => c.touched(),
             Operation::Event(e) => e.touched(),
+            Operation::War(_) => Vec::new(),
         }
     }
 
@@ -177,6 +186,7 @@ impl Operation {
             Operation::Realign(_) => "realigning",
             Operation::Coup(_) => "couping",
             Operation::Event(_) => "resolving an event",
+            Operation::War(_) => "declaring war",
         }
     }
 
@@ -186,7 +196,7 @@ impl Operation {
         match self {
             Operation::Influence(_) => true,
             Operation::Realign(_) => false,
-            Operation::Coup(_) => false,
+            Operation::Coup(_) | Operation::War(_) => false,
             Operation::Event(_) => true,
         }
     }

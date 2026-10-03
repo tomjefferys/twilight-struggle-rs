@@ -7,7 +7,7 @@ use rustyline::Editor;
 
 use twilight_struggle::render::{
     coup_result_line, game_over_line, log_entry_line, log_text, ongoing_effect_line, operation_abandoned_line, operation_balance_line, render_card,
-    render_country, render_event_result, render_hand, render_log, render_region, render_scoring_result, render_world, render_world_map, roll_result_line,
+    render_country, render_event_result, render_war_result, render_hand, render_log, render_region, render_scoring_result, render_world, render_world_map, roll_result_line,
 };
 use twilight_struggle::{
     ai, CardCatalog, CardFound, CardId, ColorMode, Dice, EventOutcome, Found, Game, GameError, GameStatus, MapLayout, Operation,
@@ -937,8 +937,26 @@ fn run_event_command(session: &mut Session) {
     }
 }
 
+/// A resolved war's box, and the game-over line if it ended the game.
+fn print_war_result(session: &Session, result: &twilight_struggle::events::WarResult) {
+    let vp_after = session.game.status().vp;
+    let canvas = render_war_result(&session.map, &session.cards, result, vp_after, session.game.winner(), None);
+    println!("{}", canvas.render(session.color));
+}
+
 /// Tells whoever has to choose what the open event asks, and where.
 fn print_event_prompt(session: &Session) {
+    if let Some(Operation::War(w)) = session.game.operation() {
+        let card = session.cards.card(w.card()).name.as_str();
+        let targets: Vec<&str> = twilight_struggle::events::war::eligible_targets(&session.map, w.card())
+            .into_iter()
+            .map(|id| session.map.country(id).name.as_str())
+            .collect();
+        println!("{card} — {} declares war; needs {}+ after modifiers", w.side(), w.success_min());
+        println!("targets: {}", targets.join(", "));
+        println!("use roll <country> to attack (abandon backs out)");
+        return;
+    }
     let Some(Operation::Event(e)) = session.game.operation() else { return };
     let card = session.game.card_in_play().map(|id| session.cards.card(id).name.as_str()).unwrap_or("?");
     println!("{card} — {} chooses: {}", e.chooser(), e.prompt());
@@ -1156,6 +1174,7 @@ fn run_roll_command(session: &mut Session, words: &[&str]) {
     };
     let side = session.game.active();
     match session.game.roll(&session.map, id, &mut session.dice) {
+        Ok(RollOutcome::War(result)) => print_war_result(session, &result),
         Ok(RollOutcome::Realign(result)) => println!("{}", roll_result_line(&session.map, side, &result)),
         Ok(RollOutcome::Coup(result)) => {
             println!("{}", coup_result_line(&session.map, side, &result));
@@ -1175,6 +1194,7 @@ fn run_roll_command(session: &mut Session, words: &[&str]) {
         }
         Err(GameError::Realign(e)) => println!("cannot roll in {}: {e}", session.map.country(id).name),
         Err(GameError::Coup(e)) => println!("cannot coup {}: {e}", session.map.country(id).name),
+        Err(GameError::War(e)) => println!("{e}"),
         Err(GameError::WrongKind { open }) => {
             println!("a {open} session is open, not a realignment or coup — `roll` only works during one of those")
         }
@@ -1280,6 +1300,7 @@ fn run_confirm_command(session: &mut Session) {
             }
         }
         Ok(Operation::Event(_)) => print_last_event_result(session),
+        Ok(Operation::War(_)) => unreachable!("Game::confirm refuses a war"),
         Ok(Operation::Coup(coup)) => {
             let side = coup.side();
             let total = coup.ops_total();
@@ -1316,6 +1337,7 @@ fn run_cancel_command(session: &mut Session) {
             );
         }
         Ok(Operation::Event(_)) => unreachable!("Game::cancel refuses an event"),
+        Ok(Operation::War(_)) => unreachable!("Game::cancel refuses a war"),
         Ok(Operation::Coup(coup)) => match coup.result() {
             Some(result) => println!(
                 "closed — the coup on {} already resolved on the board and can't be undone",

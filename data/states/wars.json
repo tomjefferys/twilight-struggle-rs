@@ -1,0 +1,83 @@
+{
+  "states": [
+    {
+      "name": "korean-war",
+      "description": "South Korea holds US 2 / USSR 1, with US-controlled Japan next door (-1 to the roll). Korean War wins on a modified 4+, replacing the US influence and paying the USSR 2 VP. USSR to act.",
+      "status": {"active": "Ussr"},
+      "influence": {
+        "South Korea": [2, 1],
+        "Japan": [5, 0]
+      },
+      "hands": {"us": ["NATO"], "ussr": ["Korean War"]}
+    },
+    {
+      "name": "korean-war-two-us-neighbours",
+      "description": "As korean-war, but the US also controls Taiwan: -2 to the roll, so only a 6 wins. USSR to act.",
+      "status": {"active": "Ussr"},
+      "influence": {
+        "South Korea": [2, 1],
+        "Japan": [5, 0],
+        "Taiwan": [3, 0]
+      },
+      "hands": {"us": ["NATO"], "ussr": ["Korean War"]}
+    },
+    {
+      "name": "korean-war-vp-win",
+      "description": "VP is -18; a winning Korean War takes the USSR to -20 and the game. USSR to act.",
+      "status": {"active": "Ussr", "vp": -18},
+      "influence": {
+        "South Korea": [2, 0]
+      },
+      "hands": {"us": ["NATO"], "ussr": ["Korean War"]}
+    },
+    {
+      "name": "arab-israeli-war",
+      "description": "Israel holds US 4 (US-controlled: -1 to the roll). Arab-Israeli War wins on a modified 4+. USSR to act.",
+      "status": {"active": "Ussr"},
+      "influence": {
+        "Israel": [4, 0]
+      },
+      "hands": {"us": ["NATO"], "ussr": ["Arab-Israeli War"]}
+    },
+    {
+      "name": "arab-israeli-war-after-camp-david",
+      "description": "Camp David Accords has already been played (removed from the game), so Arab-Israeli War's event can't be used. USSR to act.",
+      "status": {"active": "Ussr"},
+      "influence": {
+        "Israel": [4, 0]
+      },
+      "hands": {"us": ["NATO"], "ussr": ["Arab-Israeli War"]},
+      "removed": ["Camp David Accords"]
+    },
+    {
+      "name": "indo-pakistani-war-us",
+      "description": "The US plays Indo-Pakistani War: India holds USSR 3, Pakistan USSR-controlled. Attacking India is -1 (Pakistan); Pakistan itself has no USSR-controlled neighbour. US to act.",
+      "status": {"active": "Us"},
+      "influence": {
+        "India": [0, 3],
+        "Pakistan": [1, 3]
+      },
+      "hands": {"us": ["Indo-Pakistani War"], "ussr": ["Fidel"]}
+    },
+    {
+      "name": "brush-war-ussr",
+      "description": "The USSR plays Brush War: Afghanistan (stability 2) holds US 3, Iran US-controlled next door. A modified 3+ wins for 1 VP. USSR to act.",
+      "status": {"active": "Ussr"},
+      "influence": {
+        "Afghanistan": [3, 0],
+        "Iran": [2, 0]
+      },
+      "hands": {"us": ["NATO"], "ussr": ["Brush War"]}
+    },
+    {
+      "name": "iran-iraq-war-us",
+      "description": "The US plays Iran-Iraq War: Iraq holds USSR 2, Iran holds US 3. US to act.",
+      "status": {"active": "Us"},
+      "influence": {
+        "Iraq": [0, 2],
+        "Iran": [3, 0]
+      },
+      "hands": {"us": ["Iran-Iraq War"], "ussr": ["Fidel"]}
+    }
+  ]
+}

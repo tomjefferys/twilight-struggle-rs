@@ -129,6 +129,12 @@ impl Game {
                 }
                 actions.push(Action::Confirm);
             }
+            Some(Operation::War(w)) => {
+                // Rolling on a target is the whole event — no `Confirm`.
+                for id in events::war::eligible_targets(map, w.card()) {
+                    actions.push(Action::Roll(id));
+                }
+            }
             Some(Operation::Coup(c)) => {
                 if c.result().is_none() {
                     for (id, _) in map.iter() {
@@ -141,7 +147,7 @@ impl Game {
             }
             None => {
                 if let Some(id) = self.card_in_play() {
-                    if events::is_implemented(id) {
+                    if events::is_implemented(id) && events::is_prevented(id, self.removed_from_game()).is_none() {
                         actions.push(Action::Event);
                     }
                     // A scoring card has no ops for `Begin` to spend —

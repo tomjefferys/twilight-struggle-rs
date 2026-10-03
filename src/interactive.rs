@@ -14,9 +14,9 @@ use crossterm::{execute, queue};
 
 use twilight_struggle::render::{
     log_entry_line, operation_abandoned_line, operation_closed_line, operation_header, render_card, render_country, render_hand,
-    render_event_result, render_region, render_roll_result, render_scoring_result, render_status_bar, render_world_map, Canvas, RollReport, HAND_ROWS,
+    render_event_result, render_war_result, render_region, render_roll_result, render_scoring_result, render_status_bar, render_world_map, Canvas, RollReport, HAND_ROWS,
 };
-use twilight_struggle::events::{EffectResult, ScoringResult};
+use twilight_struggle::events::{EffectResult, ScoringResult, WarResult};
 use twilight_struggle::game::Victory;
 use twilight_struggle::ops::Operation;
 use twilight_struggle::{
@@ -42,6 +42,9 @@ enum Modal {
     /// winner if the event just ended the game (the result alone doesn't
     /// say — a DEFCON-1 loss, say, isn't visible in it).
     Event(EffectResult, i8, Option<Victory>),
+    /// A resolved war card's result, the VP track's new value, and the
+    /// winner if the war ended the game.
+    War(WarResult, i8, Option<Victory>),
 }
 
 /// Which screen is currently showing.
@@ -287,6 +290,21 @@ pub fn run(
                         Ok(EventOutcome::Pending { .. }) => {
                             zoomed = false;
                             message = None;
+                            // A war: a lone target (Korean War) goes straight to
+                            // its country screen, ready for `r`; otherwise to a
+                            // region view where only the legal targets are live.
+                            if let Some(Operation::War(w)) = game.operation() {
+                                let targets = twilight_struggle::events::war::eligible_targets(map, w.card());
+                                let current = match &screen {
+                                    Screen::Region { region, .. } | Screen::Country { region, .. } => Some(*region),
+                                    Screen::World { .. } => None,
+                                };
+                                let first = targets.iter().copied().find(|&t| Some(map.country(t).region) == current).or(targets.first().copied());
+                                if let Some(target) = first {
+                                    let region = map.country(target).region;
+                                    screen = if targets.len() == 1 { Screen::Country { region, selected: target } } else { Screen::Region { region, selected: target } };
+                                }
+                            }
                             // A region designation (Chernobyl) is made on the
                             // world map: go straight there, keeping the region
                             // we were looking at highlighted (and remembered).
@@ -438,6 +456,7 @@ pub fn run(
                                 let side = game.active();
                                 let before = (game.board().influence(*selected, Superpower::Us), game.board().influence(*selected, Superpower::Ussr));
                                 match game.roll(map, *selected, dice) {
+                                    Ok(RollOutcome::War(result)) => modal.push_back(Modal::War(result, game.status().vp, game.winner())),
                                     Ok(outcome) => {
                                         let aftermath = if matches!(outcome, RollOutcome::Coup(_)) { game.last_coup_aftermath() } else { None };
                                         modal.push_back(Modal::Roll(RollReport { side, outcome, before, aftermath }))
@@ -562,6 +581,7 @@ fn reconstruct_roll_reports(board: &Board, entries: &[LogEntry]) -> Vec<RollRepo
                 Some(Superpower::Ussr) => (after.0, after.1 + result.removed),
                 None => after,
             },
+            RollOutcome::War(_) => unreachable!("only realignments and coups are reconstructed"),
             RollOutcome::Coup(result) => {
                 // `removed` came out of the opponent's pile, `added` went
                 // into the acting side's own — different fields, so both
@@ -606,6 +626,13 @@ fn queue_turn_modals(modal: &mut VecDeque<Modal>, board: &Board, entries: &[LogE
             }
             Event::Scored { result, vp_after } => {
                 modal.push_back(Modal::Score(result.clone(), *vp_after));
+            }
+            Event::War { result, vp_after } => {
+                let winner = match entries.get(i + 1).map(|e| &e.event) {
+                    Some(Event::GameOver(victory)) => Some(*victory),
+                    _ => None,
+                };
+                modal.push_back(Modal::War(result.clone(), *vp_after, winner));
             }
             Event::EventResolved { result, vp_after } => {
                 let winner = match entries.get(i + 1).map(|e| &e.event) {
@@ -807,6 +834,7 @@ fn draw(
             Modal::Roll(report) => render_roll_result(map, report, queue_pos),
             Modal::Score(result, vp_after) => render_scoring_result(map, cards, result, *vp_after, queue_pos),
             Modal::Event(result, vp_after, winner) => render_event_result(map, cards, result, *vp_after, *winner, queue_pos),
+            Modal::War(result, vp_after, winner) => render_war_result(map, cards, result, *vp_after, *winner, queue_pos),
         };
         blit_centred(&mut canvas, &modal_canvas);
     }

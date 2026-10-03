@@ -21,6 +21,7 @@ const WORLD_REALIGN_HINT: &str = "←→↑↓ select · Enter open · r roll ·
 
 /// Shown instead once a [`Coup`](crate::ops::Coup) is in progress. No
 /// `u undo` — a resolved attempt can't be taken back.
+const WORLD_WAR_HINT: &str = "←→↑↓ select · Enter open · ⌫ abandon · Esc back";
 const WORLD_COUP_HINT: &str = "←→↑↓ select · Enter open · r coup · ⌫ abandon · c done · Esc back";
 const WORLD_DESIGNATE_HINT: &str = "←→↑↓ select · Enter designate · ⌫ clear/abandon · c done · Esc back";
 const WORLD_EVENT_HINT: &str = "←→↑↓ select · Enter open · u undo · ⌫ abandon · c done · Esc back";
@@ -169,6 +170,7 @@ fn footer_lines(
             Some(Operation::Influence(_)) => WORLD_PLACEMENT_HINT.to_string(),
             Some(Operation::Realign(_)) => WORLD_REALIGN_HINT.to_string(),
             Some(Operation::Coup(_)) => WORLD_COUP_HINT.to_string(),
+            Some(Operation::War(_)) => WORLD_WAR_HINT.to_string(),
             Some(Operation::Event(e)) if e.is_designation() => WORLD_DESIGNATE_HINT.to_string(),
             Some(Operation::Event(_)) => WORLD_EVENT_HINT.to_string(),
             None => format!("{WORLD_HINT} · {BEGIN_HINT}"),
@@ -343,7 +345,7 @@ fn draw_chip(
     // An open event: a country its chooser can act on is bold, anything
     // else is muted, so the live ones stand out on the overview.
     let event_eligible = match op {
-        Some(operation @ Operation::Event(_)) => Some(operation.is_legal_target(map, board, id)),
+        Some(operation @ (Operation::Event(_) | Operation::War(_))) => Some(operation.is_legal_target(map, board, id)),
         _ => None,
     };
     match event_eligible {

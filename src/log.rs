@@ -26,7 +26,7 @@
 
 use crate::cards::CardId;
 use crate::country::{CountryId, Superpower};
-use crate::events::{EffectResult, ScoringResult};
+use crate::events::{EffectResult, ScoringResult, WarResult};
 use crate::game::{OperationKind, Victory};
 use crate::ops::{CoupResult, RollResult};
 
@@ -59,6 +59,10 @@ pub enum Event {
     /// battleground coup (or Nuclear Subs sparing it) and Yuri and
     /// Samantha's VP — pushed right after the `Coup` entry it follows.
     CoupAftermath(CoupAftermath),
+    /// A war card's one roll and what it did, plus the VP track's new
+    /// value — logged the instant it resolves, which is also when the
+    /// event (and the turn) ends.
+    War { result: WarResult, vp_after: i8 },
     /// An operation closed — `confirm`'s or `cancel`'s own entry. A
     /// realignment's or coup's rolls are already in the log as their own
     /// entries by the time this is pushed; a placement's points arrive in

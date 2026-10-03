@@ -52,6 +52,7 @@ impl RollReport {
         match &self.outcome {
             RollOutcome::Realign(r) => r.target,
             RollOutcome::Coup(c) => c.target,
+            RollOutcome::War(w) => w.target,
         }
     }
 }
@@ -110,6 +111,7 @@ pub fn render_roll_result(map: &WorldMap, report: &RollReport, queue_pos: Option
                 Some(_) => side_color(opposing),
             }
         }
+        RollOutcome::War(_) => unreachable!("a war result is shown by render_war_result, never as a RollReport"),
         RollOutcome::Coup(result) => {
             title = format!("Coup · {country}");
             let acting = report.side;
