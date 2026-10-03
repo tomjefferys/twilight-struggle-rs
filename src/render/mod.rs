@@ -17,6 +17,7 @@ pub mod region;
 pub mod roll;
 pub mod score;
 pub mod statusbar;
+pub mod war;
 pub mod world;
 pub mod worldmap;
 
@@ -29,6 +30,7 @@ pub use region::render_region;
 pub use roll::{render_roll_result, RollReport};
 pub use score::render_scoring_result;
 pub use statusbar::{render_status_bar, STATUS_BAR_ROWS};
+pub use war::render_war_result;
 pub use world::render_world;
 pub use worldmap::render_world_map;
 
@@ -491,6 +493,9 @@ pub fn game_over_line(victory: crate::game::Victory) -> String {
 /// draws [`operation_touched_line`] as a row inside instead of gluing the
 /// two together on one line the way the region and world-map footers do.
 pub fn operation_header(op: &crate::ops::Operation) -> String {
+    if let crate::ops::Operation::War(w) = op {
+        return format!("{} declaring war · choose a target (needs {}+)", w.side(), w.success_min());
+    }
     if let crate::ops::Operation::Event(e) = op {
         return format!("{} chooses · {}", op.side(), e.progress());
     }
@@ -557,6 +562,7 @@ fn touched_country_summary(
                 .collect();
             format!("{name} {}", changes.join("/"))
         }
+        crate::ops::Operation::War(_) => name.to_string(),
         crate::ops::Operation::Realign(_) | crate::ops::Operation::Coup(_) => {
             let side = op.side();
             let opponent = side.opponent();
@@ -579,6 +585,34 @@ fn touched_country_summary(
             }
         }
     }
+}
+
+/// What lowered a war's die roll, in words: `US controls Japan, Taiwan`,
+/// or `no US-controlled neighbours`.
+pub fn war_reasons(map: &crate::map::WorldMap, m: &crate::events::war::WarModifier) -> String {
+    let mut parts: Vec<String> = m.neighbours.iter().map(|&n| map.country(n).name.clone()).collect();
+    if m.target_itself {
+        parts.insert(0, "the target itself".to_string());
+    }
+    if parts.is_empty() {
+        "no enemy-controlled neighbours".to_string()
+    } else {
+        format!("enemy controls {}", parts.join(", "))
+    }
+}
+
+/// A war target's preview, shared by the region footer and the country
+/// view: `USSR  d6 -2 · needs 4+ · wins on 1 of 6 (enemy controls Japan, Taiwan)`.
+pub fn war_line(map: &crate::map::WorldMap, board: &crate::board::Board, war: &crate::events::War, id: crate::country::CountryId) -> String {
+    let m = war.modifier(map, board, id);
+    format!(
+        "{}  d6 {:+} · needs {}+ · wins on {} of 6 ({})",
+        war.side(),
+        m.total(),
+        war.success_min(),
+        war.odds(map, board, id),
+        war_reasons(map, &m)
+    )
 }
 
 /// One side's realignment modifier breakdown for the currently selected

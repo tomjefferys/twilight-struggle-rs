@@ -263,6 +263,8 @@ fn draw_operation_badge(canvas: &mut Canvas, row: usize, col: usize, chip_w: usi
                 }
             }
         }
+        // A war touches nothing until its one roll, which closes it.
+        Operation::War(_) => {}
         Operation::Realign(_) | Operation::Coup(_) => {
             let side = operation.side();
             let opponent = side.opponent();

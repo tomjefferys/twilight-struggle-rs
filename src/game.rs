@@ -51,7 +51,7 @@ use crate::country::{CountryId, Region, Superpower};
 use crate::dice::Dice;
 use crate::events::choice::{EventChoiceError, Sign};
 use crate::events::EventChoice;
-use crate::events::{self, EffectResult, EventOutcome};
+use crate::events::{self, war, EffectResult, EventOutcome, WarResult};
 use crate::log::{CoupAftermath, Event, GameLog, LogEntry};
 use crate::map::WorldMap;
 use crate::ongoing::TurnEffects;
@@ -92,10 +92,12 @@ pub enum OperationKind {
 
 /// What [`Game::roll`] resolved — a realignment roll or a coup's one
 /// attempt, whichever kind of operation was open.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RollOutcome {
     Realign(RollResult),
     Coup(CoupResult),
+    /// A chosen-target war card's roll — which also closed the event.
+    War(WarResult),
 }
 
 /// Why a `Game` method was refused.
@@ -153,6 +155,13 @@ pub enum GameError {
     /// [`Game::abandon`] refused an event: picks have been made, or it's
     /// the opponent's card being resolved by its owner.
     CannotAbandonEvent,
+    /// [`Game::play_event`] refused: `by`'s event has already been played
+    /// and bars this card's (Camp David Accords vs Arab-Israeli War).
+    EventPrevented { card: CardId, by: CardId },
+    /// [`Game::confirm`]/[`Game::cancel`] refused a war: it ends only by
+    /// rolling on a target ([`Game::roll`]) or being abandoned.
+    WarNotRolled,
+    War(war::WarError),
     Event(EventChoiceError),
     Placement(PlacementError),
     Realign(RealignError),
@@ -182,6 +191,9 @@ impl fmt::Display for GameError {
             GameError::EventIncomplete { left } => write!(f, "the event isn't finished yet — {left}"),
             GameError::CannotCancelEvent => write!(f, "an event can't be cancelled — finish it, or undo your picks"),
             GameError::CannotAbandonEvent => write!(f, "this event can't be abandoned now — undo your picks, or finish it"),
+            GameError::EventPrevented { card, by } => write!(f, "card #{card}'s event can't be played: #{by}'s has already happened"),
+            GameError::WarNotRolled => write!(f, "a war ends when it's rolled on a target (roll <country>), or abandoned"),
+            GameError::War(e) => write!(f, "{e}"),
             GameError::Event(e) => write!(f, "{e}"),
             GameError::Placement(e) => write!(f, "{e}"),
             GameError::Realign(e) => write!(f, "{e}"),
@@ -191,6 +203,12 @@ impl fmt::Display for GameError {
 }
 
 impl std::error::Error for GameError {}
+
+impl From<war::WarError> for GameError {
+    fn from(e: war::WarError) -> Self {
+        GameError::War(e)
+    }
+}
 
 impl From<EventChoiceError> for GameError {
     fn from(e: EventChoiceError) -> Self {
@@ -629,6 +647,15 @@ impl Game {
     /// own.
     pub fn roll(&mut self, map: &WorldMap, id: CountryId, dice: &mut Dice) -> Result<RollOutcome, GameError> {
         let side = self.status.active;
+        if let Some(Operation::War(w)) = &self.op {
+            if !w.is_legal_target(map, id) {
+                return Err(w.resolve(map, &self.board, id, 0).expect_err("an illegal target is refused").into());
+            }
+            let result = w.resolve(map, &self.board, id, dice.roll())?;
+            self.op = None;
+            self.finish_war(result.clone());
+            return Ok(RollOutcome::War(result));
+        }
         let outcome = match &mut self.op {
             Some(Operation::Realign(r)) => RollOutcome::Realign(r.roll(map, &mut self.board, id, dice)?),
             Some(Operation::Coup(c)) => RollOutcome::Coup(c.attempt(map, &mut self.board, id, dice)?),
@@ -639,9 +666,10 @@ impl Game {
         let event = match outcome {
             RollOutcome::Realign(result) => Event::Realign(result),
             RollOutcome::Coup(result) => Event::Coup(result),
+            RollOutcome::War(_) => unreachable!("a war returned above"),
         };
         self.log.push(LogEntry { turn: self.status.turn, action_round: self.status.action_round, side: Some(side), event });
-        if let RollOutcome::Coup(result) = outcome {
+        if let RollOutcome::Coup(result) = &outcome {
             self.coup_aftermath(map, side, result.target);
         }
         Ok(outcome)
@@ -701,6 +729,7 @@ impl Game {
             Some(Operation::Event(e)) => e.undo_last(map).ok_or(GameError::NothingToUndo),
             Some(Operation::Realign(_)) => Err(GameError::CannotUndo { verb: "realignment roll" }),
             Some(Operation::Coup(_)) => Err(GameError::CannotUndo { verb: "coup" }),
+            Some(Operation::War(_)) => Err(GameError::CannotUndo { verb: "war" }),
             None => Err(GameError::NoOperation),
         }
     }
@@ -726,6 +755,9 @@ impl Game {
             self.finish_effect(result);
             return Ok(op);
         }
+        if matches!(self.op, Some(Operation::War(_))) {
+            return Err(GameError::WarNotRolled);
+        }
         let op = self.op.take().ok_or(GameError::NoOperation)?;
         if let Operation::Influence(p) = &op {
             self.board = p.board().clone();
@@ -743,6 +775,9 @@ impl Game {
     pub fn cancel(&mut self) -> Result<Operation, GameError> {
         if matches!(self.op, Some(Operation::Event(_))) {
             return Err(GameError::CannotCancelEvent);
+        }
+        if matches!(self.op, Some(Operation::War(_))) {
+            return Err(GameError::WarNotRolled);
         }
         let op = self.op.take().ok_or(GameError::NoOperation)?;
         self.log_close(&op, false);
@@ -774,6 +809,8 @@ impl Game {
             // reveal — always safe to discard, no matter how many points
             // are pending.
             Some(Operation::Influence(_)) => Ok(self.op.take().expect("checked Some above")),
+            // A war rolls nothing until a target is chosen, so it can always be backed out of.
+            Some(Operation::War(_)) => Ok(self.op.take().expect("checked Some above")),
             // An event can be backed out of only by the side that chose to
             // play it, and only before anything has been picked.
             Some(Operation::Event(e)) => {
@@ -857,7 +894,7 @@ impl Game {
     /// `removed_after_event` card, removes it from the game entirely —
     /// see [`crate::cards::Hands::remove_from_game`]) and hands the turn
     /// to the other side, same as [`Game::confirm`]/[`Game::cancel`].
-    pub fn play_event(&mut self, map: &WorldMap, _cards: &CardCatalog) -> Result<EventOutcome, GameError> {
+    pub fn play_event(&mut self, map: &WorldMap, _cards: &CardCatalog, dice: &mut Dice) -> Result<EventOutcome, GameError> {
         if self.winner.is_some() {
             return Err(GameError::GameOver);
         }
@@ -867,6 +904,22 @@ impl Game {
         let card = self.card.ok_or(GameError::NoCard)?;
         if !events::is_implemented(card.id) {
             return Err(GameError::EventNotImplemented { card: card.id });
+        }
+        if let Some(by) = events::is_prevented(card.id, self.hands.removed()) {
+            return Err(GameError::EventPrevented { card: card.id, by });
+        }
+
+        // A war rolls: on the spot if it has one possible target, else it
+        // opens a session for the player to name one (`Game::roll`).
+        if war::is_war_card(card.id) {
+            let player = self.status.active;
+            if let Some(target) = war::sole_target(map, card.id) {
+                let result = war::resolve(map, &self.board, card.id, target, player, dice.roll()).expect("a war card");
+                self.finish_war(result.clone());
+                return Ok(EventOutcome::War(result));
+            }
+            self.op = Some(Operation::War(war::War::new(card.id, player)));
+            return Ok(EventOutcome::Pending { card: card.id, chooser: player });
         }
 
         // A choice card doesn't resolve in one call: it opens a session
@@ -907,7 +960,7 @@ impl Game {
                 }
             }
             EventOutcome::Effect(result) => self.finish_effect(result.clone()),
-            EventOutcome::Pending { .. } => unreachable!("only choice cards are pending, handled above"),
+            EventOutcome::War(_) | EventOutcome::Pending { .. } => unreachable!("wars and choice cards are handled above"),
         }
         Ok(outcome)
     }
@@ -937,6 +990,34 @@ impl Game {
             action_round: self.status.action_round,
             side: Some(self.status.active),
             event: Event::EventResolved { result, vp_after },
+        });
+        self.log_game_over();
+        self.discard_or_remove_event_card();
+        if self.winner.is_none() {
+            self.advance();
+        }
+    }
+
+    /// Applies a resolved war — influence, VP, then the beneficiary's
+    /// Military Operations — logs it, discards (or removes) the card, and
+    /// hands the turn over unless that ended the game.
+    fn finish_war(&mut self, result: WarResult) {
+        self.log_card_selected();
+        for change in &result.influence {
+            self.board.set_influence(change.country, change.side, change.after);
+        }
+        self.apply_vp(result.vp_delta);
+        let track = match result.side {
+            Superpower::Us => &mut self.status.military_ops_us,
+            Superpower::Ussr => &mut self.status.military_ops_ussr,
+        };
+        *track = (*track + result.mil_ops).clamp(0, war::MIL_OPS_MAX);
+        let vp_after = self.status.vp;
+        self.log.push(LogEntry {
+            turn: self.status.turn,
+            action_round: self.status.action_round,
+            side: Some(self.status.active),
+            event: Event::War { result, vp_after },
         });
         self.log_game_over();
         self.discard_or_remove_event_card();
@@ -1053,6 +1134,7 @@ impl Game {
             Operation::Realign(r) => (OperationKind::Realign, r.history().len() as u8, r.ops_spent(), r.ops_total()),
             Operation::Coup(c) => (OperationKind::Coup, c.result().is_some() as u8, c.ops_spent(), c.ops_total()),
             Operation::Event(_) => unreachable!("an event closes through finish_effect, never log_close"),
+            Operation::War(_) => unreachable!("a war closes through finish_war, never log_close"),
         };
         push(Event::Closed { kind, committed, rolls, ops_spent, ops_total });
     }
@@ -1847,10 +1929,10 @@ mod tests {
         let me_scoring = cards.id_by_name("Middle East Scoring").unwrap();
 
         game.play_card(&cards, me_scoring).unwrap();
-        let outcome = game.play_event(&map, &cards).unwrap();
+        let outcome = game.play_event(&map, &cards, &mut crate::dice::Dice::from_seed(1)).unwrap();
         match outcome {
             EventOutcome::Scoring(result) => assert_eq!(result.vp_delta, -3),
-            EventOutcome::Effect(_) | EventOutcome::Pending { .. } => panic!("a scoring card should resolve as a scoring event"),
+            EventOutcome::Effect(_) | EventOutcome::War(_) | EventOutcome::Pending { .. } => panic!("a scoring card should resolve as a scoring event"),
         }
         assert_eq!(game.status().vp, -3, "presence-only USSR should cost the US side 3 VP");
         assert_eq!(game.card_in_play(), None, "the event should discard the card that funded it");
@@ -1868,7 +1950,7 @@ mod tests {
         let se_asia = cards.id_by_name("Southeast Asia Scoring").unwrap();
 
         game.play_card(&cards, se_asia).unwrap();
-        game.play_event(&map, &cards).unwrap();
+        game.play_event(&map, &cards, &mut crate::dice::Dice::from_seed(1)).unwrap();
         assert!(game.removed_from_game().contains(&se_asia));
         assert!(!game.discards().contains(&se_asia));
     }
@@ -1880,7 +1962,7 @@ mod tests {
         let mut game = Game::from_scenario(&scenario_with_extra_card(&map, &cards, Ussr, "Blockade"));
         let sg = play(&mut game, &cards, "Blockade");
         assert!(matches!(
-            game.play_event(&map, &cards),
+            game.play_event(&map, &cards, &mut crate::dice::Dice::from_seed(1)),
             Err(GameError::EventNotImplemented { card }) if card == sg
         ));
         // Refusing to resolve the event shouldn't have consumed it —
@@ -1905,7 +1987,7 @@ mod tests {
         let se_asia = cards.id_by_name("Southeast Asia Scoring").unwrap();
 
         game.play_card(&cards, se_asia).unwrap();
-        game.play_event(&map, &cards).unwrap();
+        game.play_event(&map, &cards, &mut crate::dice::Dice::from_seed(1)).unwrap();
         assert_eq!(game.status().vp, 20, "VP should clamp at +20, not overshoot to 26");
         assert_eq!(game.winner(), Some(Victory { side: Us, reason: VictoryReason::Vp }));
     }
@@ -1927,7 +2009,7 @@ mod tests {
         let se_asia = cards.id_by_name("Southeast Asia Scoring").unwrap();
 
         game.play_card(&cards, se_asia).unwrap();
-        game.play_event(&map, &cards).unwrap();
+        game.play_event(&map, &cards, &mut crate::dice::Dice::from_seed(1)).unwrap();
         assert_eq!(game.status().vp, -20, "VP should clamp at -20, not overshoot to -26");
         assert_eq!(game.winner(), Some(Victory { side: Ussr, reason: VictoryReason::Vp }));
     }
@@ -1941,7 +2023,7 @@ mod tests {
         let europe_scoring = cards.id_by_name("Europe Scoring").unwrap();
 
         game.play_card(&cards, europe_scoring).unwrap();
-        game.play_event(&map, &cards).unwrap();
+        game.play_event(&map, &cards, &mut crate::dice::Dice::from_seed(1)).unwrap();
         assert_eq!(game.winner(), Some(Victory { side: Ussr, reason: VictoryReason::EuropeControl }));
     }
 
@@ -1953,7 +2035,7 @@ mod tests {
         let mut game = Game::from_scenario(&scenario);
         let europe_scoring = cards.id_by_name("Europe Scoring").unwrap();
         game.play_card(&cards, europe_scoring).unwrap();
-        game.play_event(&map, &cards).unwrap();
+        game.play_event(&map, &cards, &mut crate::dice::Dice::from_seed(1)).unwrap();
         let active_before = game.active();
 
         assert!(matches!(game.play_card(&cards, cards.id_by_name("Fidel").unwrap()), Err(GameError::GameOver)));
@@ -1969,7 +2051,7 @@ mod tests {
         let mut game = Game::from_scenario(&scenario);
         let europe_scoring = cards.id_by_name("Europe Scoring").unwrap();
         game.play_card(&cards, europe_scoring).unwrap();
-        game.play_event(&map, &cards).unwrap();
+        game.play_event(&map, &cards, &mut crate::dice::Dice::from_seed(1)).unwrap();
 
         let events: Vec<&Event> = game.log().entries().iter().map(|e| &e.event).collect();
         assert_eq!(events.len(), 3, "expected exactly Selected, Scored, GameOver: {events:?}");
@@ -1986,7 +2068,7 @@ mod tests {
         let mut game = Game::from_scenario(&scenario);
         let europe_scoring = cards.id_by_name("Europe Scoring").unwrap();
         game.play_card(&cards, europe_scoring).unwrap();
-        game.play_event(&map, &cards).unwrap();
+        game.play_event(&map, &cards, &mut crate::dice::Dice::from_seed(1)).unwrap();
 
         let ahead = game.lookahead();
         assert_eq!(ahead.winner(), game.winner());

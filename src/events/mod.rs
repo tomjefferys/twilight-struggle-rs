@@ -24,10 +24,12 @@
 pub mod choice;
 pub mod effects;
 pub mod scoring;
+pub mod war;
 
 pub use choice::EventChoice;
 pub use effects::EffectResult;
 pub use scoring::ScoringResult;
+pub use war::{War, WarResult};
 
 use crate::board::Board;
 use crate::cards::CardId;
@@ -39,6 +41,8 @@ use crate::status::GameStatus;
 pub enum EventOutcome {
     Scoring(ScoringResult),
     Effect(EffectResult),
+    /// A war card with a single possible target, rolled on the spot.
+    War(WarResult),
     /// A choice card's event has opened a session for `chooser` to work
     /// through — nothing has changed yet.
     Pending { card: CardId, chooser: crate::country::Superpower },
@@ -49,7 +53,17 @@ pub enum EventOutcome {
 /// and what [`crate::game::Game::legal_actions`] checks before
 /// offering `Action::Event` for a card in play.
 pub fn is_implemented(card: CardId) -> bool {
-    scoring::is_scoring_card(card) || effects::is_effect_card(card) || choice::is_choice_card(card)
+    scoring::is_scoring_card(card) || effects::is_effect_card(card) || choice::is_choice_card(card) || war::is_war_card(card)
+}
+
+/// The card whose event stops `card`'s from being played, if it has
+/// already been played (i.e. is in `removed`) — the first modelled
+/// "prevents" clause: #65 Camp David Accords bars #13 Arab-Israeli War.
+pub fn is_prevented(card: CardId, removed: &[CardId]) -> Option<CardId> {
+    match card.0 {
+        13 => removed.iter().copied().find(|c| c.0 == 65),
+        _ => None,
+    }
 }
 
 /// Resolves `card`'s event against `(map, board)` — `None` for a card

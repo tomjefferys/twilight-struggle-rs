@@ -134,6 +134,7 @@ fn action_and_detail(map: &WorldMap, cards: &CardCatalog, entry: &LogEntry) -> (
         Event::Note(text) => ("note", text.clone()),
         Event::Scored { result, vp_after } => ("score", scored_detail(map, cards, result, *vp_after)),
         Event::EventResolved { result, vp_after } => ("event", event_detail(map, cards, result, *vp_after)),
+        Event::War { result, vp_after } => ("war", war_detail(map, cards, result, *vp_after)),
         Event::GameOver(victory) => ("gameover", game_over_detail(*victory)),
     }
 }
@@ -299,6 +300,30 @@ fn event_detail(map: &WorldMap, cards: &CardCatalog, result: &EffectResult, vp_a
     }
     let body = if parts.is_empty() { "no effect".to_string() } else { parts.join(", ") };
     format!("{}: {body}", cards.card(result.card).name)
+}
+
+/// `Korean War → South Korea: d6:4 mod:-1 need:4+ → fails ...`, tagged like
+/// every other roll line.
+fn war_detail(map: &WorldMap, cards: &CardCatalog, result: &crate::events::WarResult, vp_after: i8) -> String {
+    let mut parts = vec![format!(
+        "{} → {}: {} d6:{} mod:{:+} sum:{} need:{}+ — {}",
+        cards.card(result.card).name,
+        map.country(result.target).name,
+        result.side,
+        result.die,
+        result.modifier.total(),
+        result.modified(),
+        result.success_min,
+        if result.success { "WINS" } else { "fails" },
+    )];
+    for c in &result.influence {
+        parts.push(format!("{} {} {}→{}", map.country(c.country).name, c.side, c.before, c.after));
+    }
+    if result.vp_delta != 0 {
+        parts.push(format!("{:+} VP (now {vp_after})", result.vp_delta));
+    }
+    parts.push(format!("{} mil ops +{}", result.side, result.mil_ops));
+    parts.join(", ")
 }
 
 fn game_over_detail(victory: Victory) -> String {

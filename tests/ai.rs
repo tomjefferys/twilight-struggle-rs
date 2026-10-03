@@ -48,7 +48,7 @@ fn assert_legal_actions_are_exact(game: &Game, map: &WorldMap, cards: &CardCatal
         assert_eq!(actual, expected, "Begin({kind:?}) disagreement");
     }
 
-    let expected_event = game.lookahead().play_event(map, cards).is_ok();
+    let expected_event = game.lookahead().play_event(map, cards, &mut twilight_struggle::Dice::from_seed(1)).is_ok();
     assert_eq!(legal.contains(&Action::Event), expected_event, "Event disagreement");
 
     for (id, _) in map.iter() {
@@ -240,7 +240,7 @@ fn a_finished_game_lists_no_legal_actions() {
     let scoring = cards.id_by_name("Europe Scoring").unwrap();
 
     game.play_card(&cards, scoring).unwrap();
-    game.play_event(&map, &cards).unwrap();
+    game.play_event(&map, &cards, &mut twilight_struggle::Dice::from_seed(1)).unwrap();
     assert!(game.winner().is_some());
     assert!(game.legal_actions(&map, &cards).is_empty());
 }
@@ -281,7 +281,7 @@ fn the_ai_makes_the_choices_for_its_own_card_when_the_human_is_phasing() {
     scenario.hands.push_to_hand(Superpower::Us, comecon);
     let mut game = Game::from_scenario(&scenario);
     game.play_card(&cards, comecon).unwrap();
-    game.play_event(&map, &cards).unwrap();
+    game.play_event(&map, &cards, &mut twilight_struggle::Dice::from_seed(1)).unwrap();
     assert_eq!(game.active(), Superpower::Us);
     assert_eq!(game.decider(), Superpower::Ussr);
 

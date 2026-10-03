@@ -7,7 +7,7 @@ use crate::map::WorldMap;
 use crate::ops::Operation;
 
 use super::chip::{ChipGrid, ChipRole, REGION_CHIP_W};
-use super::{coup_odds_line, coup_target_line_with, modifier_line, odds_line, operation_balance_line, Canvas, Color, Style, BEGIN_HINT};
+use super::{coup_odds_line, coup_target_line_with, modifier_line, odds_line, operation_balance_line, war_line, Canvas, Color, Style, BEGIN_HINT};
 
 const LEFT_MARGIN: usize = 2;
 const TOP_MARGIN: usize = 2; // title line + blank
@@ -31,6 +31,7 @@ const REALIGN_HINT: &str = "←→↑↓ select · Enter target · ⌫ abandon �
 /// Shown instead of [`SELECTION_HINT`], once a [`Coup`](crate::ops::Coup) is
 /// in progress. Same reasoning as [`REALIGN_HINT`] — the attempt itself
 /// only happens on the country screen.
+const WAR_HINT: &str = "←→↑↓ select · Enter target · ⌫ abandon · Esc back";
 const COUP_HINT: &str = "←→↑↓ select · Enter target · ⌫ abandon · c done · Esc back";
 
 /// Shown while an event's choices are open: `+`/`-` act on the selected
@@ -236,6 +237,11 @@ fn build_footer_lines(
             lines.push((modifier_line(realignment.side().opponent(), &opposing), Style::color(Color::Muted)));
             lines.push((odds_line(realignment.side(), &odds), Style::color(Color::Muted)));
         }
+        if let (Operation::War(war), Some(id)) = (operation, selected)
+            && war.is_legal_target(map, id)
+        {
+            lines.push((war_line(map, board, war, id), Style::color(Color::Selected)));
+        }
         if let (Operation::Coup(coup), Some(id)) = (operation, selected) {
             let (target_number, odds) = coup.preview(map, board, id);
             lines.push((
@@ -263,6 +269,7 @@ fn build_footer_lines(
             Some(Operation::Realign(_)) => REALIGN_HINT.to_string(),
             Some(Operation::Coup(_)) => COUP_HINT.to_string(),
             Some(Operation::Event(_)) => EVENT_HINT.to_string(),
+            Some(Operation::War(_)) => WAR_HINT.to_string(),
             None => format!("{SELECTION_HINT} · {BEGIN_HINT}"),
         };
         lines.push((hint, Style::color(Color::Muted)));

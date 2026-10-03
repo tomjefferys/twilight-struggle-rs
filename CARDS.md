@@ -4,11 +4,12 @@ Which of the 110 cards have their **event** implemented (`events::is_implemented
 Every card can already be played for its ops value; this tracks the event text only.
 `tests/cards_progress.rs` fails if a ✅ here disagrees with the code, so update both together.
 
-**Implemented: 55 / 110**
+**Implemented: 60 / 110**
 
 - `events::scoring` — the seven scoring cards.
 - `events::effects` — fixed influence / VP / DEFCON effects with no choices or die rolls.
 - `events::ongoing` effects (in `events::effects`, plus #94 in `events::choice`) — cards whose event lasts for the rest of the turn; see `src/ongoing.rs`.
+- `events::war` — the five war cards (die roll against a target; Military Ops tracked in `GameStatus`; see `src/events/war.rs`).
 - `events::choice` — cards where a player picks the countries (the card's own side chooses, whoever is phasing). #106 NORAD is an ongoing end-of-AR trigger, not a choice, and is still pending.
 
 | # | Card | Side | Event | Notes |
@@ -23,9 +24,9 @@ Every card can already be played for its ops value; this tracks the event text o
 | 8 | Fidel | USSR | ✅ |  |
 | 9 | Vietnam Revolts | USSR | ✅ | Turn-long: +1 ops for a card spent wholly in Southeast Asia |
 | 10 | Blockade | USSR |  |  |
-| 11 | Korean War | USSR |  |  |
+| 11 | Korean War | USSR | ✅ | War: roll 4+ (−1 per US-controlled neighbour); +2 VP, replaces US influence |
 | 12 | Romanian Abdication | USSR | ✅ |  |
-| 13 | Arab-Israeli War | USSR |  |  |
+| 13 | Arab-Israeli War | USSR | ✅ | War; can't be played after #65 (modelled) |
 | 14 | Comecon | USSR | ✅ | Choice |
 | 15 | Nasser | USSR | ✅ |  |
 | 16 | Warsaw Pact Formed | USSR | ✅ | Choice (2 modes); NATO-allow clause pending #21 |
@@ -36,7 +37,7 @@ Every card can already be played for its ops value; this tracks the event text o
 | 21 | NATO | US |  |  |
 | 22 | Independent Reds | US | ✅ | Choice |
 | 23 | Marshall Plan | US | ✅ | Choice; NATO-allow clause pending #21 |
-| 24 | Indo-Pakistani War | Both |  |  |
+| 24 | Indo-Pakistani War | Both | ✅ | War (choose India/Pakistan) |
 | 25 | Containment | US | ✅ | Turn-long: US ops +1 (max 4) |
 | 26 | CIA Created | US |  |  |
 | 27 | US/Japan Mutual Defense Pact | US |  |  |
@@ -48,7 +49,7 @@ Every card can already be played for its ops value; this tracks the event text o
 | 33 | De-Stalinization | USSR | ✅ | Choice ('may'); balanced reallocation |
 | 34 | Nuclear Test Ban | Both | ✅ |  |
 | 35 | Formosan Resolution | US |  |  |
-| 36 | Brush War | Both |  |  |
+| 36 | Brush War | Both | ✅ | War (stability ≤ 2 target, 3+ wins, 1 VP); NATO clause pending #21 |
 | 37 | Central America Scoring | Both | ✅ |  |
 | 38 | Southeast Asia Scoring | Both | ✅ |  |
 | 39 | Arms Race | Both |  |  |
@@ -77,7 +78,7 @@ Every card can already be played for its ops value; this tracks the event text o
 | 62 | “Lone Gunman” | USSR |  |  |
 | 63 | Colonial Rear Guards | US | ✅ | Choice |
 | 64 | Panama Canal Returned | US | ✅ |  |
-| 65 | Camp David Accords | US | ✅ | 'prevents #13' clause pending #13 |
+| 65 | Camp David Accords | US | ✅ | 'prevents #13' clause modelled |
 | 66 | Puppet Governments | US | ✅ | Choice ('may') |
 | 67 | Grain Sales to Soviets | US |  |  |
 | 68 | John Paul II Elected Pope | US | ✅ | 'allows #101' clause pending #101 |
@@ -114,7 +115,7 @@ Every card can already be played for its ops value; this tracks the event text o
 | 99 | Pershing II Deployed | USSR |  |  |
 | 100 | Wargames | Both |  |  |
 | 101 | Solidarity | US |  |  |
-| 102 | Iran-Iraq War | Both |  |  |
+| 102 | Iran-Iraq War | Both | ✅ | War (choose Iran/Iraq) |
 | 103 | Defectors | US |  |  |
 | 104 | The Cambridge Five | USSR |  |  |
 | 105 | Special Relationship | US | ✅ | Choice; only the 'UK US-controlled, NATO not in effect' branch (NATO is pending #21) |
