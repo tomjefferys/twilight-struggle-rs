@@ -1012,8 +1012,12 @@ uniformly random legal moves.
   global digits `1`-`9` choose a mode (`Game::choose_mode`). The status bar
   names the *chooser* as the side to act, in their colour; chips show
   `+N`/`-N` for what's been staged (in the moved side's colour) and dim
-  `↑N`/`↓N` for what each eligible country can still take, ineligible ones
-  are dimmed, and the region footer/country panel spell out what `+`/`-`
+  `↑N`/`↓N` for what each eligible country can still take. A chip the
+  chooser can act on gets a double-line border (`Canvas::draw_double_box`,
+  so it reads without colour), bold in its own region's tint; every other chip
+  is muted all over, frame and numbers included; on the world map a live
+  country's flag slot shows `+`/`-` (the next step's sign, `~` once
+  changed) and the rest are muted. The footers carry a legend, and the region footer/country panel spell out what `+`/`-`
   would do on the selected one (`EventChoice::hint`). Confirming queues
   the same `Modal::Event` an immediate effect card does.
   `run` also takes `ai_side: Option<Superpower>` and `&mut RandomAi`,

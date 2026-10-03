@@ -217,6 +217,13 @@ impl Canvas {
         self.draw_box_glyphs(row, col, w, h, style, ['┏', '┓', '┗', '┛', '━', '┃']);
     }
 
+    /// The same box again with double-line characters — what a chip an
+    /// open event can act on is drawn with, so "eligible" is a shape too,
+    /// not just a colour (visible under [`ColorMode::Never`]).
+    pub fn draw_double_box(&mut self, row: usize, col: usize, w: usize, h: usize, style: Style) {
+        self.draw_box_glyphs(row, col, w, h, style, ['╔', '╗', '╚', '╝', '═', '║']);
+    }
+
     /// A `├── Title ───┤` row inside an existing box: the section
     /// separator the country view's panels are built from. `title` is
     /// written two columns in, with a space either side; passing `""`

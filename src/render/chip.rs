@@ -99,20 +99,46 @@ impl ChipGrid {
         let (row, col) = self.pos(cell);
         let country = map.country(id);
         let tint = Style::color(region_color(country.region));
-        let frame_style = if role == ChipRole::Selected { Style::color(Color::Selected).bold() } else { tint };
+        // While an event's choices are open, every chip says whether the
+        // chooser can act on it: an eligible one gets a bold double-line
+        // border in its own region's tint (the chooser is named by the
+        // footer and status bar already), an ineligible one is muted all
+        // over (frame, name, numbers) so the live ones stand out at a glance.
+        let event = match op {
+            Some(operation @ Operation::Event(_)) => Some(operation.is_legal_target(map, board, id)),
+            _ => None,
+        };
+        let ineligible = event == Some(false);
+        let frame_style = match (role, event) {
+            (ChipRole::Selected, _) => Style::color(Color::Selected).bold(),
+            (_, Some(true)) => tint.bold(),
+            (_, Some(false)) => Style::color(Color::Muted),
+            _ => tint,
+        };
         if role == ChipRole::Selected {
             canvas.draw_thick_box(row, col, self.chip_w, CHIP_H, frame_style);
+        } else if event == Some(true) {
+            canvas.draw_double_box(row, col, self.chip_w, CHIP_H, frame_style);
         } else {
             canvas.draw_box(row, col, self.chip_w, CHIP_H, frame_style);
         }
 
-        let flag_style = if country.battleground { Style::color(Color::Battleground) } else { frame_style };
+        let flag_style = if ineligible {
+            Style::color(Color::Muted)
+        } else if country.battleground {
+            Style::color(Color::Battleground)
+        } else {
+            frame_style
+        };
         canvas.put_char(row + 1, col + 1, if country.battleground { '*' } else { ' ' }, flag_style);
         // A `Foreign` chip is never a target from whichever screen is
         // showing it (a region view's guest, or any neighbour on the
         // country view's mini-map), so illegality never dims its name —
         // only a `Native` chip's can be.
-        let legal = role != ChipRole::Native || op.is_none_or(|o| o.is_legal_target(map, board, id));
+        let legal = match event {
+            Some(eligible) => eligible,
+            None => role != ChipRole::Native || op.is_none_or(|o| o.is_legal_target(map, board, id)),
+        };
         let name_style = if legal { frame_style } else { Style::color(Color::Muted) };
         canvas.put(row + 1, col + 2, label, name_style);
 
@@ -125,8 +151,9 @@ impl ChipGrid {
             Some(Superpower::Ussr) => Style::color(Color::Ussr),
             None => Style::default(),
         };
-        let us_style = if us > 0 { Style::color(Color::Us) } else { Style::color(Color::Muted) };
-        let ussr_style = if ussr > 0 { Style::color(Color::Ussr) } else { Style::color(Color::Muted) };
+        let us_style = if us > 0 && !ineligible { Style::color(Color::Us) } else { Style::color(Color::Muted) };
+        let ussr_style = if ussr > 0 && !ineligible { Style::color(Color::Ussr) } else { Style::color(Color::Muted) };
+        let sep_style = if ineligible { Style::color(Color::Muted) } else { sep_style };
 
         canvas.put(row + 2, col + 1, &format!("{:>2}", nz(us)), us_style);
         canvas.put_char(row + 2, col + 3, sep, sep_style);

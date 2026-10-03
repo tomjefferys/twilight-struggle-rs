@@ -1079,3 +1079,42 @@ fn the_country_view_shows_the_event_prompt_and_hint() {
     assert!(text.contains("add 1 USSR influence to each of 4"), "{text}");
     assert!(text.contains("+ add"), "{text}");
 }
+
+#[test]
+fn eligible_chips_get_a_double_border_and_ineligible_ones_do_not() {
+    let (map, layout, board, op, hungary) = comecon_session();
+    let text = render_region(&map, &layout, &board, Region::Europe, Some(hungary), Some(&op)).render(ColorMode::Never);
+    // Eligible Eastern European chips: East Germany, Czechoslovakia, Romania,
+    // Bulgaria, Yugoslavia, Finland, Austria (Hungary is the thick selection;
+    // Poland is US-controlled).
+    assert_eq!(text.matches('╔').count(), 7, "{text}");
+    let east_germany = line_containing(&text, "E.Germany");
+    assert!(!east_germany.is_empty());
+    // Western Europe is outside Comecon's reach: plain single borders.
+    let france = text.lines().position(|l| l.contains("France")).unwrap();
+    let col = text.lines().nth(france).unwrap().chars().position(|c| c == '*').unwrap() - 1; // the chip's left border
+    let top_left = text.lines().nth(france - 1).unwrap().chars().nth(col).unwrap();
+    assert_eq!(top_left, '┌', "France's top border should be single-line");
+}
+
+#[test]
+fn an_ineligible_chip_is_muted_all_over_not_just_its_name() {
+    let (map, layout, board, op, hungary) = comecon_session();
+    let text = render_region(&map, &layout, &board, Region::Europe, Some(hungary), Some(&op)).render(ColorMode::Always);
+    let france = text.lines().position(|l| l.contains("France")).unwrap();
+    for offset in [0usize, 1] {
+        let line = text.lines().nth(france - 1 + offset).unwrap();
+        assert!(line.contains("\x1b[2m") || line.contains(";2m"), "row {offset} of France's chip should be dimmed: {line:?}");
+    }
+}
+
+#[test]
+fn the_world_map_marks_live_countries_during_an_event_and_dims_the_rest() {
+    use twilight_struggle::render::render_world_map;
+    let (map, layout, board, op, _) = comecon_session();
+    let text = render_world_map(&map, &layout, &board, None, Some(&op)).render(ColorMode::Never);
+    let code = |name: &str| layout.code(map.id_by_name(name).unwrap()).to_string();
+    assert!(text.contains(&format!("+{}", code("Romania"))), "an eligible country is flagged `+`: {text}");
+    assert!(text.contains(&format!("~{}", code("Hungary"))), "a changed country is flagged `~`");
+    assert!(text.contains("not eligible"), "the legend explains the dimming");
+}

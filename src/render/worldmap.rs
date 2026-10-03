@@ -155,6 +155,9 @@ fn footer_lines(
     if let Some(operation) = op {
         lines.push((operation_balance_line(layout, board, operation), Style::color(Color::Selected)));
     }
+    if let Some(Operation::Event(_)) = op {
+        lines.push(("+/- on a country: can add/remove there · ~ changed · dim: not eligible".to_string(), Style::color(Color::Muted)));
+    }
     if selected.is_some() {
         let hint = match op {
             Some(Operation::Influence(_)) => WORLD_PLACEMENT_HINT.to_string(),
@@ -330,6 +333,17 @@ fn draw_chip(
     if bold || touched {
         style = style.bold();
     }
+    // An open event: a country its chooser can act on is bold, anything
+    // else is muted, so the live ones stand out on the overview.
+    let event_eligible = match op {
+        Some(operation @ Operation::Event(_)) => Some(operation.is_legal_target(map, board, id)),
+        _ => None,
+    };
+    match event_eligible {
+        Some(true) => style = style.bold(),
+        Some(false) if !touched => style = Style::color(Color::Muted),
+        _ => {}
+    }
     // Centre the chip (flag + code) on its geographic point rather than
     // left-aligning from it — left-aligned, every label reads as sitting
     // to the right of where it's actually placed, which is most obvious
@@ -342,6 +356,11 @@ fn draw_chip(
         Some(Operation::Realign(_)) if touched => '!',
         Some(Operation::Coup(_)) if touched => '#',
         Some(Operation::Event(_)) if touched => '~',
+        // Not yet touched but live: `+` if the next step adds, `-` if it removes.
+        Some(Operation::Event(e)) if event_eligible == Some(true) => match e.suggestion(map, id) {
+            Some((crate::events::choice::Sign::Minus, _)) => '-',
+            _ => '+',
+        },
         _ if country.battleground => '*',
         _ => ' ',
     };

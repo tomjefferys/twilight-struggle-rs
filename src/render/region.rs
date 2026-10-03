@@ -36,7 +36,7 @@ const COUP_HINT: &str = "←→↑↓ select · Enter target · ⌫ abandon · c
 /// Shown while an event's choices are open: `+`/`-` act on the selected
 /// country, `1`/`2` pick a mode on a card that has two.
 /// What the small marks on a chip mean while an event's choices are open.
-const EVENT_LEGEND: &str = "↑N / ↓N on a country: it can take N more added / removed · +N / -N: staged so far";
+const EVENT_LEGEND: &str = "double border: can act here · dim: not eligible · ↑N/↓N: can add/remove N · +N/-N: staged";
 const EVENT_HINT: &str = "←→↑↓ select · Enter open · + add · - remove · u undo · 1/2 mode · ⌫ abandon · c done";
 
 /// A geographic zoom into one region: every country in it drawn as a box
