@@ -7,7 +7,7 @@ use rustyline::Editor;
 
 use twilight_struggle::render::{
     coup_result_line, game_over_line, log_entry_line, log_text, operation_abandoned_line, operation_balance_line, render_card,
-    render_country, render_hand, render_log, render_region, render_scoring_result, render_world, render_world_map, roll_result_line,
+    render_country, render_event_result, render_hand, render_log, render_region, render_scoring_result, render_world, render_world_map, roll_result_line,
 };
 use twilight_struggle::{
     ai, CardCatalog, CardFound, CardId, ColorMode, Dice, EventOutcome, Found, Game, GameError, GameStatus, MapLayout, Operation,
@@ -913,6 +913,12 @@ fn run_event_command(session: &mut Session) {
             if let Some(victory) = session.game.winner() {
                 println!("{}", game_over_line(victory));
             }
+        }
+        Ok(EventOutcome::Effect(result)) => {
+            let vp_after = session.game.status().vp;
+            let winner = session.game.winner();
+            let canvas = render_event_result(&session.map, &session.cards, &result, vp_after, winner, None);
+            println!("{}", canvas.render(session.color));
         }
         Err(e) => println!("{e}"),
     }

@@ -13,7 +13,7 @@
 use crate::cards::{CardCatalog, CardId};
 use crate::country::{CountryId, Superpower};
 use crate::events::scoring::{ScoringKind, SideScore, Tier};
-use crate::events::ScoringResult;
+use crate::events::{EffectResult, ScoringResult};
 use crate::game::{OperationKind, Victory, VictoryReason};
 use crate::log::{Event, GameLog, LogEntry};
 use crate::map::WorldMap;
@@ -132,6 +132,7 @@ fn action_and_detail(map: &WorldMap, cards: &CardCatalog, entry: &LogEntry) -> (
         Event::Edit { country, side, before, after } => ("edit", edit_detail(map, *country, *side, *before, *after)),
         Event::Note(text) => ("note", text.clone()),
         Event::Scored { result, vp_after } => ("score", scored_detail(map, cards, result, *vp_after)),
+        Event::EventResolved { result, vp_after } => ("event", event_detail(map, cards, result, *vp_after)),
         Event::GameOver(victory) => ("gameover", game_over_detail(*victory)),
     }
 }
@@ -260,10 +261,29 @@ fn scored_detail(map: &WorldMap, cards: &CardCatalog, result: &ScoringResult, vp
     format!("{name}: {body} -> {:+} VP (now {vp_after})", result.vp_delta)
 }
 
+/// `Fidel: Cuba US 1→0, Cuba USSR 0→3 · +2 VP (now 5)` — only the parts
+/// the card actually changed, so a VP-only card is just its VP.
+fn event_detail(map: &WorldMap, cards: &CardCatalog, result: &EffectResult, vp_after: i8) -> String {
+    let mut parts: Vec<String> = result
+        .influence
+        .iter()
+        .map(|c| format!("{} {} {}→{}", map.country(c.country).name, c.side, c.before, c.after))
+        .collect();
+    if let Some((before, after)) = result.defcon {
+        parts.push(format!("DEFCON {before}→{after}"));
+    }
+    if result.vp_delta != 0 {
+        parts.push(format!("{:+} VP (now {vp_after})", result.vp_delta));
+    }
+    let body = if parts.is_empty() { "no effect".to_string() } else { parts.join(", ") };
+    format!("{}: {body}", cards.card(result.card).name)
+}
+
 fn game_over_detail(victory: Victory) -> String {
     let reason = match victory.reason {
         VictoryReason::Vp => "VP",
         VictoryReason::EuropeControl => "Europe control",
+        VictoryReason::Defcon => "DEFCON 1",
     };
     format!("{} wins ({reason})", victory.side)
 }

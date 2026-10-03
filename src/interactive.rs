@@ -14,9 +14,10 @@ use crossterm::{execute, queue};
 
 use twilight_struggle::render::{
     log_entry_line, operation_abandoned_line, operation_closed_line, operation_header, render_card, render_country, render_hand,
-    render_region, render_roll_result, render_scoring_result, render_status_bar, render_world_map, Canvas, RollReport, HAND_ROWS,
+    render_event_result, render_region, render_roll_result, render_scoring_result, render_status_bar, render_world_map, Canvas, RollReport, HAND_ROWS,
 };
-use twilight_struggle::events::ScoringResult;
+use twilight_struggle::events::{EffectResult, ScoringResult};
+use twilight_struggle::game::Victory;
 use twilight_struggle::{
     ai, Board, CardCatalog, CardId, ColorMode, CountryId, Dice, Direction, Event, EventOutcome, Game, GameError, LogEntry, MapLayout,
     OperationKind, RandomAi, Region, RollOutcome, Superpower, ViewMode, WorldMap, CHINA_CARD,
@@ -36,6 +37,10 @@ enum Modal {
     /// only carries the *change*, the same split `RollReport` keeps
     /// between a roll's own result and the `before` state it needs.
     Score(ScoringResult, i8),
+    /// A fixed-effect card's result, the VP track's new value, and the
+    /// winner if the event just ended the game (the result alone doesn't
+    /// say — a DEFCON-1 loss, say, isn't visible in it).
+    Event(EffectResult, i8, Option<Victory>),
 }
 
 /// Which screen is currently showing.
@@ -271,6 +276,11 @@ pub fn run(
                             zoomed = false;
                             modal.push_back(Modal::Score(result, vp_after));
                         }
+                        Ok(EventOutcome::Effect(result)) => {
+                            let vp_after = game.status().vp;
+                            zoomed = false;
+                            modal.push_back(Modal::Event(result, vp_after, game.winner()));
+                        }
                         Err(e) => message = Some(e.to_string()),
                     },
                     KeyCode::Char('p') => {
@@ -502,7 +512,7 @@ fn reconstruct_roll_reports(board: &Board, entries: &[LogEntry]) -> Vec<RollRepo
 /// costs nothing and stays correct if that ever changes.
 fn queue_turn_modals(modal: &mut VecDeque<Modal>, board: &Board, entries: &[LogEntry]) {
     let mut rolls = reconstruct_roll_reports(board, entries).into_iter();
-    for entry in entries {
+    for (i, entry) in entries.iter().enumerate() {
         match &entry.event {
             Event::Realign(_) | Event::Coup(_) => {
                 if let Some(report) = rolls.next() {
@@ -511,6 +521,13 @@ fn queue_turn_modals(modal: &mut VecDeque<Modal>, board: &Board, entries: &[LogE
             }
             Event::Scored { result, vp_after } => {
                 modal.push_back(Modal::Score(result.clone(), *vp_after));
+            }
+            Event::EventResolved { result, vp_after } => {
+                let winner = match entries.get(i + 1).map(|e| &e.event) {
+                    Some(Event::GameOver(victory)) => Some(*victory),
+                    _ => None,
+                };
+                modal.push_back(Modal::Event(result.clone(), *vp_after, winner));
             }
             _ => {}
         }
@@ -697,6 +714,7 @@ fn draw(
         let modal_canvas = match front {
             Modal::Roll(report) => render_roll_result(map, report, queue_pos),
             Modal::Score(result, vp_after) => render_scoring_result(map, cards, result, *vp_after, queue_pos),
+            Modal::Event(result, vp_after, winner) => render_event_result(map, cards, result, *vp_after, *winner, queue_pos),
         };
         blit_centred(&mut canvas, &modal_canvas);
     }

@@ -68,9 +68,9 @@ impl Game {
     /// and the China Card isn't available — still safe, `Pass` alone
     /// covers it); with a card in play but no operation, a scoring card
     /// offers only `Event` (it has no ops `Begin` could spend) and every
-    /// other card offers all three `Begin` kinds (no event is implemented
-    /// for one of those yet — see [`events::is_implemented`] — so `Event`
-    /// itself isn't offered); with an operation open, `Confirm` is always
+    /// other card offers all three `Begin` kinds, plus `Event` too when
+    /// [`events::is_implemented`] recognises it (whichever side's card it is);
+    /// with an operation open, `Confirm` is always
     /// legal even if nothing on the board can be touched yet.
     pub fn legal_actions(&self, map: &WorldMap, cards: &CardCatalog) -> Vec<Action> {
         if self.winner().is_some() {
@@ -115,7 +115,8 @@ impl Game {
                     }
                     // A scoring card has no ops for `Begin` to spend —
                     // `Event` (pushed above, since every scoring card is
-                    // implemented) is the only way to play one.
+                    // implemented) is the only way to play one. Any other
+                    // card can offer both.
                     if !cards.card(id).scoring {
                         actions.push(Action::Begin(OperationKind::Influence));
                         actions.push(Action::Begin(OperationKind::Realign));

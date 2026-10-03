@@ -1,0 +1,200 @@
+{
+  "states": [
+    {
+      "name": "duck-and-cover",
+      "description": "DEFCON 3: Duck and Cover degrades it to 2 and the US receives 5-2 = 3 VP. US to act.",
+      "status": {"active": "Us", "defcon": 3},
+      "hands": {"us": ["Duck and Cover"], "ussr": ["Fidel"]}
+    },
+    {
+      "name": "duck-and-cover-defcon-1-loses",
+      "description": "DEFCON 2: Duck and Cover degrades it to 1 - nuclear war, so the US (who played it) loses the game, and the 4 VP it would have scored don't matter. US to act.",
+      "status": {"active": "Us", "defcon": 2},
+      "hands": {"us": ["Duck and Cover"], "ussr": ["Fidel"]}
+    },
+    {
+      "name": "fidel",
+      "description": "Cuba holds US 2 / USSR 1. Fidel removes all US influence and raises the USSR to stability (3) for Control. USSR to act.",
+      "status": {"active": "Ussr"},
+      "influence": {
+        "Cuba": [2, 1]
+      },
+      "hands": {"us": ["NATO"], "ussr": ["Fidel"]}
+    },
+    {
+      "name": "fidel-ussr-already-above-stability",
+      "description": "Cuba holds US 1 / USSR 5. Fidel removes the US influence and adds nothing, since the USSR is already past stability (3). USSR to act.",
+      "status": {"active": "Ussr"},
+      "influence": {
+        "Cuba": [1, 5]
+      },
+      "hands": {"us": ["NATO"], "ussr": ["Fidel"]}
+    },
+    {
+      "name": "romanian-abdication",
+      "description": "Romania holds US 2 / USSR 0. Removes all US influence, USSR raised to stability (3). USSR to act.",
+      "status": {"active": "Ussr"},
+      "influence": {
+        "Romania": [2, 0]
+      },
+      "hands": {"us": ["NATO"], "ussr": ["Romanian Abdication"]}
+    },
+    {
+      "name": "nasser-rounds-up",
+      "description": "Egypt holds US 3 / USSR 0. Nasser adds 2 USSR, then the US removes half rounded up (2 of 3), leaving US 1 / USSR 2. USSR to act.",
+      "status": {"active": "Ussr"},
+      "influence": {
+        "Egypt": [3, 0]
+      },
+      "hands": {"us": ["NATO"], "ussr": ["Nasser"]}
+    },
+    {
+      "name": "de-gaulle-leads-france",
+      "description": "France holds US 3 / USSR 0: removes 2 US, adds 1 USSR, leaving US 1 / USSR 1. USSR to act.",
+      "status": {"active": "Ussr"},
+      "influence": {
+        "France": [3, 0]
+      },
+      "hands": {"us": ["NATO"], "ussr": ["De Gaulle Leads France"]}
+    },
+    {
+      "name": "nuclear-test-ban-us-defcon-4",
+      "description": "DEFCON 4: the US receives 4-2 = 2 VP, then DEFCON improves by 2 but caps at 5. US to act.",
+      "status": {"active": "Us", "defcon": 4},
+      "hands": {"us": ["Nuclear Test Ban"], "ussr": ["Fidel"]}
+    },
+    {
+      "name": "nuclear-test-ban-ussr-defcon-3",
+      "description": "DEFCON 3, VP 0: the USSR (playing it) receives 3-2 = 1 VP, so VP goes to -1, and DEFCON improves to 5. USSR to act.",
+      "status": {"active": "Ussr", "vp": 0, "defcon": 3},
+      "hands": {"us": ["NATO"], "ussr": ["Nuclear Test Ban"]}
+    },
+    {
+      "name": "kitchen-debates-us-ahead",
+      "description": "The US controls France (battleground), the USSR controls none, so the US gets 2 VP. US to act.",
+      "status": {"active": "Us"},
+      "influence": {
+        "France": [3, 0]
+      },
+      "hands": {"us": ["Kitchen Debates"], "ussr": ["Fidel"]}
+    },
+    {
+      "name": "kitchen-debates-tied",
+      "description": "US and USSR each control one battleground: no VP. US to act.",
+      "status": {"active": "Us"},
+      "influence": {
+        "France": [3, 0],
+        "East Germany": [0, 3]
+      },
+      "hands": {"us": ["Kitchen Debates"], "ussr": ["Fidel"]}
+    },
+    {
+      "name": "portuguese-empire-crumbles",
+      "description": "Empty board: adds 2 USSR to each of Angola and SE African States. USSR to act.",
+      "status": {"active": "Ussr"},
+      "hands": {"us": ["NATO"], "ussr": ["Portuguese Empire Crumbles"]}
+    },
+    {
+      "name": "allende",
+      "description": "Empty board: adds 2 USSR to Chile. USSR to act.",
+      "status": {"active": "Ussr"},
+      "hands": {"us": ["NATO"], "ussr": ["Allende"]}
+    },
+    {
+      "name": "panama-canal-returned",
+      "description": "Empty board: adds 1 US to each of Panama, Costa Rica and Venezuela. US to act.",
+      "status": {"active": "Us"},
+      "hands": {"us": ["Panama Canal Returned"], "ussr": ["Fidel"]}
+    },
+    {
+      "name": "camp-david-accords",
+      "description": "Empty board: +1 VP to the US, and +1 US each in Israel, Jordan and Egypt. US to act.",
+      "status": {"active": "Us"},
+      "hands": {"us": ["Camp David Accords"], "ussr": ["Fidel"]}
+    },
+    {
+      "name": "john-paul-ii-elected-pope",
+      "description": "Poland holds US 0 / USSR 3: removes 2 USSR, adds 1 US, leaving US 1 / USSR 1. US to act.",
+      "status": {"active": "Us"},
+      "influence": {
+        "Poland": [0, 3]
+      },
+      "hands": {"us": ["John Paul II Elected Pope"], "ussr": ["Fidel"]}
+    },
+    {
+      "name": "sadat-expels-soviets",
+      "description": "Egypt holds US 1 / USSR 3: removes all USSR, adds 1 US, leaving US 2 / USSR 0. US to act.",
+      "status": {"active": "Us"},
+      "influence": {
+        "Egypt": [1, 3]
+      },
+      "hands": {"us": ["Sadat Expels Soviets"], "ussr": ["Fidel"]}
+    },
+    {
+      "name": "alliance-for-progress",
+      "description": "The US controls Panama and Cuba (Central America) and Chile (South America), all battlegrounds, plus non-battleground Costa Rica: +3 VP. US to act.",
+      "status": {"active": "Us"},
+      "influence": {
+        "Panama": [2, 0],
+        "Cuba": [3, 0],
+        "Chile": [3, 0],
+        "Costa Rica": [3, 0]
+      },
+      "hands": {"us": ["Alliance for Progress"], "ussr": ["Fidel"]}
+    },
+    {
+      "name": "iranian-hostage-crisis",
+      "description": "Iran holds US 3 / USSR 1: removes all US, adds 2 USSR, leaving US 0 / USSR 3. USSR to act.",
+      "status": {"active": "Ussr"},
+      "influence": {
+        "Iran": [3, 1]
+      },
+      "hands": {"us": ["NATO"], "ussr": ["Iranian Hostage Crisis"]}
+    },
+    {
+      "name": "the-iron-lady",
+      "description": "UK holds USSR 2: removed. Argentina gets 1 USSR. The US receives 1 VP. US to act.",
+      "status": {"active": "Us"},
+      "influence": {
+        "UK": [0, 2]
+      },
+      "hands": {"us": ["The Iron Lady"], "ussr": ["Fidel"]}
+    },
+    {
+      "name": "reagan-bombs-libya-odd",
+      "description": "Libya holds USSR 3: 1 VP per 2 USSR influence rounds down to 1 VP for the US. US to act.",
+      "status": {"active": "Us"},
+      "influence": {
+        "Libya": [0, 3]
+      },
+      "hands": {"us": ["Reagan Bombs Libya"], "ussr": ["Fidel"]}
+    },
+    {
+      "name": "an-evil-empire",
+      "description": "+1 VP to the US. US to act.",
+      "status": {"active": "Us"},
+      "hands": {"us": ["“An Evil Empire”"], "ussr": ["Fidel"]}
+    },
+    {
+      "name": "awacs-sale-to-saudis",
+      "description": "Empty board: adds 2 US to Saudi Arabia. US to act.",
+      "status": {"active": "Us"},
+      "hands": {"us": ["AWACS Sale to Saudis"], "ussr": ["Fidel"]}
+    },
+    {
+      "name": "vp-cap-us-wins",
+      "description": "VP at +19: An Evil Empire's +1 VP reaches +20 and the US wins by VP. US to act.",
+      "status": {"active": "Us", "vp": 19},
+      "hands": {"us": ["“An Evil Empire”"], "ussr": ["Fidel"]}
+    },
+    {
+      "name": "opponents-event",
+      "description": "USSR to act holding Kitchen Debates, a US card. The USSR may still play it as an event: the US gets its 2 VP regardless of who plays it.",
+      "status": {"active": "Ussr"},
+      "influence": {
+        "France": [3, 0]
+      },
+      "hands": {"us": ["NATO"], "ussr": ["Kitchen Debates"]}
+    }
+  ]
+}
