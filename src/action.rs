@@ -27,6 +27,7 @@ use crate::cards::{CardCatalog, CardId, CHINA_CARD};
 use crate::country::CountryId;
 use crate::dice::Dice;
 use crate::events;
+use crate::events::choice::Sign;
 use crate::game::{Game, GameError, OperationKind};
 use crate::map::WorldMap;
 use crate::ops::Operation;
@@ -44,8 +45,16 @@ pub enum Action {
     /// Resolve the card in play's own event — [`Game::play_event`]. Only
     /// offered when [`crate::events::is_implemented`] recognises it.
     Event,
-    /// Place one point of influence here — [`Game::place`].
+    /// Place one point of influence here — [`Game::place`]; in an open
+    /// event, the `+` step (add influence there).
     Place(CountryId),
+    /// The `-` step of an open event: remove influence here —
+    /// [`Game::unplace`]. Offered only where it's a *forward* step (never
+    /// as a mere take-back, for the same reason `undo` isn't an action).
+    Unplace(CountryId),
+    /// Choose which way to play an open multi-mode event (0-based) —
+    /// [`Game::choose_mode`].
+    ChooseMode(u8),
     /// Resolve one realignment roll, or a coup's one attempt, against this
     /// country — [`Game::roll`].
     Roll(CountryId),
@@ -71,7 +80,11 @@ impl Game {
     /// other card offers all three `Begin` kinds, plus `Event` too when
     /// [`events::is_implemented`] recognises it (whichever side's card it is);
     /// with an operation open, `Confirm` is always
-    /// legal even if nothing on the board can be touched yet.
+    /// legal even if nothing on the board can be touched yet — except an
+    /// open *event*, whose `Confirm` waits until it has been carried out as
+    /// fully as it can be (see [`crate::events::choice`]), and which is
+    /// offered to [`Game::decider`] (the event's chooser), not necessarily
+    /// the active side.
     pub fn legal_actions(&self, map: &WorldMap, cards: &CardCatalog) -> Vec<Action> {
         if self.winner().is_some() {
             return Vec::new();
@@ -87,6 +100,26 @@ impl Game {
                     }
                 }
                 actions.push(Action::Confirm);
+            }
+            Some(Operation::Event(e)) => {
+                // Whoever `Game::decider` names — the event's chooser — is
+                // the one these are offered to. Every forward step spends a
+                // finite budget, so a random walk still reaches `Confirm`.
+                if e.mode().is_none() {
+                    for i in 0..e.modes().len() {
+                        actions.push(Action::ChooseMode(i as u8));
+                    }
+                } else {
+                    for (id, sign) in e.forward_steps(map) {
+                        actions.push(match sign {
+                            Sign::Plus => Action::Place(id),
+                            Sign::Minus => Action::Unplace(id),
+                        });
+                    }
+                    if e.is_complete() {
+                        actions.push(Action::Confirm);
+                    }
+                }
             }
             Some(Operation::Realign(r)) => {
                 if r.remaining() > 0 {
@@ -150,6 +183,8 @@ impl Game {
             Action::Begin(kind) => self.begin(kind),
             Action::Event => self.play_event(map, cards).map(|_| ()),
             Action::Place(id) => self.place(map, id).map(|_| ()),
+            Action::Unplace(id) => self.unplace(map, id),
+            Action::ChooseMode(i) => self.choose_mode(map, i as usize),
             Action::Roll(id) => self.roll(map, id, dice).map(|_| ()),
             Action::Confirm => self.confirm().map(|_| ()),
             Action::Pass => self.pass(),

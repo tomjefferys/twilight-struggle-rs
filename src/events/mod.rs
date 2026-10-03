@@ -12,14 +12,20 @@
 //! place) will add their own submodules and `EventOutcome` variants
 //! alongside this one, but won't need to change this module's shape.
 //!
+//! `events::choice` is the third: cards that make a player pick countries.
+//! They don't resolve in one call; they open an [`EventChoice`] that
+//! `Game::play_event` carries as `Operation::Event` until confirmed.
+//!
 //! `events::effects` is the second stage: nineteen cards whose text only
 //! moves influence, VP, or DEFCON by fixed amounts. `CARDS.md` (repo
 //! root) tracks which cards are implemented; a test keeps it in step
 //! with [`is_implemented`].
 
+pub mod choice;
 pub mod effects;
 pub mod scoring;
 
+pub use choice::EventChoice;
 pub use effects::EffectResult;
 pub use scoring::ScoringResult;
 
@@ -33,6 +39,9 @@ use crate::status::GameStatus;
 pub enum EventOutcome {
     Scoring(ScoringResult),
     Effect(EffectResult),
+    /// A choice card's event has opened a session for `chooser` to work
+    /// through — nothing has changed yet.
+    Pending { card: CardId, chooser: crate::country::Superpower },
 }
 
 /// Whether `card`'s event is implemented yet — what
@@ -40,7 +49,7 @@ pub enum EventOutcome {
 /// and what [`crate::game::Game::legal_actions`] checks before
 /// offering `Action::Event` for a card in play.
 pub fn is_implemented(card: CardId) -> bool {
-    scoring::is_scoring_card(card) || effects::is_effect_card(card)
+    scoring::is_scoring_card(card) || effects::is_effect_card(card) || choice::is_choice_card(card)
 }
 
 /// Resolves `card`'s event against `(map, board)` — `None` for a card
@@ -48,6 +57,10 @@ pub fn is_implemented(card: CardId) -> bool {
 /// (VP, discard, victory) is `Game::play_event`'s job, not this
 /// function's — the same split `ops::realign::resolve` keeps between
 /// computing a roll's outcome and `Game::roll` writing it to the board.
+///
+/// Choice cards ([`choice::is_choice_card`]) are *not* resolved here —
+/// they need a session, so `resolve` returns `None` for them too and
+/// `Game::play_event` checks [`choice::is_choice_card`] first.
 pub(crate) fn resolve(map: &WorldMap, board: &Board, status: &GameStatus, card: CardId) -> Option<EventOutcome> {
     scoring::resolve(map, board, card)
         .map(EventOutcome::Scoring)

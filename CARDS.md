@@ -4,10 +4,11 @@ Which of the 110 cards have their **event** implemented (`events::is_implemented
 Every card can already be played for its ops value; this tracks the event text only.
 `tests/cards_progress.rs` fails if a ✅ here disagrees with the code, so update both together.
 
-**Implemented: 26 / 110**
+**Implemented: 45 / 110**
 
 - `events::scoring` — the seven scoring cards.
 - `events::effects` — fixed influence / VP / DEFCON effects with no choices or die rolls.
+- `events::choice` — cards where a player picks the countries (the card's own side chooses, whoever is phasing). #106 NORAD is an ongoing end-of-AR trigger, not a choice, and is still pending.
 
 | # | Card | Side | Event | Notes |
 |---|---|---|---|---|
@@ -17,33 +18,33 @@ Every card can already be played for its ops value; this tracks the event text o
 | 4 | Duck and Cover | US | ✅ |  |
 | 5 | Five Year Plan | US |  |  |
 | 6 | The China Card | Both |  | Ops only; passes to the opponent |
-| 7 | Socialist Governments | USSR |  |  |
+| 7 | Socialist Governments | USSR | ✅ | Choice; 'not after #83' clause pending |
 | 8 | Fidel | USSR | ✅ |  |
 | 9 | Vietnam Revolts | USSR |  |  |
 | 10 | Blockade | USSR |  |  |
 | 11 | Korean War | USSR |  |  |
 | 12 | Romanian Abdication | USSR | ✅ |  |
 | 13 | Arab-Israeli War | USSR |  |  |
-| 14 | Comecon | USSR |  |  |
+| 14 | Comecon | USSR | ✅ | Choice |
 | 15 | Nasser | USSR | ✅ |  |
-| 16 | Warsaw Pact Formed | USSR |  |  |
+| 16 | Warsaw Pact Formed | USSR | ✅ | Choice (2 modes); NATO-allow clause pending #21 |
 | 17 | De Gaulle Leads France | USSR | ✅ | NATO-cancel clause pending #21 |
 | 18 | Captured Nazi Scientist | Both |  |  |
-| 19 | Truman Doctrine | US |  |  |
+| 19 | Truman Doctrine | US | ✅ | Choice |
 | 20 | Olympic Games | Both |  |  |
 | 21 | NATO | US |  |  |
-| 22 | Independent Reds | US |  |  |
-| 23 | Marshall Plan | US |  |  |
+| 22 | Independent Reds | US | ✅ | Choice |
+| 23 | Marshall Plan | US | ✅ | Choice; NATO-allow clause pending #21 |
 | 24 | Indo-Pakistani War | Both |  |  |
 | 25 | Containment | US |  |  |
 | 26 | CIA Created | US |  |  |
 | 27 | US/Japan Mutual Defense Pact | US |  |  |
-| 28 | Suez Crisis | USSR |  |  |
-| 29 | East European Unrest | US |  |  |
-| 30 | Decolonization | USSR |  |  |
+| 28 | Suez Crisis | USSR | ✅ | Choice |
+| 29 | East European Unrest | US | ✅ | Choice; 2 per country from turn 8 (Late War) |
+| 30 | Decolonization | USSR | ✅ | Choice |
 | 31 | Red Scare/Purge | Both |  |  |
 | 32 | UN Intervention | Both |  |  |
-| 33 | De-Stalinization | USSR |  |  |
+| 33 | De-Stalinization | USSR | ✅ | Choice ('may'); balanced reallocation |
 | 34 | Nuclear Test Ban | Both | ✅ |  |
 | 35 | Formosan Resolution | US |  |  |
 | 36 | Brush War | Both |  |  |
@@ -63,29 +64,29 @@ Every card can already be played for its ops value; this tracks the event text o
 | 50 | “We Will Bury You” | USSR |  |  |
 | 51 | Brezhnev Doctrine | USSR |  |  |
 | 52 | Portuguese Empire Crumbles | USSR | ✅ |  |
-| 53 | South African Unrest | USSR |  |  |
+| 53 | South African Unrest | USSR | ✅ | Choice (2 modes) |
 | 54 | Allende | USSR | ✅ |  |
 | 55 | Willy Brandt | USSR |  |  |
-| 56 | Muslim Revolution | USSR |  |  |
+| 56 | Muslim Revolution | USSR | ✅ | Choice; 'not after #110' clause pending |
 | 57 | ABM Treaty | Both |  |  |
 | 58 | Cultural Revolution | USSR |  |  |
 | 59 | Flower Power | USSR |  |  |
 | 60 | U2 Incident | USSR |  |  |
 | 61 | OPEC | USSR |  |  |
 | 62 | “Lone Gunman” | USSR |  |  |
-| 63 | Colonial Rear Guards | US |  |  |
+| 63 | Colonial Rear Guards | US | ✅ | Choice |
 | 64 | Panama Canal Returned | US | ✅ |  |
 | 65 | Camp David Accords | US | ✅ | 'prevents #13' clause pending #13 |
-| 66 | Puppet Governments | US |  |  |
+| 66 | Puppet Governments | US | ✅ | Choice ('may') |
 | 67 | Grain Sales to Soviets | US |  |  |
 | 68 | John Paul II Elected Pope | US | ✅ | 'allows #101' clause pending #101 |
 | 69 | Latin American Death Squads | Both |  |  |
-| 70 | OAS Founded | US |  |  |
+| 70 | OAS Founded | US | ✅ | Choice |
 | 71 | Nixon Plays the China Card | US |  |  |
 | 72 | Sadat Expels Soviets | US | ✅ |  |
 | 73 | Shuttle Diplomacy | US |  |  |
 | 74 | The Voice of America | US |  |  |
-| 75 | Liberation Theology | USSR |  |  |
+| 75 | Liberation Theology | USSR | ✅ | Choice |
 | 76 | Ussuri River Skirmish | US |  |  |
 | 77 | “Ask Not What Your Country…” | US |  |  |
 | 78 | Alliance for Progress | US | ✅ |  |
@@ -97,8 +98,8 @@ Every card can already be played for its ops value; this tracks the event text o
 | 84 | Reagan Bombs Libya | US | ✅ |  |
 | 85 | Star Wars | US |  |  |
 | 86 | North Sea Oil | US |  |  |
-| 87 | The Reformer | USSR |  |  |
-| 88 | Marine Barracks Bombing | USSR |  |  |
+| 87 | The Reformer | USSR | ✅ | Choice; no-more-Europe-coups clause pending |
+| 88 | Marine Barracks Bombing | USSR | ✅ | Choice; Lebanon cleared up front |
 | 89 | Soviets Shoot Down KAL-007 | US |  |  |
 | 90 | Glasnost | USSR |  |  |
 | 91 | Ortega Elected in Nicaragua | USSR |  |  |
@@ -115,7 +116,7 @@ Every card can already be played for its ops value; this tracks the event text o
 | 102 | Iran-Iraq War | Both |  |  |
 | 103 | Defectors | US |  |  |
 | 104 | The Cambridge Five | USSR |  |  |
-| 105 | Special Relationship | US |  |  |
+| 105 | Special Relationship | US | ✅ | Choice; only the 'UK US-controlled, NATO not in effect' branch (NATO is pending #21) |
 | 106 | NORAD | US |  |  |
 | 107 | Che | USSR |  |  |
 | 108 | Our Man in Tehran | US |  |  |

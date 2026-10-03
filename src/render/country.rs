@@ -21,6 +21,7 @@ fn hint() -> String {
 const PLACEMENT_HINT: &str = "←→↑↓ select · +/= place · u undo · ⌫ abandon · c confirm · Esc back";
 const REALIGN_HINT: &str = "←→↑↓ select · r roll · ⌫ abandon · c done · Esc back";
 const COUP_HINT: &str = "←→↑↓ select · r coup · ⌫ abandon · c done · Esc back";
+const EVENT_HINT: &str = "←→↑↓ select · + add · - remove · u undo · 1/2 mode · ⌫ abandon · c done";
 
 /// What occupies one cell of the neighbourhood mini-map: either a country
 /// (the one viewed, or one of its neighbours) or a superpower guest chip.
@@ -209,6 +210,7 @@ pub fn render_country(map: &WorldMap, layout: &MapLayout, board: &Board, id: Cou
                 Operation::Realign(_) | Operation::Coup(_) => {
                     format!("no {} influence to remove", operation.side().opponent())
                 }
+                Operation::Event(e) => e.hint(map, id),
             };
             rows.push((reason, Style::color(Color::Muted)));
         }
@@ -219,6 +221,12 @@ pub fn render_country(map: &WorldMap, layout: &MapLayout, board: &Board, id: Cou
                 let pending = p.pending(id);
                 if pending > 0 {
                     rows.push((format!("{pending} placed here"), Style::color(Color::Muted)));
+                }
+            }
+            Operation::Event(e) => {
+                rows.push((e.prompt(), Style::color(Color::Selected)));
+                if operation.is_legal_target(map, board, id) {
+                    rows.push((e.hint(map, id), Style::color(Color::Muted)));
                 }
             }
             Operation::Realign(r) => {
@@ -240,6 +248,7 @@ pub fn render_country(map: &WorldMap, layout: &MapLayout, board: &Board, id: Cou
         Some(Operation::Influence(_)) => PLACEMENT_HINT.to_string(),
         Some(Operation::Realign(_)) => REALIGN_HINT.to_string(),
         Some(Operation::Coup(_)) => COUP_HINT.to_string(),
+        Some(Operation::Event(_)) => EVENT_HINT.to_string(),
         None => hint(),
     });
 

@@ -33,6 +33,12 @@ const REALIGN_HINT: &str = "←→↑↓ select · Enter target · ⌫ abandon �
 /// only happens on the country screen.
 const COUP_HINT: &str = "←→↑↓ select · Enter target · ⌫ abandon · c done · Esc back";
 
+/// Shown while an event's choices are open: `+`/`-` act on the selected
+/// country, `1`/`2` pick a mode on a card that has two.
+/// What the small marks on a chip mean while an event's choices are open.
+const EVENT_LEGEND: &str = "double border: can act here · dim: not eligible · ↑N/↓N: can add/remove N · +N/-N: staged";
+const EVENT_HINT: &str = "←→↑↓ select · Enter open · + add · - remove · u undo · 1/2 mode · ⌫ abandon · c done";
+
 /// A geographic zoom into one region: every country in it drawn as a box
 /// on its layout grid cell, connected to its in-region neighbours by line
 /// glyphs. Adjacencies that leave the region (to another region, or to a
@@ -239,11 +245,18 @@ fn build_footer_lines(
             lines.push((coup_odds_line(coup.side(), &odds), Style::color(Color::Muted)));
         }
     }
+    if let Some(Operation::Event(_)) = op {
+        lines.push((EVENT_LEGEND.to_string(), Style::color(Color::Muted)));
+    }
+    if let (Some(Operation::Event(e)), Some(id)) = (op, selected) {
+        lines.push((e.hint(map, id), Style::color(Color::Selected)));
+    }
     if selected.is_some() || op.is_some() {
         let hint = match op {
             Some(Operation::Influence(_)) => PLACEMENT_HINT.to_string(),
             Some(Operation::Realign(_)) => REALIGN_HINT.to_string(),
             Some(Operation::Coup(_)) => COUP_HINT.to_string(),
+            Some(Operation::Event(_)) => EVENT_HINT.to_string(),
             None => format!("{SELECTION_HINT} · {BEGIN_HINT}"),
         };
         lines.push((hint, Style::color(Color::Muted)));

@@ -90,7 +90,7 @@ pub fn candidates(line: &str, pos: usize, commands: &[String], cards: &[String],
                 (arg_start, filter_prefix(cards.iter().map(String::as_str), &prefix[arg_start..pos]))
             }
         }
-        "country" | "place" | "roll" => {
+        "country" | "place" | "roll" | "take" | "+" | "-" => {
             let arg_start = tokens.get(1).map_or(current_start, |t| t.0);
             (arg_start, filter_prefix(countries.iter().map(String::as_str), &prefix[arg_start..pos]))
         }

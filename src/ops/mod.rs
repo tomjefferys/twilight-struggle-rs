@@ -19,11 +19,13 @@ mod influence;
 mod realign;
 
 pub use coup::{coup_odds, coup_resolve, coup_target_number, Coup, CoupError, CoupOdds, CoupResult};
+pub use crate::events::choice::EventChoice;
 pub use influence::{InfluencePlacement, PlacementError};
 pub use realign::{modifiers, odds, resolve, Modifiers, Odds, RealignError, Realignment, RollResult};
 
 use crate::board::Board;
 use crate::country::{CountryId, Superpower};
+use crate::events::choice::Sign;
 use crate::map::WorldMap;
 
 /// Whichever ops-spending operation is currently open, if any — the
@@ -37,6 +39,10 @@ pub enum Operation {
     Influence(InfluencePlacement),
     Realign(Realignment),
     Coup(Coup),
+    /// A choice card's event in progress — see [`EventChoice`]. Spends no
+    /// ops, and its [`Operation::side`] is the *chooser* (the card's own
+    /// side), not necessarily the phasing player.
+    Event(EventChoice),
 }
 
 impl Operation {
@@ -45,6 +51,7 @@ impl Operation {
             Operation::Influence(p) => p.side(),
             Operation::Realign(r) => r.side(),
             Operation::Coup(c) => c.side(),
+            Operation::Event(e) => e.chooser(),
         }
     }
 
@@ -53,6 +60,7 @@ impl Operation {
             Operation::Influence(p) => p.ops_total(),
             Operation::Realign(r) => r.ops_total(),
             Operation::Coup(c) => c.ops_total(),
+            Operation::Event(_) => 0,
         }
     }
 
@@ -61,6 +69,7 @@ impl Operation {
             Operation::Influence(p) => p.ops_spent(),
             Operation::Realign(r) => r.ops_spent(),
             Operation::Coup(c) => c.ops_spent(),
+            Operation::Event(_) => 0,
         }
     }
 
@@ -69,6 +78,7 @@ impl Operation {
             Operation::Influence(p) => p.remaining(),
             Operation::Realign(r) => r.remaining(),
             Operation::Coup(c) => c.remaining(),
+            Operation::Event(_) => 0,
         }
     }
 
@@ -80,6 +90,7 @@ impl Operation {
             Operation::Influence(p) => Some(p.board()),
             Operation::Realign(_) => None,
             Operation::Coup(_) => None,
+            Operation::Event(e) => Some(e.board()),
         }
     }
 
@@ -94,6 +105,12 @@ impl Operation {
             Operation::Influence(p) => p.is_legal_target(map, id),
             Operation::Realign(r) => r.is_legal_target(map, board, id),
             Operation::Coup(c) => c.is_legal_target(map, board, id),
+            Operation::Event(e) => {
+                e.can_forward(map, id, Sign::Plus).is_some()
+                    || e.can_forward(map, id, Sign::Minus).is_some()
+                    || e.can_take_back(id, Sign::Plus)
+                    || e.can_take_back(id, Sign::Minus)
+            }
         }
     }
 
@@ -115,6 +132,7 @@ impl Operation {
             }
             Operation::Realign(r) => r.delta(board, id, side),
             Operation::Coup(c) => c.delta(board, id, side),
+            Operation::Event(e) => e.delta(id, side),
         }
     }
 
@@ -132,6 +150,7 @@ impl Operation {
             Operation::Influence(p) => p.pending_countries().into_iter().map(|(id, _)| id).collect(),
             Operation::Realign(r) => r.touched(),
             Operation::Coup(c) => c.touched(),
+            Operation::Event(e) => e.touched(),
         }
     }
 
@@ -142,6 +161,7 @@ impl Operation {
             Operation::Influence(_) => "placing",
             Operation::Realign(_) => "realigning",
             Operation::Coup(_) => "couping",
+            Operation::Event(_) => "resolving an event",
         }
     }
 
@@ -152,6 +172,7 @@ impl Operation {
             Operation::Influence(_) => true,
             Operation::Realign(_) => false,
             Operation::Coup(_) => false,
+            Operation::Event(_) => true,
         }
     }
 }

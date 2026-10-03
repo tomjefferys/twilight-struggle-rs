@@ -1,0 +1,42 @@
+Europe — battlegrounds US 1/USSR 0   countries US 1/USSR 0
+
+                 ┌────────────┐ ┌────────────┐ ┌────────────┐ ╔════════════╗
+                 │    USA     │ │ Norway     │ │ Sweden     │ ║ Finland    ║
+                 │            │ │ -:-   st4  │─│ -:-   st4  │─║ -:-   st4↑1║
+                 └────────────┘ └────────────┘ └────────────┘ ╚════════════╝
+                ╱              ╱                      │                     ╲
+  ┌────────────┐ ┌────────────┐ ┌────────────┐ ┌────────────┐                ┌────────────┐
+  │ Canada     │ │ UK         │ │ Benelux    │ │ Denmark    │                │    USSR    │
+  │ -:-   st4  │─│ -:-   st5  │─│ -:-   st3  │ │ -:-   st3  │                │            │
+  └────────────┘ └────────────┘ └────────────┘ └────────────┘                └────────────┘
+                        │              │      ╱                             ╱
+  ┌────────────┐ ┌────────────┐ ┌────────────┐ ╔════════════╗ ┌────────────┐
+  │*Algeria    │ │*France     │ │*W.Germany  │ ║*E.Germany  ║ │*Poland     │
+  │ -:-   st2  │─│ -:-   st3  │─│ -:-   st4  │─║ -:-   st3↑1║─│ 5<-   st3  │
+  └────────────┘ └────────────┘ └────────────┘ ╚════════════╝ └────────────┘
+                ╱       │              │      ╱       │      ╱
+  ┌────────────┐ ┌────────────┐ ╔════════════╗ ╔════════════╗
+  │ Spain/Port │ │*Italy      │ ║ Austria    ║ ║ Czechosl.  ║
+  │ -:-   st2  │─│ -:-   st2  │─║ -:-   st4↑1║ ║ -:-   st3↑1║
+  └────────────┘ └────────────┘ ╚════════════╝ ╚════════════╝
+         │              │      ╲              ╲       │
+  ┌────────────┐ ┌────────────┐ ╔════════════╗ ┏━━━━━━━━━━━━┓ ┌────────────┐
+  │ Morocco    │ │ Greece     │ ║ Yugoslavia ║ ┃ Hungary    ┃ │    USSR    │
+  │ -:-   st3  │ │ -:-   st2  │─║ -:-   st3↑1║─┃ -:1   st3+1┃ │            │
+  └────────────┘ └────────────┘ ╚════════════╝ ┗━━━━━━━━━━━━┛ └────────────┘
+                        │      ╲              ╲       │      ╱
+                 ╔════════════╗ ┌────────────┐ ╔════════════╗
+                 ║ Bulgaria   ║ │ Turkey     │ ║ Romania    ║
+                 ║ -:-   st3↑1║─│ -:-   st2  │─║ -:-   st3↑1║
+                 ╚════════════╝ └────────────┘ ╚════════════╝
+                               ╱
+                 ┌────────────┐
+                 │ Syria      │
+                 │ -:-   st2  │
+                 └────────────┘
+
+▸ Hungary ◂  stability 3 · contested
+USSR chooses · 1/4 countries · add 1 USSR influence to each of 4 non-US-controlled Eastern European countries · Hungary USSR+1
+double border: can act here · dim: not eligible · ↑N/↓N: can add/remove N · +N/-N: staged
+- undo here
+←→↑↓ select · Enter open · + add · - remove · u undo · 1/2 mode · ⌫ abandon · c done

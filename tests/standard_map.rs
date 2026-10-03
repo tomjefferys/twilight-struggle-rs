@@ -250,3 +250,15 @@ fn influence_mutators_saturate_and_accumulate() {
     board.remove_influence(poland, Superpower::Ussr, 2);
     assert_eq!(board.influence(poland, Superpower::Ussr), 3);
 }
+
+/// Finland and Austria are in both Western and Eastern Europe, so cards
+/// that name either (Comecon, Marshall Plan, …) can target them.
+#[test]
+fn finland_and_austria_count_as_both_western_and_eastern_europe() {
+    let map = WorldMap::standard().unwrap();
+    for name in ["Finland", "Austria"] {
+        let c = map.country(map.id_by_name(name).unwrap());
+        assert!(c.is_in_sub_region(SubRegion::WesternEurope), "{name} should be Western Europe");
+        assert!(c.is_in_sub_region(SubRegion::EasternEurope), "{name} should be Eastern Europe");
+    }
+}

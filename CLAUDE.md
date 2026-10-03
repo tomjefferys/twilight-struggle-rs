@@ -5,8 +5,9 @@ focused on the data model and terminal display, a handful of the
 ops-spending actions (influence placement, realignment, coups), enforced
 alternating turns, playing a card from each side's hand for its ops
 value, and — the first slices of card *events* — the seven scoring cards
-and nineteen fixed-effect cards (influence/VP/DEFCON only, no choices or
-rolls), which can end the game outright (VP reaching ±20, DEFCON
+nineteen fixed-effect cards (influence/VP/DEFCON only, no choices or
+rolls), and nineteen *choice* cards (the card's own side picks the
+countries to add/remove influence in, whoever is phasing), which can end the game outright (VP reaching ±20, DEFCON
 reaching 1, or Europe Scoring's Control tier). `CARDS.md` tracks which of
 the 110 cards have their event implemented (`tests/cards_progress.rs`
 keeps it honest). Every other card's text, DEFCON *degradation rules*, Military Operations, and
@@ -160,7 +161,8 @@ uniformly random legal moves.
   second thing (an in-progress game's own save, log included) doesn't
   exist yet, and is deliberately a different type when it does, rather
   than this one growing an optional log.
-- **`ops`** (`src/ops/`) — the game's ops-spending operations. Three kinds
+- **`ops`** (`src/ops/`) — the game's ops-spending operations, plus (as
+  `Operation::Event`) a choice card's event in progress. Four kinds
   so far, sharing the `Operation` enum (`src/ops/mod.rs`) as the seam the
   rest of the crate reads through:
   - `influence.rs` — `InfluencePlacement`, spending operation points to
@@ -210,20 +212,59 @@ uniformly random legal moves.
     A second `attempt` on an already-resolved `Coup` is refused, the same
     way rolling with no ops left is refused for a realignment.
 
-  A card-play operation would add a fourth `Operation` variant; whether
-  it stages like placement or resolves immediately like realignment/coup
-  is a per-operation call, not a rule of the enum.
+  - `Operation::Event(EventChoice)` (`events/choice.rs`, below) — spends
+    no ops (`ops_total`/`remaining` are 0) and stages like placement: a
+    speculative board, fully reversible until `Game::confirm`. Its
+    `side()` is the *chooser* — the card's own side — which is not
+    necessarily `Game::active()`. Everything keyed off `Operation`
+    (legal-target dimming, `+N`/`-N` badges, footers, hints) works for it
+    unchanged.
+
+  Whether a new operation kind stages like placement or resolves
+  immediately like realignment/coup is a per-operation call, not a rule
+  of the enum. `Coup` also carries an optional list of banned regions
+  (`with_banned_regions`; `CoupError::Banned`) — `Game::begin` bans
+  Europe for the USSR once The Reformer (#87) is in `Hands::removed`.
 
   `InfluencePlacement`, `Realignment`, `Coup`, and `Operation` all derive
   `Clone` — cheap, per `Board`'s own design note — for the same reason:
   `Game` (below) needs to be clonable for AI lookahead.
 - **`events`** (`src/events/`) — card *events*, as opposed to ops value
   (which `ops/` above and `Game::begin` already cover). `events::resolve`
-  is the single entry point `Game::play_event` calls, returning an
-  `EventOutcome`; `events::is_implemented` is what `Game::play_event` and
+  is what `Game::play_event` calls for scoring/fixed-effect cards,
+  returning an `EventOutcome` (a choice card instead yields
+  `EventOutcome::Pending { card, chooser }` once its session is open);
+  `events::is_implemented` is what `Game::play_event` and
   `Game::legal_actions` both check before calling it, or offering
-  `Action::Event`, respectively. Two stages so far:
-  - `events::effects` resolves nineteen cards whose text only moves
+  `Action::Event`, respectively. Three stages so far:
+  - `events::choice` (`src/events/choice.rs`) — nineteen cards where a
+    player *picks countries* (CARDS.md lists them; #106 NORAD, an ongoing
+    end-of-AR trigger, is not one). `EventChoice` stages the **chooser**'s
+    picks against a cloned `Board` (`base` is what eligibility is judged
+    against, like placement's presence check; `board` is the speculative
+    copy) and is carried by `Operation::Event`. A card's text is one
+    function building a `Spec` — modes (`Mode`: a label, `Fixed` changes
+    applied on choosing it, and an optional `Rule`) plus `optional` for
+    "may" cards (De-Stalinization, Puppet Governments) — and one line in
+    `CHOICES`. A `Rule` is a small budgeted vocabulary: add/remove (or
+    reallocate), an `Eligible` country filter (`Where` × `Control` ×
+    `empty`), a points budget, a per-country cap, a countries budget, and
+    a `Chunk` (one point, a fixed amount, *all* of it, or match the
+    opponent). `+`/`-` (`Sign`) are the two steps: the direction a rule
+    allows is a *forward* move that spends budget; the other, where a
+    country already has a staged change, takes the last one back — which
+    is what makes `-` remove influence here. `is_complete` — cached by
+    `refresh` after every change, since `Game::confirm` has no map —
+    follows the rules' "as fully as possible": false while any forward
+    step is still legal, except "may" cards (which only need a
+    reallocation balanced). A single-mode card with nothing it can do
+    (`resolves_immediately`) never opens a session. A multi-mode card's
+    mode is chosen with `1`/`2` (`mode <n>`), changeable until the first
+    pick. `into_result` produces the same `EffectResult` a fixed-effect
+    card does, so `Game::finish_effect` applies and logs both. Clauses
+    about other cards (prevents/allows #N, NATO) aren't modelled;
+    Special Relationship (#105) only has its "NATO not in effect" branch.
+  - `events::effects` (the second stage) resolves nineteen cards whose text only moves
     influence, VP, or DEFCON by fixed amounts (see `CARDS.md`) into an
     `EffectResult` — `influence: Vec<InfluenceChange>` (country, side,
     before, after; no-op changes omitted), a signed `vp_delta` (positive
@@ -306,7 +347,21 @@ uniformly random legal moves.
   side via the private `advance` (USSR → USA; USA → USSR plus
   `action_round += 1`, rolling `turn` over — and flipping the China Card
   face up again, wherever it's landed — once `action_round` exceeds
-  `action_rounds_per_turn`). `pass` is the same handover with no operation
+  `action_rounds_per_turn`). **Events are the exception to "one operation
+  spends the card"**: a choice card's `play_event` opens `Operation::Event`
+  instead of resolving, and `confirm` finishes it (refused with
+  `GameError::EventIncomplete` until `EventChoice::is_complete`), applying
+  it through the same private `finish_effect` fixed-effect cards use, then
+  handing the turn over. `cancel` is refused (`CannotCancelEvent`);
+  `abandon` is allowed only with nothing picked *and* by the phasing side
+  that played the card (`CannotAbandonEvent` otherwise — the opponent
+  can't undo it). `place` is the `+` step, new `unplace` the `-` step (for
+  a placement it takes back a pending point in *that* country; for an
+  event it removes influence or takes back a staged add), `choose_mode`
+  picks a mode, and `undo` takes back the latest pick.
+  **`Game::decider()`** is who has to act next — the open event's chooser,
+  else `active()` — and is what every AI hook and the status bar read
+  instead of `active()`. `pass` is the same handover with no operation
   opened, refused with `CardInPlay` if a card's already been taken from
   the hand — there's nothing left to "pass" on at that point, so
   `return_card` is the way out instead. Ending a turn with ops unspent is
@@ -378,7 +433,11 @@ uniformly random legal moves.
   plus `Game::legal_actions` (every legal `Action` for whoever's active
   right now, in a fixed order so a seeded AI's choices stay reproducible)
   and `Game::apply` (a thin dispatch onto the `Game` method each variant
-  names — `Event` onto `play_event`). Deliberately forward moves only —
+  names — `Event` onto `play_event`; `Place`/`Unplace`/`ChooseMode` are an open
+  event's `+`/`-`/mode — `Unplace` and an event's `Place` only where they
+  are *forward* steps, never mere take-backs, and an event's `Confirm`
+  only once it's complete — all offered for `Game::decider`, not
+  `active`). Deliberately forward moves only —
   never `undo`/`abandon`/`return_card` (human-only take-backs an AI never
   needs, since it simply doesn't choose the action it'd be undoing) or
   `cancel` (every board outcome it can produce is already reachable
@@ -397,7 +456,9 @@ uniformly random legal moves.
   trait (`choose`, given a game, its map/cards, and the current
   `legal_actions` list, picks one of them) and `play_turn`, which drives
   one `Ai` through a whole turn — `legal_actions` → `choose` → `apply`,
-  looped until `Game::active` changes *or* `Game::winner` is set (a
+  looped until `Game::active` or `Game::decider` changes (a choice event
+  hands the decision to the card's own side mid-turn, so one call can stop
+  before the turn ends — callers loop) *or* `Game::winner` is set (a
   scoring event can end the game mid-turn without `active` ever changing,
   and `legal_actions` would otherwise come back empty, which `Ai::choose`
   is documented to never see) — from any point mid-turn, not just a
@@ -729,7 +790,13 @@ uniformly random legal moves.
   the turn to the other side (reported in the next prompt, which names
   the active side, the AR counter, and any card still in play); `pass`
   does the same handover with no operation open, refused if one is, or if
-  a card's been played but not yet spent. `abandon` steps back exactly
+  a card's been played but not yet spent. `+ <country> [n]` (alias
+  `place`) and `- <country> [n]` (alias `take`) are the REPL's `+`/`-`
+  steps — for an open event they add/remove influence (listing what's
+  available when the event opens), for a placement `-` takes back pending
+  points in that country; `mode <n>` (1-based) picks a multi-mode event's
+  mode. The prompt names the chooser while an event is open, and
+  `maybe_run_ai_turn` triggers on `Game::decider()`. `abandon` steps back exactly
   one level, the same cascade Backspace drives in the interactive map:
   with an operation open, it closes *that* for free (always for an
   influence placement, discarding any pending points; refused, naming the
@@ -912,7 +979,8 @@ uniformly random legal moves.
   returns (`io::Result<()>`) on `Esc` from the world view, `q`, or Ctrl-C,
   and the REPL reads `Game::operation()` itself to report a session left
   open, rather than switching on a return value naming what happened
-  inside. An `InfluencePlacement` binds `+`/`=` to place one point and `u`
+  inside. An `InfluencePlacement` binds `+`/`=` to place one point, `-` to take
+  back a pending point in the *selected* country, and `u`
   to undo the last one on *both* the region and country screens —
   placement is undoable, so it never needs the country screen's
   confirmation step, and stays a fast, stay-on-one-screen action from the
@@ -939,6 +1007,19 @@ uniformly random legal moves.
   scoring card has no ops to open a roll-producing operation with); each
   is shown in order, and the hint row names its position once more than
   one is queued.
+  An open `Operation::Event` uses the same `+`/`=`/`-`/`u` keys on the
+  region and country screens (`Game::place`/`unplace`/`undo`), and the
+  global digits `1`-`9` choose a mode (`Game::choose_mode`). The status bar
+  names the *chooser* as the side to act, in their colour; chips show
+  `+N`/`-N` for what's been staged (in the moved side's colour) and dim
+  `↑N`/`↓N` for what each eligible country can still take. A chip the
+  chooser can act on gets a double-line border (`Canvas::draw_double_box`,
+  so it reads without colour), bold in its own region's tint; every other chip
+  is muted all over, frame and numbers included; on the world map a live
+  country's flag slot shows `+`/`-` (the next step's sign, `~` once
+  changed) and the rest are muted. The footers carry a legend, and the region footer/country panel spell out what `+`/`-`
+  would do on the selected one (`EventChoice::hint`). Confirming queues
+  the same `Modal::Event` an immediate effect card does.
   `run` also takes `ai_side: Option<Superpower>` and `&mut RandomAi`,
   threaded through from `Session` — `maybe_run_ai_turn` runs before the
   very first draw and again after every handled keypress, and, whenever
@@ -1029,7 +1110,7 @@ deliberate exception, for debug-mode test states specifically.
 - `backup/` — earlier full snapshots of the world map, kept in case a
   future change needs to compare against or revert to an earlier version.
 - `states/` — named test states (`src/states.rs`'s own `StateLibrary`),
-  one JSON file per topic (`scoring.json` is the first, then `events.json` for the fixed-effect cards), each holding a
+  one JSON file per topic (`scoring.json` is the first, then `events.json` for the fixed-effect cards and `choices.json` for the choice cards), each holding a
   `{"states": [...]}` array of several named `Scenario` snapshots. Read
   from disk at runtime, not `include_str!`-embedded — see `states.rs`'s
   own doc above for why.

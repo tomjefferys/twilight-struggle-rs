@@ -221,6 +221,24 @@ impl InfluencePlacement {
         Some(step.id)
     }
 
+    /// Takes back the most recent point placed in `id` specifically (not
+    /// the most recent overall), refunding exactly what it cost — the `-`
+    /// key. Returns `id`, or `None` if nothing is pending there.
+    pub fn unplace(&mut self, id: CountryId) -> Option<CountryId> {
+        let pos = self.history.iter().rposition(|s| s.id == id)?;
+        let step = self.history.remove(pos);
+        self.board.remove_influence(id, self.side, 1);
+        self.ops_spent -= step.cost;
+        match self.pending.get_mut(&id) {
+            Some(1) => {
+                self.pending.remove(&id);
+            }
+            Some(n) => *n -= 1,
+            None => {}
+        }
+        Some(id)
+    }
+
     /// Consumes this placement, handing back the board with every pending
     /// placement now permanent.
     pub fn commit(self) -> Board {
