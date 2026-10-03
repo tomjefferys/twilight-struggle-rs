@@ -129,6 +129,9 @@ fn action_and_detail(map: &WorldMap, cards: &CardCatalog, entry: &LogEntry) -> (
             let action = if *committed { "confirm" } else { "cancel" };
             (action, closed_detail(*kind, *rolls, *ops_spent, *ops_total))
         }
+        Event::Triggered { card, vp_delta, vp_after } => {
+            ("trigger", format!("{} {vp_delta:+} VP (now {vp_after})", cards.card(*card).name))
+        }
         Event::Pass => ("pass", String::new()),
         Event::Edit { country, side, before, after } => ("edit", edit_detail(map, *country, *side, *before, *after)),
         Event::Note(text) => ("note", text.clone()),
@@ -277,7 +280,8 @@ fn scored_detail(map: &WorldMap, cards: &CardCatalog, result: &ScoringResult, vp
             .collect::<Vec<_>>()
             .join(", "),
     };
-    format!("{name}: {body} -> {:+} VP (now {vp_after})", result.vp_delta)
+    let modifiers: String = result.modifiers.iter().map(|&c| format!(" [{}]", cards.card(c).name)).collect();
+    format!("{name}: {body}{modifiers} -> {:+} VP (now {vp_after})", result.vp_delta)
 }
 
 /// `Fidel: Cuba US 1→0, Cuba USSR 0→3 · +2 VP (now 5)` — only the parts

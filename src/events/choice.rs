@@ -205,6 +205,8 @@ pub struct Mode {
     rule: Option<Rule>,
     /// A turn-long effect choosing this mode starts (Chernobyl's region).
     ongoing: Option<OngoingEffect>,
+    /// VP the event awards its chooser on top of the picks (Special Relationship with NATO).
+    vp: i8,
 }
 
 /// A card's whole choice: who chooses, whether they must finish, and the
@@ -219,11 +221,17 @@ pub struct Spec {
 
 impl Spec {
     fn single(chooser: Superpower, label: impl Into<String>, rule: Rule) -> Self {
-        Spec { chooser, optional: false, modes: vec![Mode { ongoing: None, label: label.into(), fixed: Vec::new(), rule: Some(rule) }] }
+        Spec { chooser, optional: false, modes: vec![Mode { ongoing: None, vp: 0, label: label.into(), fixed: Vec::new(), rule: Some(rule) }] }
     }
 
     fn optional(mut self) -> Self {
         self.optional = true;
+        self
+    }
+
+    /// The (single) mode also awards its chooser `vp` VP.
+    fn with_vp(mut self, vp: i8) -> Self {
+        self.modes[0].vp = vp;
         self
     }
 }
@@ -705,7 +713,9 @@ impl EventChoice {
     /// produces, so applying and logging it is one shared code path.
     pub fn into_result(&self, status: &GameStatus) -> EffectResult {
         let ongoing = self.mode.and_then(|i| self.modes[i].ongoing);
-        EffectResult { card: self.card, player: status.active, influence: self.changes.clone(), vp_delta: 0, defcon: None, ongoing }
+        let vp = self.mode.map_or(0, |i| self.modes[i].vp);
+        let vp_delta = if self.chooser == Superpower::Us { vp } else { -vp };
+        EffectResult { card: self.card, player: status.active, influence: self.changes.clone(), vp_delta, defcon: None, ongoing, lasting: None, cancels: None }
     }
 
     /// The region a region-designating event (Chernobyl) has been set to
@@ -792,12 +802,12 @@ fn warsaw_pact_formed(_: &WorldMap, _: &Board, _: &GameStatus) -> Spec {
         optional: false,
         modes: vec![
             Mode {
-                ongoing: None, label: "remove all US influence from 4 Eastern European countries".into(),
+                ongoing: None, vp: 0, label: "remove all US influence from 4 Eastern European countries".into(),
                 fixed: Vec::new(),
                 rule: Some(Rule::remove(Us, Eligible::new(EASTERN), ANY, ANY, 4).chunk(Chunk::All)),
             },
             Mode {
-                ongoing: None, label: "add 5 USSR influence to Eastern Europe (max 2 per country)".into(),
+                ongoing: None, vp: 0, label: "add 5 USSR influence to Eastern Europe (max 2 per country)".into(),
                 fixed: Vec::new(),
                 rule: Some(Rule::add(Ussr, Eligible::new(EASTERN), 5, 2, ANY)),
             },
@@ -892,12 +902,12 @@ fn south_african_unrest(_: &WorldMap, _: &Board, _: &GameStatus) -> Spec {
         optional: false,
         modes: vec![
             Mode {
-                ongoing: None, label: "add 2 USSR influence to South Africa".into(),
+                ongoing: None, vp: 0, label: "add 2 USSR influence to South Africa".into(),
                 fixed: vec![Fixed { country: "South Africa", side: Ussr, op: FixedOp::Add(2) }],
                 rule: None,
             },
             Mode {
-                ongoing: None, label: "add 1 USSR influence to South Africa and 2 to one adjacent country".into(),
+                ongoing: None, vp: 0, label: "add 1 USSR influence to South Africa and 2 to one adjacent country".into(),
                 fixed: vec![Fixed { country: "South Africa", side: Ussr, op: FixedOp::Add(1) }],
                 rule: Some(Rule::add(Ussr, Eligible::new(Where::AdjacentTo("South Africa")), ANY, 2, 1).chunk(Chunk::Fixed(2))),
             },
@@ -975,7 +985,7 @@ fn marine_barracks_bombing(_: &WorldMap, _: &Board, _: &GameStatus) -> Spec {
         chooser: Ussr,
         optional: false,
         modes: vec![Mode {
-            ongoing: None, label: "remove 2 more US influence from the Middle East (Lebanon's is already gone)".into(),
+            ongoing: None, vp: 0, label: "remove 2 more US influence from the Middle East (Lebanon's is already gone)".into(),
             fixed: vec![Fixed { country: "Lebanon", side: Us, op: FixedOp::Clear }],
             rule: Some(Rule::remove(Us, Eligible::new(Where::Region(Region::MiddleEast)), 2, ANY, ANY)),
         }],
@@ -995,16 +1005,22 @@ fn chernobyl(_: &WorldMap, _: &Board, _: &GameStatus) -> Spec {
                 fixed: Vec::new(),
                 rule: None,
                 ongoing: Some(OngoingEffect::Chernobyl { region }),
+                vp: 0,
             })
             .collect(),
     }
 }
 
-/// #105 Special Relationship — only its first branch (UK US-controlled,
-/// NATO not in effect): NATO isn't implemented, so it is never in effect.
-fn special_relationship(map: &WorldMap, board: &Board, _: &GameStatus) -> Spec {
+/// #105 Special Relationship: with the UK US-controlled, +1 US influence in
+/// a country adjacent to it — or, with NATO in effect, +2 in any Western
+/// European country and +2 VP.
+fn special_relationship(map: &WorldMap, board: &Board, status: &GameStatus) -> Spec {
     let uk = map.id_by_name("UK").expect("UK is on the map");
     let countries = if board.is_controlled_by(map, uk, Us) { 1 } else { 0 };
+    if status.lasting.nato {
+        return Spec::single(Us, "add 2 US influence to one Western European country (+2 VP)", Rule::add(Us, Eligible::new(WESTERN), 2, 2, countries))
+            .with_vp(if countries > 0 { 2 } else { 0 });
+    }
     Spec::single(
         Us,
         "add 1 US influence to one country adjacent to the UK",

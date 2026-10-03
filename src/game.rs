@@ -54,7 +54,7 @@ use crate::events::EventChoice;
 use crate::events::{self, war, EffectResult, EventOutcome, WarResult};
 use crate::log::{CoupAftermath, Event, GameLog, LogEntry};
 use crate::map::WorldMap;
-use crate::ongoing::TurnEffects;
+use crate::ongoing::{LastingEffect, TurnEffects};
 use crate::ops::{
     CoupError, InfluencePlacement, Operation, PlacementError, RealignError, Realignment, RollResult,
 };
@@ -158,6 +158,8 @@ pub enum GameError {
     /// [`Game::play_event`] refused: `by`'s event has already been played
     /// and bars this card's (Camp David Accords vs Arab-Israeli War).
     EventPrevented { card: CardId, by: CardId },
+    /// The card's event needs one of `any_of`'s to have happened first.
+    EventRequires { card: CardId, any_of: &'static [CardId] },
     /// [`Game::confirm`]/[`Game::cancel`] refused a war: it ends only by
     /// rolling on a target ([`Game::roll`]) or being abandoned.
     WarNotRolled,
@@ -192,6 +194,10 @@ impl fmt::Display for GameError {
             GameError::CannotCancelEvent => write!(f, "an event can't be cancelled — finish it, or undo your picks"),
             GameError::CannotAbandonEvent => write!(f, "this event can't be abandoned now — undo your picks, or finish it"),
             GameError::EventPrevented { card, by } => write!(f, "card #{card}'s event can't be played: #{by}'s has already happened"),
+            GameError::EventRequires { card, any_of } => {
+                let names: Vec<String> = any_of.iter().map(|c| format!("#{c}")).collect();
+                write!(f, "card #{card}'s event needs {}'s to have happened first", names.join(" or "))
+            }
             GameError::WarNotRolled => write!(f, "a war ends when it's rolled on a target (roll <country>), or abandoned"),
             GameError::War(e) => write!(f, "{e}"),
             GameError::Event(e) => write!(f, "{e}"),
@@ -589,12 +595,12 @@ impl Game {
                     .with_banned_region(effects.placement_banned(side))
                     .with_bonus(effects.sub_region_bonus(side)),
             ),
-            OperationKind::Realign => Operation::Realign(Realignment::new(side, ops, &self.board).with_effects(effects)),
+            OperationKind::Realign => Operation::Realign(Realignment::new(side, ops, &self.board).with_effects(effects).with_lasting(self.status.lasting)),
             OperationKind::Coup => {
                 // The Reformer (#87), once played, bars the USSR from coups
                 // in Europe for the rest of the game.
                 let banned = if side == Superpower::Ussr && self.hands.removed().contains(&CardId(87)) { vec![Region::Europe] } else { Vec::new() };
-                Operation::Coup(Coup::new(side, ops, &self.board).with_banned_regions(banned).with_effects(effects))
+                Operation::Coup(Coup::new(side, ops, &self.board).with_banned_regions(banned).with_effects(effects).with_lasting(self.status.lasting))
             }
         });
         Ok(())
@@ -905,15 +911,17 @@ impl Game {
         if !events::is_implemented(card.id) {
             return Err(GameError::EventNotImplemented { card: card.id });
         }
-        if let Some(by) = events::is_prevented(card.id, self.hands.removed()) {
-            return Err(GameError::EventPrevented { card: card.id, by });
+        match events::blocked(card.id, self.hands.removed()) {
+            Some(events::Blocked::Prevented { by }) => return Err(GameError::EventPrevented { card: card.id, by }),
+            Some(events::Blocked::Requires { any_of }) => return Err(GameError::EventRequires { card: card.id, any_of }),
+            None => {}
         }
 
         // A war opens a session; `Game::roll` on a target (the only one, for
         // Korean War and Arab-Israeli War) resolves it.
         if war::is_war_card(card.id) {
             let player = self.status.active;
-            self.op = Some(Operation::War(war::War::new(card.id, player)));
+            self.op = Some(Operation::War(war::War::new(card.id, player).with_lasting(map, &self.board, &self.status.lasting)));
             return Ok(EventOutcome::Pending { card: card.id, chooser: player });
         }
 
@@ -938,6 +946,11 @@ impl Game {
             EventOutcome::Scoring(result) => {
                 self.log_card_selected();
                 self.apply_vp(result.vp_delta);
+                // Shuttle Diplomacy is spent by the scoring it modified.
+                if result.modifiers.contains(&CardId(73)) {
+                    self.status.lasting.cancel(LastingEffect::ShuttleDiplomacy);
+                    self.hands.discard(CardId(73));
+                }
                 if let Some(side) = result.automatic_victory {
                     self.set_winner(side, VictoryReason::EuropeControl);
                 }
@@ -979,6 +992,12 @@ impl Game {
         if let Some(effect) = result.ongoing {
             self.status.effects.apply(effect);
         }
+        if let Some(effect) = result.lasting {
+            self.status.lasting.apply(effect);
+        }
+        if let Some(effect) = result.cancels {
+            self.status.lasting.cancel(effect);
+        }
         let vp_after = self.status.vp;
         self.log.push(LogEntry {
             turn: self.status.turn,
@@ -1015,6 +1034,9 @@ impl Game {
             event: Event::War { result, vp_after },
         });
         self.log_game_over();
+        if let Some(card) = self.card.map(|c| c.id) {
+            self.flower_power_check(card);
+        }
         self.discard_or_remove_event_card();
         if self.winner.is_none() {
             self.advance();
@@ -1143,6 +1165,11 @@ impl Game {
     /// up once [`Game::advance`] rolls the turn over to a new one.
     fn discard_played_card(&mut self) {
         let Some(card) = self.card.take() else { return };
+        if card.id == CHINA_CARD && self.status.active == Superpower::Us {
+            // Formosan Resolution ends once the US plays the China Card.
+            self.status.lasting.cancel(LastingEffect::Formosan);
+        }
+        self.flower_power_check(card.id);
         if card.id == CHINA_CARD {
             self.status.china_card = self.status.active.opponent();
             self.status.china_card_face_up = false;
@@ -1158,10 +1185,36 @@ impl Game {
     /// none of the cards [`events::is_implemented`] recognises is it.
     fn discard_or_remove_event_card(&mut self) {
         let Some(card) = self.card.take() else { return };
+        if card.id == CardId(73) && self.status.lasting.shuttle_diplomacy {
+            // Shuttle Diplomacy stays in effect — it's discarded by the scoring it modifies.
+            return;
+        }
         if card.removed_after_event {
             self.hands.remove_from_game(card.id);
         } else {
             self.hands.discard(card.id);
+        }
+    }
+
+    /// Logs a lasting event's own payout of `vp` (USSR-favouring when
+    /// negative, in [`GameStatus::vp`]'s convention) and applies it.
+    fn trigger(&mut self, card: CardId, vp_delta: i8) {
+        self.apply_vp(vp_delta);
+        let vp_after = self.status.vp;
+        self.log.push(LogEntry {
+            turn: self.status.turn,
+            action_round: self.status.action_round,
+            side: Some(self.status.active),
+            event: Event::Triggered { card, vp_delta, vp_after },
+        });
+        self.log_game_over();
+    }
+
+    /// Flower Power: the USSR gets 2 VP whenever the US spends a war card,
+    /// for ops or for its event.
+    fn flower_power_check(&mut self, card: CardId) {
+        if self.status.lasting.flower_power && self.status.active == Superpower::Us && war::is_war_card(card) {
+            self.trigger(CardId(59), -2);
         }
     }
 
@@ -1176,6 +1229,19 @@ impl Game {
         match self.status.active {
             Superpower::Ussr => self.status.active = Superpower::Us,
             Superpower::Us => {
+                // We Will Bury You pays once the US has finished the round
+                // it was owed in (`skip` rounds are let pass first).
+                match self.status.lasting.we_will_bury_you {
+                    Some(0) => {
+                        self.status.lasting.cancel(LastingEffect::WeWillBuryYou { skip: 0 });
+                        self.trigger(CardId(50), -3);
+                        if self.winner.is_some() {
+                            return;
+                        }
+                    }
+                    Some(n) => self.status.lasting.we_will_bury_you = Some(n - 1),
+                    None => {}
+                }
                 // North Sea Oil: the US plays one more action round this
                 // turn, on its own — the USSR sits it out.
                 if self.status.action_round == self.status.action_rounds_per_turn && self.status.effects.extra_rounds(Superpower::Us) > 0 {

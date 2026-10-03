@@ -107,7 +107,7 @@ mod tests {
     use crate::render::ColorMode;
 
     fn result(ongoing: Option<OngoingEffect>, vp_delta: i8) -> EffectResult {
-        EffectResult { card: CardId(25), player: Superpower::Us, influence: Vec::new(), vp_delta, defcon: None, ongoing }
+        EffectResult { card: CardId(25), player: Superpower::Us, influence: Vec::new(), vp_delta, defcon: None, ongoing, lasting: None, cancels: None }
     }
 
     #[test]

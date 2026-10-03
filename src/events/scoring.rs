@@ -19,6 +19,7 @@ use crate::board::Board;
 use crate::cards::CardId;
 use crate::country::{CountryId, Region, SubRegion, Superpower};
 use crate::map::WorldMap;
+use crate::ongoing::LastingEffects;
 
 /// How a region scoring card's Control tier turns into VP: a flat value
 /// for five of the six region cards, or an outright win for the sixth
@@ -116,20 +117,22 @@ pub struct ScoringResult {
     pub kind: ScoringKind,
     pub vp_delta: i8,
     pub automatic_victory: Option<Superpower>,
+    /// Lasting events that changed this scoring (Formosan Resolution, Shuttle Diplomacy).
+    pub modifiers: Vec<CardId>,
 }
 
 /// Resolves `card` — refuses (returns `None`) anything [`is_scoring_card`]
 /// doesn't recognise, the same "not every card is implemented yet" gate
 /// [`crate::events::resolve`] reads.
-pub fn resolve(map: &WorldMap, board: &Board, card: CardId) -> Option<ScoringResult> {
+pub fn resolve(map: &WorldMap, board: &Board, lasting: &LastingEffects, card: CardId) -> Option<ScoringResult> {
     if card == SOUTHEAST_ASIA {
         return Some(score_southeast_asia(map, board));
     }
     let &(_, scoring) = REGION_SCORING.iter().find(|&&(id, _)| id == card)?;
-    Some(score_region(map, board, card, scoring))
+    Some(score_region(map, board, lasting, card, scoring))
 }
 
-fn score_region(map: &WorldMap, board: &Board, card: CardId, scoring: RegionScoring) -> ScoringResult {
+fn score_region(map: &WorldMap, board: &Board, lasting: &LastingEffects, card: CardId, scoring: RegionScoring) -> ScoringResult {
     // One pass over the region, tallying both sides (and the region's
     // own battleground total, needed for Control's "every battleground"
     // test) at once rather than scoring each side with its own full scan.
@@ -142,18 +145,25 @@ fn score_region(map: &WorldMap, board: &Board, card: CardId, scoring: RegionScor
     let mut ussr_non_battlegrounds = 0u8;
     let mut ussr_adjacency = 0u8;
     let mut region_battlegrounds = 0u8;
+    let mut modifiers = Vec::new();
 
     for (id, country) in map.iter() {
         if country.region != scoring.region {
             continue;
         }
-        if country.battleground {
+        // Formosan Resolution: a US-controlled Taiwan counts as a battleground.
+        let formosan = scoring.region == Region::Asia && lasting.taiwan_battleground(map, board, id);
+        if formosan {
+            modifiers.push(CardId(35));
+        }
+        let battleground = country.battleground || formosan;
+        if battleground {
             region_battlegrounds += 1;
         }
         match board.controller(map, id) {
             Some(Superpower::Us) => {
                 us_countries += 1;
-                if country.battleground {
+                if battleground {
                     us_battlegrounds += 1;
                 } else {
                     us_non_battlegrounds += 1;
@@ -164,7 +174,7 @@ fn score_region(map: &WorldMap, board: &Board, card: CardId, scoring: RegionScor
             }
             Some(Superpower::Ussr) => {
                 ussr_countries += 1;
-                if country.battleground {
+                if battleground {
                     ussr_battlegrounds += 1;
                 } else {
                     ussr_non_battlegrounds += 1;
@@ -175,6 +185,12 @@ fn score_region(map: &WorldMap, board: &Board, card: CardId, scoring: RegionScor
             }
             None => {}
         }
+    }
+
+    // Shuttle Diplomacy: one fewer USSR battleground in this scoring.
+    if lasting.shuttle_applies(card) {
+        ussr_battlegrounds = ussr_battlegrounds.saturating_sub(1);
+        modifiers.push(CardId(73));
     }
 
     let us = side_score(
@@ -205,7 +221,7 @@ fn score_region(map: &WorldMap, board: &Board, card: CardId, scoring: RegionScor
     };
     let vp_delta = us.total() as i8 - ussr.total() as i8;
 
-    ScoringResult { card, kind: ScoringKind::Region { region: scoring.region, us, ussr }, vp_delta, automatic_victory }
+    ScoringResult { card, kind: ScoringKind::Region { region: scoring.region, us, ussr }, vp_delta, automatic_victory, modifiers }
 }
 
 /// `side`'s own [`SideScore`] against the opponent's counts — a free
@@ -265,7 +281,7 @@ fn score_southeast_asia(map: &WorldMap, board: &Board) -> ScoringResult {
             Superpower::Ussr => -(vp as i8),
         };
     }
-    ScoringResult { card: SOUTHEAST_ASIA, kind: ScoringKind::SoutheastAsia { controlled }, vp_delta, automatic_victory: None }
+    ScoringResult { card: SOUTHEAST_ASIA, kind: ScoringKind::SoutheastAsia { controlled }, vp_delta, automatic_victory: None, modifiers: Vec::new() }
 }
 
 #[cfg(test)]
@@ -313,7 +329,7 @@ mod tests {
     fn an_empty_region_scores_zero_zero() {
         let map = map();
         let board = Board::new(&map);
-        let result = resolve(&map, &board, CardId(3)).unwrap(); // Middle East
+        let result = resolve(&map, &board, &LastingEffects::default(), CardId(3)).unwrap(); // Middle East
         let (us, ussr) = region_result(&result);
         assert_eq!(us.tier, Tier::None);
         assert_eq!(ussr.tier, Tier::None);
@@ -325,7 +341,7 @@ mod tests {
         let map = map();
         let mut board = Board::new(&map);
         board.set_influence(id(&map, "Jordan"), Superpower::Us, 5); // stability 2, not a battleground
-        let result = resolve(&map, &board, CardId(3)).unwrap();
+        let result = resolve(&map, &board, &LastingEffects::default(), CardId(3)).unwrap();
         let (us, _) = region_result(&result);
         assert_eq!(us.tier, Tier::Presence);
         assert_eq!(us.tier_vp, 3);
@@ -342,14 +358,14 @@ mod tests {
         board.set_influence(id(&map, "Iraq"), Superpower::Us, 10); // battleground
         board.set_influence(id(&map, "Saudi Arabia"), Superpower::Us, 10); // battleground
         board.set_influence(id(&map, "Gulf States"), Superpower::Ussr, 5); // not a battleground
-        let result = resolve(&map, &board, CardId(3)).unwrap();
+        let result = resolve(&map, &board, &LastingEffects::default(), CardId(3)).unwrap();
         let (us, ussr) = region_result(&result);
         assert_eq!(us.tier, Tier::Presence);
         assert_eq!(ussr.tier, Tier::Presence);
 
         // Give the US a non-battleground too — now it dominates.
         board.set_influence(id(&map, "Jordan"), Superpower::Us, 5);
-        let result = resolve(&map, &board, CardId(3)).unwrap();
+        let result = resolve(&map, &board, &LastingEffects::default(), CardId(3)).unwrap();
         let (us, _) = region_result(&result);
         assert_eq!(us.tier, Tier::Domination);
         assert_eq!(us.tier_vp, 5);
@@ -364,7 +380,7 @@ mod tests {
         board.set_influence(id(&map, "Jordan"), Superpower::Us, 5);
         board.set_influence(id(&map, "Gulf States"), Superpower::Us, 5);
         board.set_influence(id(&map, "Saudi Arabia"), Superpower::Ussr, 10); // battleground — ties US's one
-        let result = resolve(&map, &board, CardId(3)).unwrap();
+        let result = resolve(&map, &board, &LastingEffects::default(), CardId(3)).unwrap();
         let (us, _) = region_result(&result);
         assert_eq!(us.tier, Tier::Presence, "3 countries but tied battlegrounds should not dominate");
     }
@@ -375,7 +391,7 @@ mod tests {
         let mut board = Board::new(&map);
         board.set_influence(id(&map, "Iraq"), Superpower::Us, 10);
         board.set_influence(id(&map, "Saudi Arabia"), Superpower::Ussr, 10);
-        let result = resolve(&map, &board, CardId(3)).unwrap();
+        let result = resolve(&map, &board, &LastingEffects::default(), CardId(3)).unwrap();
         let (us, ussr) = region_result(&result);
         assert_eq!(us.tier, Tier::Presence);
         assert_eq!(ussr.tier, Tier::Presence);
@@ -391,7 +407,7 @@ mod tests {
             board.set_influence(id(&map, name), Superpower::Us, 10);
         }
         board.set_influence(id(&map, "Gulf States"), Superpower::Ussr, 10);
-        let result = resolve(&map, &board, CardId(3)).unwrap();
+        let result = resolve(&map, &board, &LastingEffects::default(), CardId(3)).unwrap();
         let (us, _) = region_result(&result);
         assert_eq!(us.tier, Tier::Control);
         assert_eq!(us.tier_vp, 7);
@@ -399,7 +415,7 @@ mod tests {
 
         // Missing just one battleground drops it back to domination.
         board.set_influence(id(&map, "Libya"), Superpower::Us, 0);
-        let result = resolve(&map, &board, CardId(3)).unwrap();
+        let result = resolve(&map, &board, &LastingEffects::default(), CardId(3)).unwrap();
         let (us, _) = region_result(&result);
         assert_eq!(us.tier, Tier::Domination);
     }
@@ -412,7 +428,7 @@ mod tests {
         // (battleground, borders USA) both controlled by the US.
         board.set_influence(id(&map, "North Korea"), Superpower::Us, 10);
         board.set_influence(id(&map, "Japan"), Superpower::Us, 10);
-        let result = resolve(&map, &board, CardId(1)).unwrap(); // Asia
+        let result = resolve(&map, &board, &LastingEffects::default(), CardId(1)).unwrap(); // Asia
         let (us, _) = region_result(&result);
         assert_eq!(us.battleground_vp, 2, "both controlled countries are battlegrounds");
         assert_eq!(us.adjacency_vp, 1, "only North Korea borders the USSR");
@@ -426,7 +442,7 @@ mod tests {
         board.set_influence(id(&map, "Iraq"), Superpower::Ussr, 10); // battleground
         board.set_influence(id(&map, "Syria"), Superpower::Ussr, 5);
         board.set_influence(id(&map, "Gulf States"), Superpower::Ussr, 5); // domination, 5 VP + 1 BG
-        let result = resolve(&map, &board, CardId(3)).unwrap();
+        let result = resolve(&map, &board, &LastingEffects::default(), CardId(3)).unwrap();
         assert_eq!(result.vp_delta, 3 - (5 + 1));
     }
 
@@ -439,7 +455,7 @@ mod tests {
             board.set_influence(id(&map, name), Superpower::Us, 10);
         }
         board.set_influence(id(&map, "UK"), Superpower::Us, 10);
-        let result = resolve(&map, &board, CardId(2)).unwrap(); // Europe
+        let result = resolve(&map, &board, &LastingEffects::default(), CardId(2)).unwrap(); // Europe
         assert_eq!(result.automatic_victory, Some(Superpower::Us));
 
         let mut board = Board::new(&map);
@@ -447,7 +463,7 @@ mod tests {
             board.set_influence(id(&map, name), Superpower::Ussr, 10);
         }
         board.set_influence(id(&map, "UK"), Superpower::Ussr, 10);
-        let result = resolve(&map, &board, CardId(2)).unwrap();
+        let result = resolve(&map, &board, &LastingEffects::default(), CardId(2)).unwrap();
         assert_eq!(result.automatic_victory, Some(Superpower::Ussr));
     }
 
@@ -462,7 +478,7 @@ mod tests {
         for name in ["North Korea", "South Korea", "Japan", "Pakistan", "India", "Thailand", "Afghanistan"] {
             board.set_influence(id(&map, name), Superpower::Us, 10);
         }
-        let result = resolve(&map, &board, CardId(1)).unwrap();
+        let result = resolve(&map, &board, &LastingEffects::default(), CardId(1)).unwrap();
         let (us, _) = region_result(&result);
         assert_eq!(us.total(), 9 + 6 + 2);
 
@@ -472,7 +488,7 @@ mod tests {
         for name in ["Egypt", "Israel", "Iraq", "Iran", "Libya", "Saudi Arabia", "Jordan"] {
             board.set_influence(id(&map, name), Superpower::Us, 10);
         }
-        let result = resolve(&map, &board, CardId(3)).unwrap();
+        let result = resolve(&map, &board, &LastingEffects::default(), CardId(3)).unwrap();
         let (us, _) = region_result(&result);
         assert_eq!(us.total(), 7 + 6);
 
@@ -483,7 +499,7 @@ mod tests {
         for name in ["Mexico", "Panama", "Cuba", "Guatemala"] {
             board.set_influence(id(&map, name), Superpower::Us, 10);
         }
-        let result = resolve(&map, &board, CardId(37)).unwrap();
+        let result = resolve(&map, &board, &LastingEffects::default(), CardId(37)).unwrap();
         let (us, _) = region_result(&result);
         assert_eq!(us.total(), 5 + 3);
         assert_eq!(us.adjacency_vp, 0);
@@ -493,7 +509,7 @@ mod tests {
         for name in ["Algeria", "Nigeria", "Zaire", "Angola", "South Africa", "Morocco"] {
             board.set_influence(id(&map, name), Superpower::Us, 10);
         }
-        let result = resolve(&map, &board, CardId(79)).unwrap();
+        let result = resolve(&map, &board, &LastingEffects::default(), CardId(79)).unwrap();
         let (us, _) = region_result(&result);
         assert_eq!(us.total(), 6 + 5);
 
@@ -503,7 +519,7 @@ mod tests {
         for name in ["Venezuela", "Chile", "Argentina", "Brazil", "Colombia"] {
             board.set_influence(id(&map, name), Superpower::Us, 10);
         }
-        let result = resolve(&map, &board, CardId(81)).unwrap();
+        let result = resolve(&map, &board, &LastingEffects::default(), CardId(81)).unwrap();
         let (us, _) = region_result(&result);
         assert_eq!(us.total(), 6 + 4);
     }
@@ -521,7 +537,7 @@ mod tests {
         let mut board = Board::new(&map);
         board.set_influence(id(&map, "Thailand"), Superpower::Us, 10);
         board.set_influence(id(&map, "Burma"), Superpower::Us, 10);
-        let result = resolve(&map, &board, SOUTHEAST_ASIA).unwrap();
+        let result = resolve(&map, &board, &LastingEffects::default(), SOUTHEAST_ASIA).unwrap();
         assert_eq!(result.vp_delta, 2 + 1);
         assert_eq!(se_asia_controlled(&result).len(), 2);
     }
@@ -533,7 +549,7 @@ mod tests {
         board.set_influence(id(&map, "Thailand"), Superpower::Us, 1);
         board.set_influence(id(&map, "Thailand"), Superpower::Ussr, 1); // contested, not controlled
         board.set_influence(id(&map, "Japan"), Superpower::Us, 10); // Asia, but not SE Asia
-        let result = resolve(&map, &board, SOUTHEAST_ASIA).unwrap();
+        let result = resolve(&map, &board, &LastingEffects::default(), SOUTHEAST_ASIA).unwrap();
         assert_eq!(se_asia_controlled(&result).len(), 0);
         assert_eq!(result.vp_delta, 0);
     }
@@ -545,7 +561,7 @@ mod tests {
         board.set_influence(id(&map, "Thailand"), Superpower::Ussr, 10); // -2
         board.set_influence(id(&map, "Vietnam"), Superpower::Us, 10); // +1
         board.set_influence(id(&map, "Malaysia"), Superpower::Us, 10); // +1
-        let result = resolve(&map, &board, SOUTHEAST_ASIA).unwrap();
+        let result = resolve(&map, &board, &LastingEffects::default(), SOUTHEAST_ASIA).unwrap();
         assert_eq!(result.vp_delta, 1 + 1 - 2);
     }
 

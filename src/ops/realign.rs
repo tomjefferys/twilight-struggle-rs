@@ -34,7 +34,8 @@ use crate::board::Board;
 use crate::country::{CountryId, SubRegion, Superpower};
 use crate::dice::Dice;
 use crate::map::WorldMap;
-use crate::ongoing::TurnEffects;
+use crate::cards::CardId;
+use crate::ongoing::{LastingEffects, TurnEffects};
 
 /// One side's die-roll modifiers for one country, itemised rather than
 /// summed, so the UI can explain the number instead of just showing it.
@@ -209,6 +210,8 @@ pub enum RealignError {
     NoOpponentInfluence { country: String, side: Superpower },
     /// No ops remain to spend on another roll.
     InsufficientOps { country: String, remaining: u8 },
+    /// A lasting event (NATO, the US/Japan pact) shields `country` from this side's rolls.
+    Protected { country: String, by: CardId },
 }
 
 impl fmt::Display for RealignError {
@@ -217,6 +220,7 @@ impl fmt::Display for RealignError {
             RealignError::NoOpponentInfluence { country, side } => {
                 write!(f, "{} has no influence in {country} for {side} to realign against", side.opponent())
             }
+            RealignError::Protected { country, by } => write!(f, "card #{} protects {country} from realignment", by.0),
             RealignError::InsufficientOps { country, remaining } => {
                 write!(f, "rolling in {country} costs 1 op, but only {remaining} remain")
             }
@@ -239,6 +243,8 @@ pub struct Realignment {
     ops_spent: u8,
     history: Vec<RollResult>,
     effects: TurnEffects,
+    /// Game-long events that shield countries (NATO, the US/Japan pact).
+    lasting: LastingEffects,
     /// Whether any roll so far targeted outside the sub-region Vietnam
     /// Revolts' bonus needs — rolls can't be undone, so once set it stays.
     outside_bonus_sub: bool,
@@ -255,6 +261,7 @@ impl Realignment {
             ops_spent: 0,
             history: Vec::new(),
             effects: TurnEffects::default(),
+            lasting: LastingEffects::default(),
             outside_bonus_sub: false,
             base: board.clone(),
         }
@@ -264,6 +271,18 @@ impl Realignment {
     pub fn with_effects(mut self, effects: TurnEffects) -> Self {
         self.effects = effects;
         self
+    }
+
+    /// Applies the game-long events in force (see [`crate::ongoing`]).
+    pub fn with_lasting(mut self, lasting: LastingEffects) -> Self {
+        self.lasting = lasting;
+        self
+    }
+
+    /// The card shielding `id` from this realignment right now, if any —
+    /// judged on the live board, since control can flip mid-action.
+    pub fn protected_by(&self, map: &WorldMap, board: &Board, id: CountryId) -> Option<CardId> {
+        self.lasting.protects(map, board, self.side, id)
     }
 
     /// The Southeast Asia-style bonus op still available: only while every
@@ -320,8 +339,8 @@ impl Realignment {
     /// required (rule 6.2.1), and there's no DEFCON restriction — see
     /// the module doc. Judged against the live `board`, not `base`, so
     /// a country a roll has just emptied stops being legal mid-action.
-    pub fn is_legal_target(&self, _map: &WorldMap, board: &Board, id: CountryId) -> bool {
-        board.influence(id, self.side.opponent()) > 0
+    pub fn is_legal_target(&self, map: &WorldMap, board: &Board, id: CountryId) -> bool {
+        board.influence(id, self.side.opponent()) > 0 && self.protected_by(map, board, id).is_none()
     }
 
     /// Resolves one roll against `id`, charging exactly 1 op and writing
@@ -337,6 +356,9 @@ impl Realignment {
     ) -> Result<RollResult, RealignError> {
         if !self.can_afford(map, id) {
             return Err(RealignError::InsufficientOps { country: map.country(id).name.clone(), remaining: self.remaining() });
+        }
+        if let Some(by) = self.protected_by(map, board, id) {
+            return Err(RealignError::Protected { country: map.country(id).name.clone(), by });
         }
         if !self.is_legal_target(map, board, id) {
             return Err(RealignError::NoOpponentInfluence { country: map.country(id).name.clone(), side: self.side });

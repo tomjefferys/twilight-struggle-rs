@@ -389,6 +389,10 @@ fn every_implemented_event_plays_through_game() {
             scenario.status.active = side;
             let mut game = Game::from_scenario(&scenario);
             game.hands_mut().push_to_hand(side, id);
+            // A card that needs another's event first gets it already played.
+            if let Some(events::Blocked::Requires { any_of }) = events::blocked(id, &[]) {
+                game.hands_mut().remove_from_game(any_of[0]);
+            }
             game.play_card(&cards, id).unwrap_or_else(|e| panic!("{} ({side}): play_card: {e}", card.name));
             game.play_event(&map, &cards).unwrap_or_else(|e| panic!("{} ({side}): play_event: {e}", card.name));
             // A choice card opens a session for its own side; let a random
@@ -402,8 +406,10 @@ fn every_implemented_event_plays_through_game() {
                 }
             }
             assert!(game.operation().is_none(), "{} ({side}) left its event session open", card.name);
+            // Shuttle Diplomacy stays in front of the US until a scoring spends it.
+            let stays_in_effect = card.name == "Shuttle Diplomacy" && game.status().lasting.shuttle_diplomacy;
             assert!(
-                game.discards().contains(&id) || game.removed_from_game().contains(&id),
+                stays_in_effect || game.discards().contains(&id) || game.removed_from_game().contains(&id),
                 "{} ({side}) should end up discarded or removed",
                 card.name
             );
@@ -1445,5 +1451,248 @@ mod wars {
                 twilight_struggle::play_turn(&mut ai, &mut game, &map, &cards, &mut dice).unwrap_or_else(|e| panic!("{}: {e}", entry.reference()));
             }
         }
+    }
+}
+
+// ---------------------------------------------------------------------
+// Lasting events (`ongoing::LastingEffects`, `data/states/lasting.json`):
+// effects that outlast the turn — NATO, the US/Japan pact, Formosan
+// Resolution, Shuttle Diplomacy, Flower Power, We Will Bury You — plus
+// the cards that need or cancel them.
+// ---------------------------------------------------------------------
+
+mod lasting {
+    use super::*;
+    use twilight_struggle::game::GameError;
+    use twilight_struggle::ops::{CoupError, Operation, RealignError};
+    use twilight_struggle::{Dice, OperationKind, RollOutcome};
+
+    fn load(map: &WorldMap, cards: &CardCatalog, lib: &StateLibrary, name: &str) -> Game {
+        let reference = format!("lasting/{name}");
+        let (scenario, _) = lib.load(map, cards, &reference).unwrap_or_else(|e| panic!("loading {reference}: {e}"));
+        Game::from_scenario(&scenario)
+    }
+
+    /// Loads `name`, plays `card` and resolves its event.
+    fn play_event(map: &WorldMap, cards: &CardCatalog, lib: &StateLibrary, name: &str, card: &str) -> Game {
+        let mut game = load(map, cards, lib, name);
+        game.play_card(cards, cards.id_by_name(card).unwrap()).unwrap();
+        game.play_event(map, cards).unwrap_or_else(|e| panic!("{name}: play_event: {e}"));
+        game
+    }
+
+    fn country(map: &WorldMap, name: &str) -> twilight_struggle::CountryId {
+        map.id_by_name(name).unwrap()
+    }
+
+    fn start_coup(cards: &CardCatalog, game: &mut Game, card: &str) {
+        game.play_card(cards, cards.id_by_name(card).unwrap()).unwrap();
+        game.begin(OperationKind::Coup).unwrap();
+    }
+
+    #[test]
+    fn nato_starts_the_lasting_effect_and_the_card_leaves_the_game() {
+        let (map, cards, lib) = fixtures();
+        let game = play_event(&map, &cards, &lib, "nato", "NATO");
+        assert!(game.status().lasting.nato);
+        assert!(game.removed_from_game().contains(&cards.id_by_name("NATO").unwrap()));
+    }
+
+    #[test]
+    fn nato_and_solidarity_need_their_prerequisite_events() {
+        let (map, cards, lib) = fixtures();
+        for (state, card) in [("nato-needs-prerequisite", "NATO"), ("solidarity-needs-john-paul-ii", "Solidarity")] {
+            let mut game = load(&map, &cards, &lib, state);
+            game.play_card(&cards, cards.id_by_name(card).unwrap()).unwrap();
+            assert!(matches!(game.play_event(&map, &cards), Err(GameError::EventRequires { .. })), "{state}");
+            assert!(!game.legal_actions(&map, &cards).contains(&twilight_struggle::Action::Event), "{state}: not offered to the AI");
+        }
+    }
+
+    #[test]
+    fn solidarity_adds_three_us_influence_to_poland() {
+        let (map, cards, lib) = fixtures();
+        let game = play_event(&map, &cards, &lib, "solidarity", "Solidarity");
+        assert_eq!(inf(&map, &game, "Poland"), (3, 0));
+    }
+
+    #[test]
+    fn nato_bars_ussr_coups_and_realignment_in_us_controlled_europe() {
+        let (map, cards, lib) = fixtures();
+        let mut game = load(&map, &cards, &lib, "nato-active");
+        start_coup(&cards, &mut game, "Comecon");
+        let mut dice = Dice::from_seed(1);
+        for name in ["West Germany", "Italy", "France"] {
+            assert!(matches!(game.roll(&map, country(&map, name), &mut dice), Err(GameError::Coup(CoupError::Protected { .. }))), "{name}");
+        }
+        // An uncontrolled US presence is fair game.
+        assert!(matches!(game.roll(&map, country(&map, "Poland"), &mut dice), Ok(RollOutcome::Coup(_))));
+
+        let mut game = load(&map, &cards, &lib, "nato-active");
+        game.play_card(&cards, cards.id_by_name("Comecon").unwrap()).unwrap();
+        game.begin(OperationKind::Realign).unwrap();
+        assert!(matches!(game.roll(&map, country(&map, "West Germany"), &mut dice), Err(GameError::Realign(RealignError::Protected { .. }))));
+        let Some(Operation::Realign(r)) = game.operation() else { panic!("realignment open") };
+        assert!(!r.is_legal_target(&map, game.board(), country(&map, "West Germany")), "protected countries are dimmed");
+    }
+
+    #[test]
+    fn de_gaulle_and_willy_brandt_each_exempt_one_country_from_nato() {
+        let (map, cards, lib) = fixtures();
+        for (state, exempt, protected) in [("nato-de-gaulle", "France", "West Germany"), ("nato-willy-brandt", "West Germany", "Italy")] {
+            let mut game = load(&map, &cards, &lib, state);
+            start_coup(&cards, &mut game, "Comecon");
+            let Some(Operation::Coup(c)) = game.operation() else { panic!("coup open") };
+            assert!(c.is_legal_target(&map, game.board(), country(&map, exempt)), "{state}: {exempt} exempt");
+            assert!(!c.is_legal_target(&map, game.board(), country(&map, protected)), "{state}: {protected} protected");
+        }
+    }
+
+    #[test]
+    fn nato_protects_europe_from_brush_war() {
+        let (map, cards, lib) = fixtures();
+        let mut game = load(&map, &cards, &lib, "brush-war-nato");
+        game.play_card(&cards, cards.id_by_name("Brush War").unwrap()).unwrap();
+        game.play_event(&map, &cards).unwrap();
+        let Some(Operation::War(w)) = game.operation() else { panic!("war open") };
+        assert!(!w.is_legal_target(&map, country(&map, "Greece")));
+        let mut game = load(&map, &cards, &lib, "brush-war-nato");
+        game.status_mut().lasting.nato = false;
+        game.play_card(&cards, cards.id_by_name("Brush War").unwrap()).unwrap();
+        game.play_event(&map, &cards).unwrap();
+        let Some(Operation::War(w)) = game.operation() else { panic!("war open") };
+        assert!(w.is_legal_target(&map, country(&map, "Greece")), "without NATO, Greece is a legal target");
+    }
+
+    #[test]
+    fn special_relationship_with_nato_adds_two_influence_and_two_vp() {
+        let (map, cards, lib) = fixtures();
+        let mut game = load(&map, &cards, &lib, "special-relationship-nato");
+        game.play_card(&cards, cards.id_by_name("Special Relationship").unwrap()).unwrap();
+        game.play_event(&map, &cards).unwrap();
+        let wg = country(&map, "West Germany");
+        game.place(&map, wg).unwrap();
+        game.place(&map, wg).unwrap();
+        game.confirm().unwrap();
+        assert_eq!(inf(&map, &game, "West Germany"), (2, 0));
+        assert_eq!(game.status().vp, 2);
+    }
+
+    #[test]
+    fn us_japan_pact_takes_japan_and_shields_it() {
+        let (map, cards, lib) = fixtures();
+        let game = play_event(&map, &cards, &lib, "us-japan", "US/Japan Mutual Defense Pact");
+        assert_eq!(inf(&map, &game, "Japan"), (4, 0));
+        assert!(game.status().lasting.us_japan);
+
+        let mut game = load(&map, &cards, &lib, "us-japan-active");
+        start_coup(&cards, &mut game, "Comecon");
+        let mut dice = Dice::from_seed(1);
+        assert!(matches!(game.roll(&map, country(&map, "Japan"), &mut dice), Err(GameError::Coup(CoupError::Protected { .. }))));
+        assert!(matches!(game.roll(&map, country(&map, "South Korea"), &mut dice), Ok(RollOutcome::Coup(_))));
+    }
+
+    fn scoring_delta(map: &WorldMap, cards: &CardCatalog, lib: &StateLibrary, name: &str, tweak: impl Fn(&mut Game)) -> (Game, twilight_struggle::scoring::ScoringResult) {
+        let mut game = load(map, cards, lib, name);
+        tweak(&mut game);
+        let side = game.active();
+        let card = *game.hand(side).iter().find(|&&id| cards.card(id).scoring).unwrap();
+        game.play_card(cards, card).unwrap();
+        let EventOutcome::Scoring(result) = game.play_event(map, cards).unwrap() else { panic!("scoring outcome") };
+        (game, result)
+    }
+
+    #[test]
+    fn formosan_makes_a_us_controlled_taiwan_a_battleground_for_asia_scoring() {
+        let (map, cards, lib) = fixtures();
+        let (_, with) = scoring_delta(&map, &cards, &lib, "formosan-asia-scoring", |_| {});
+        let (_, without) = scoring_delta(&map, &cards, &lib, "formosan-asia-scoring", |g| g.status_mut().lasting.formosan = false);
+        assert_eq!(with.vp_delta, without.vp_delta + 1, "Taiwan's battleground point");
+        assert_eq!(with.modifiers, vec![cards.id_by_name("Formosan Resolution").unwrap()]);
+        assert!(without.modifiers.is_empty());
+    }
+
+    #[test]
+    fn formosan_ends_when_the_us_plays_the_china_card() {
+        let (map, cards, lib) = fixtures();
+        let mut game = load(&map, &cards, &lib, "formosan-china-card");
+        game.play_card(&cards, twilight_struggle::CHINA_CARD).unwrap();
+        game.begin(OperationKind::Influence).unwrap();
+        game.confirm().unwrap();
+        assert!(!game.status().lasting.formosan);
+    }
+
+    #[test]
+    fn shuttle_diplomacy_stays_in_effect_until_a_middle_east_scoring_spends_it() {
+        let (map, cards, lib) = fixtures();
+        let game = play_event(&map, &cards, &lib, "shuttle-diplomacy", "Shuttle Diplomacy");
+        let shuttle = cards.id_by_name("Shuttle Diplomacy").unwrap();
+        assert!(game.status().lasting.shuttle_diplomacy);
+        assert!(!game.discards().contains(&shuttle) && !game.removed_from_game().contains(&shuttle));
+
+        let (game, with) = scoring_delta(&map, &cards, &lib, "shuttle-me-scoring", |_| {});
+        let (_, without) = scoring_delta(&map, &cards, &lib, "shuttle-me-scoring", |g| g.status_mut().lasting.shuttle_diplomacy = false);
+        assert_eq!(with.vp_delta, without.vp_delta + 1, "one fewer USSR battleground");
+        assert!(!game.status().lasting.shuttle_diplomacy, "spent by the scoring");
+        assert!(game.discards().contains(&shuttle));
+    }
+
+    #[test]
+    fn willy_brandt_pays_the_ussr_and_adds_west_german_influence() {
+        let (map, cards, lib) = fixtures();
+        let game = play_event(&map, &cards, &lib, "willy-brandt", "Willy Brandt");
+        assert_eq!(game.status().vp, -1);
+        assert_eq!(inf(&map, &game, "West Germany"), (0, 1));
+        assert!(game.status().lasting.willy_brandt);
+    }
+
+    #[test]
+    fn flower_power_pays_the_ussr_for_each_us_war_card_spent_for_ops_or_event() {
+        let (map, cards, lib) = fixtures();
+        assert!(play_event(&map, &cards, &lib, "flower-power", "Flower Power").status().lasting.flower_power);
+
+        // Spent for ops.
+        let mut game = load(&map, &cards, &lib, "flower-power-active");
+        game.play_card(&cards, cards.id_by_name("Korean War").unwrap()).unwrap();
+        game.begin(OperationKind::Influence).unwrap();
+        game.confirm().unwrap();
+        assert_eq!(game.status().vp, -2);
+
+        // A non-war card pays nothing.
+        let mut game = load(&map, &cards, &lib, "flower-power-active");
+        game.play_card(&cards, cards.id_by_name("Duck and Cover").unwrap()).unwrap();
+        game.begin(OperationKind::Influence).unwrap();
+        game.confirm().unwrap();
+        assert_eq!(game.status().vp, 0);
+
+        // Played as its event: the roll closes the war and the trigger fires.
+        let mut game = load(&map, &cards, &lib, "flower-power-active");
+        game.play_card(&cards, cards.id_by_name("Korean War").unwrap()).unwrap();
+        game.play_event(&map, &cards).unwrap();
+        let mut dice = Dice::from_seed(3);
+        game.roll(&map, country(&map, "South Korea"), &mut dice).unwrap();
+        assert!(game.status().vp <= -2, "Flower Power's 2 VP is paid (plus the war's own, on a win)");
+    }
+
+    #[test]
+    fn an_evil_empire_cancels_flower_power() {
+        let (map, cards, lib) = fixtures();
+        let game = play_event(&map, &cards, &lib, "evil-empire-cancels-flower-power", "\u{201c}An Evil Empire\u{201d}");
+        assert!(!game.status().lasting.flower_power);
+    }
+
+    #[test]
+    fn we_will_bury_you_drops_defcon_and_pays_after_the_uss_next_round() {
+        let (map, cards, lib) = fixtures();
+        let mut game = play_event(&map, &cards, &lib, "we-will-bury-you", "\u{201c}We Will Bury You\u{201d}");
+        assert_eq!(game.status().defcon, 3);
+        assert_eq!(game.status().vp, 0, "nothing yet");
+        assert!(game.status().lasting.we_will_bury_you.is_some());
+        // The US's next action round: spending its card pays the USSR 3 VP.
+        game.play_card(&cards, cards.id_by_name("Duck and Cover").unwrap()).unwrap();
+        game.begin(OperationKind::Influence).unwrap();
+        game.confirm().unwrap();
+        assert_eq!(game.status().vp, -3);
+        assert!(game.status().lasting.we_will_bury_you.is_none());
     }
 }

@@ -17,7 +17,7 @@ use crate::board::Board;
 use crate::cards::CardId;
 use crate::country::{CountryId, Region, Superpower};
 use crate::map::WorldMap;
-use crate::ongoing::OngoingEffect;
+use crate::ongoing::{LastingEffect, OngoingEffect};
 use crate::status::GameStatus;
 
 /// One country's influence for one side, before and after an event —
@@ -47,6 +47,9 @@ pub struct EffectResult {
     pub defcon: Option<(u8, u8)>,
     /// A turn-long effect the event starts (see [`crate::ongoing`]).
     pub ongoing: Option<OngoingEffect>,
+    /// A game-long effect the event starts, or one it ends (see [`crate::ongoing`]).
+    pub lasting: Option<LastingEffect>,
+    pub cancels: Option<LastingEffect>,
 }
 
 /// What one card's effect function sees and mutates: the board as it was
@@ -66,6 +69,8 @@ struct Ctx<'a> {
     vp_delta: i8,
     defcon: Option<(u8, u8)>,
     ongoing: Option<OngoingEffect>,
+    lasting: Option<LastingEffect>,
+    cancels: Option<LastingEffect>,
 }
 
 impl Ctx<'_> {
@@ -131,6 +136,16 @@ impl Ctx<'_> {
         self.ongoing = Some(effect);
     }
 
+    /// Starts a game-long effect.
+    fn persist(&mut self, effect: LastingEffect) {
+        self.lasting = Some(effect);
+    }
+
+    /// Ends another card's game-long effect.
+    fn cancel(&mut self, effect: LastingEffect) {
+        self.cancels = Some(effect);
+    }
+
     /// Battleground countries `side` controls, optionally restricted to
     /// some regions.
     fn controlled_battlegrounds(&self, side: Superpower, regions: Option<&[Region]>) -> i8 {
@@ -156,14 +171,20 @@ const EFFECTS: &[(u8, Effect)] = &[
     (12, romanian_abdication),
     (15, nasser),
     (17, de_gaulle_leads_france),
+    (21, nato),
     (25, containment),
     (31, red_scare_purge),
+    (27, us_japan_mutual_defense_pact),
     (34, nuclear_test_ban),
+    (35, formosan_resolution),
     (41, nuclear_subs),
     (48, kitchen_debates),
+    (50, we_will_bury_you),
     (51, brezhnev_doctrine),
     (52, portuguese_empire_crumbles),
     (54, allende),
+    (55, willy_brandt),
+    (59, flower_power),
     (64, panama_canal_returned),
     (65, camp_david_accords),
     (68, john_paul_ii_elected_pope),
@@ -173,9 +194,11 @@ const EFFECTS: &[(u8, Effect)] = &[
     (82, iranian_hostage_crisis),
     (83, the_iron_lady),
     (84, reagan_bombs_libya),
+    (73, shuttle_diplomacy),
     (86, north_sea_oil),
     (93, iran_contra_scandal),
     (97, an_evil_empire),
+    (101, solidarity),
     (109, yuri_and_samantha),
     (110, awacs_sale_to_saudis),
 ];
@@ -193,9 +216,9 @@ pub fn is_effect_card(card: CardId) -> bool {
 /// name the map doesn't know, which `tests` below pins for every card.
 pub fn resolve(map: &WorldMap, board: &Board, status: &GameStatus, card: CardId) -> Option<EffectResult> {
     let effect = effect_for(card)?;
-    let mut ctx = Ctx { map, before: board, working: board.clone(), status, changes: Vec::new(), vp_delta: 0, defcon: None, ongoing: None };
+    let mut ctx = Ctx { map, before: board, working: board.clone(), status, changes: Vec::new(), vp_delta: 0, defcon: None, ongoing: None, lasting: None, cancels: None };
     effect(&mut ctx);
-    Some(EffectResult { card, player: status.active, influence: ctx.changes, vp_delta: ctx.vp_delta, defcon: ctx.defcon, ongoing: ctx.ongoing })
+    Some(EffectResult { card, player: status.active, influence: ctx.changes, vp_delta: ctx.vp_delta, defcon: ctx.defcon, ongoing: ctx.ongoing, lasting: ctx.lasting, cancels: ctx.cancels })
 }
 
 // ---- the cards, in printed-number order ----
@@ -234,6 +257,7 @@ fn nasser(c: &mut Ctx) {
 fn de_gaulle_leads_france(c: &mut Ctx) {
     c.remove("France", Superpower::Us, 2);
     c.add("France", Superpower::Ussr, 1);
+    c.persist(LastingEffect::DeGaulle);
 }
 
 /// #25 Containment: US ops cards get +1 ops (max 4) for the rest of the turn.
@@ -353,6 +377,7 @@ fn iran_contra_scandal(c: &mut Ctx) {
 /// #97 “An Evil Empire”
 fn an_evil_empire(c: &mut Ctx) {
     c.award_vp(Superpower::Us, 1);
+    c.cancel(LastingEffect::FlowerPower);
 }
 
 /// #109 Yuri and Samantha: the USSR gets 1 VP per US coup for the rest of the turn.
@@ -363,6 +388,51 @@ fn yuri_and_samantha(c: &mut Ctx) {
 /// #110 AWACS Sale to Saudis
 fn awacs_sale_to_saudis(c: &mut Ctx) {
     c.add("Saudi Arabia", Superpower::Us, 2);
+}
+
+/// #21 NATO: the USSR can't coup or realign US-controlled Europe.
+fn nato(c: &mut Ctx) {
+    c.persist(LastingEffect::Nato);
+}
+
+/// #27 US/Japan Mutual Defense Pact: the US takes control of Japan; the USSR can't coup or realign it.
+fn us_japan_mutual_defense_pact(c: &mut Ctx) {
+    c.take_control("Japan", Superpower::Us);
+    c.persist(LastingEffect::UsJapan);
+}
+
+/// #35 Formosan Resolution: Taiwan scores as a battleground while US-controlled, until the US plays the China Card.
+fn formosan_resolution(c: &mut Ctx) {
+    c.persist(LastingEffect::Formosan);
+}
+
+/// #50 "We Will Bury You": DEFCON -1; the USSR gets 3 VP when the US finishes its next action round.
+fn we_will_bury_you(c: &mut Ctx) {
+    c.set_defcon(c.status.defcon.saturating_sub(1));
+    // Played by the US (as its own round), the "next" round is the one after.
+    c.persist(LastingEffect::WeWillBuryYou { skip: (c.player() == Superpower::Us) as u8 });
+}
+
+/// #55 Willy Brandt: USSR +1 VP and +1 West Germany; NATO no longer protects West Germany.
+fn willy_brandt(c: &mut Ctx) {
+    c.award_vp(Superpower::Ussr, 1);
+    c.add("West Germany", Superpower::Ussr, 1);
+    c.persist(LastingEffect::WillyBrandt);
+}
+
+/// #59 Flower Power: the USSR gets 2 VP for each war card the US plays from now on.
+fn flower_power(c: &mut Ctx) {
+    c.persist(LastingEffect::FlowerPower);
+}
+
+/// #73 Shuttle Diplomacy: the next Asia/Middle East scoring counts one fewer USSR battleground.
+fn shuttle_diplomacy(c: &mut Ctx) {
+    c.persist(LastingEffect::ShuttleDiplomacy);
+}
+
+/// #101 Solidarity (needs #68 first — see `events::blocked`).
+fn solidarity(c: &mut Ctx) {
+    c.add("Poland", Superpower::Us, 3);
 }
 
 #[cfg(test)]
