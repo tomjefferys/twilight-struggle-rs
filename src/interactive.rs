@@ -259,7 +259,7 @@ pub fn run(
                     KeyCode::Esc if matches!(screen, Screen::World { .. }) => return Ok(()),
                     KeyCode::Char('q') => return Ok(()),
                     KeyCode::Char('z') => {
-                        if hand_item_count(game, game.active()) > 0 {
+                        if zoom_card(game, &hand_selected).is_some() {
                             zoomed = !zoomed;
                         }
                     }
@@ -624,6 +624,13 @@ fn selected_hand_card(game: &Game, hand_selected: &[usize; 2]) -> Option<CardId>
     Some(if idx < hand.len() { hand[idx] } else { CHINA_CARD })
 }
 
+/// The card `z` zooms on: whichever card is in play, if any (it has left
+/// the hand, so the strip's selection no longer points at it), else the
+/// strip's current selection.
+fn zoom_card(game: &Game, hand_selected: &[usize; 2]) -> Option<CardId> {
+    game.card_in_play().or_else(|| selected_hand_card(game, hand_selected))
+}
+
 /// `[`/`]`/`Space` share this handler between the normal keymap and the
 /// zoomed-card modal (see `run`'s own doc), since both let hand
 /// navigation and selection work identically. `[`/`]` cycle the
@@ -663,7 +670,7 @@ fn handle_hand_key(code: KeyCode, game: &mut Game, cards: &CardCatalog, hand_sel
 fn cycle_hand(game: &Game, hand_selected: &mut [usize; 2], delta: i32) {
     let side = game.active();
     let count = hand_item_count(game, side);
-    if count == 0 {
+    if count == 0 || game.card_in_play().is_some() {
         return;
     }
     let idx = side_index(side);
@@ -744,7 +751,7 @@ fn draw(
     let selected_idx = (item_count > 0).then(|| hand_selected[side_index(side)].min(item_count - 1));
     let hand_canvas = render_hand(cards, hand, china, side, selected_idx, game.card_in_play_slot());
 
-    if zoomed && let Some(id) = selected_hand_card(game, hand_selected) {
+    if zoomed && let Some(id) = zoom_card(game, hand_selected) {
         let china_face_up = (id == CHINA_CARD).then_some(status.china_card_face_up);
         let card_canvas = render_card(cards, id, china_face_up);
         blit_centred(&mut canvas, &card_canvas);
