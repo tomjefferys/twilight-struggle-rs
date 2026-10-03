@@ -111,6 +111,18 @@
       "hands": { "us": ["Southeast Asia Scoring"], "ussr": ["NATO"] }
     },
     {
+      "name": "central-america-us-control",
+      "description": "US controls every Central America country it holds influence in, including all three battlegrounds (Mexico, Cuba, Panama) plus Guatemala — Control (5) plus 3 battlegrounds (+3) for +8. Mexico and Cuba border the USA, but that's the US's own superpower, so there's no adjacency bonus. US to act with Central America Scoring in hand.",
+      "status": { "active": "Us" },
+      "influence": {
+        "Mexico": [2, 0],
+        "Cuba": [3, 0],
+        "Panama": [2, 0],
+        "Guatemala": [1, 0]
+      },
+      "hands": { "us": ["Central America Scoring"], "ussr": ["NATO"] }
+    },
+    {
       "name": "vp-cap-us-wins",
       "description": "VP already at +18. US controls Pakistan, India, and Burma — Asia Domination (+7) plus 2 battlegrounds (+2), no adjacency — for +9, which would put the track at +27. It should clamp to +20 and end the game with a US victory by VP, not Europe Control. US to act with Asia Scoring in hand.",
       "status": { "active": "Us", "vp": 18 },
