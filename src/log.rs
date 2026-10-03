@@ -79,6 +79,9 @@ pub enum Event {
         ops_spent: u8,
         ops_total: u8,
     },
+    /// A lasting event paid out on its own (Flower Power, We Will Bury You):
+    /// the card, the VP change (US-positive) and the track's new value.
+    Triggered { card: CardId, vp_delta: i8, vp_after: i8 },
     /// The active side forfeited its turn with no operation open.
     Pass,
     /// A scoring card's event resolved — [`crate::game::Game::play_event`],

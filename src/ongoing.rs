@@ -10,8 +10,10 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::board::Board;
 use crate::cards::CardId;
-use crate::country::{Region, SubRegion, Superpower};
+use crate::country::{CountryId, Region, SubRegion, Superpower};
+use crate::map::WorldMap;
 
 /// The most operations points a card can ever be worth (Containment's and
 /// Brezhnev Doctrine's own cap).
@@ -227,6 +229,178 @@ impl TurnEffects {
     }
 }
 
+/// One card's game-long effect, as played — what an `EffectResult::lasting`
+/// carries and [`LastingEffects::apply`] records.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LastingEffect {
+    /// #17: NATO doesn't protect France.
+    DeGaulle,
+    /// #21: the USSR can't coup/realign US-controlled Europe (or Brush War it).
+    Nato,
+    /// #27: the USSR can't coup/realign Japan.
+    UsJapan,
+    /// #35: Taiwan counts as an Asia battleground while US-controlled.
+    Formosan,
+    /// #50: the USSR gets 3 VP when the US finishes its next action round.
+    /// `skip` is how many US action-round completions to let pass first
+    /// (0 if the USSR played it, 1 if the US played it as its own round).
+    WeWillBuryYou { skip: u8 },
+    /// #55: NATO doesn't protect West Germany.
+    WillyBrandt,
+    /// #59: the USSR gets 2 VP for each war card the US spends.
+    FlowerPower,
+    /// #73: the next Asia/Middle East scoring counts one fewer USSR battleground.
+    ShuttleDiplomacy,
+}
+
+impl LastingEffect {
+    pub fn card(&self) -> CardId {
+        CardId(match self {
+            LastingEffect::DeGaulle => 17,
+            LastingEffect::Nato => 21,
+            LastingEffect::UsJapan => 27,
+            LastingEffect::Formosan => 35,
+            LastingEffect::WeWillBuryYou { .. } => 50,
+            LastingEffect::WillyBrandt => 55,
+            LastingEffect::FlowerPower => 59,
+            LastingEffect::ShuttleDiplomacy => 73,
+        })
+    }
+
+    /// The side the effect favours — what a view colours it by.
+    pub fn side(&self) -> Superpower {
+        match self {
+            LastingEffect::Nato | LastingEffect::UsJapan | LastingEffect::Formosan | LastingEffect::ShuttleDiplomacy => Superpower::Us,
+            LastingEffect::DeGaulle | LastingEffect::WeWillBuryYou { .. } | LastingEffect::WillyBrandt | LastingEffect::FlowerPower => Superpower::Ussr,
+        }
+    }
+
+    /// Short label for the status bar and log.
+    pub fn label(&self) -> &'static str {
+        match self {
+            LastingEffect::DeGaulle => "De Gaulle",
+            LastingEffect::Nato => "NATO",
+            LastingEffect::UsJapan => "US/Japan Pact",
+            LastingEffect::Formosan => "Formosan Resolution",
+            LastingEffect::WeWillBuryYou { .. } => "We Will Bury You",
+            LastingEffect::WillyBrandt => "Willy Brandt",
+            LastingEffect::FlowerPower => "Flower Power",
+            LastingEffect::ShuttleDiplomacy => "Shuttle Diplomacy",
+        }
+    }
+}
+
+/// Card events that stay in force past the turn they were played — unlike
+/// [`TurnEffects`] nothing here is cleared by `Game::advance`; each ends
+/// only by its own card's text. Same shape as `TurnEffects`: plain `Copy`
+/// data in [`crate::status::GameStatus`], with only small pure queries.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(default)]
+pub struct LastingEffects {
+    pub de_gaulle: bool,
+    pub nato: bool,
+    pub us_japan: bool,
+    pub formosan: bool,
+    pub we_will_bury_you: Option<u8>,
+    pub willy_brandt: bool,
+    pub flower_power: bool,
+    pub shuttle_diplomacy: bool,
+}
+
+impl LastingEffects {
+    pub fn is_empty(&self) -> bool {
+        *self == LastingEffects::default()
+    }
+
+    /// Records `effect` as in force.
+    pub fn apply(&mut self, effect: LastingEffect) {
+        match effect {
+            LastingEffect::DeGaulle => self.de_gaulle = true,
+            LastingEffect::Nato => self.nato = true,
+            LastingEffect::UsJapan => self.us_japan = true,
+            LastingEffect::Formosan => self.formosan = true,
+            LastingEffect::WeWillBuryYou { skip } => self.we_will_bury_you = Some(skip),
+            LastingEffect::WillyBrandt => self.willy_brandt = true,
+            LastingEffect::FlowerPower => self.flower_power = true,
+            LastingEffect::ShuttleDiplomacy => self.shuttle_diplomacy = true,
+        }
+    }
+
+    /// Ends `effect` (a later card cancelling it, or its own trigger spent).
+    pub fn cancel(&mut self, effect: LastingEffect) {
+        match effect {
+            LastingEffect::DeGaulle => self.de_gaulle = false,
+            LastingEffect::Nato => self.nato = false,
+            LastingEffect::UsJapan => self.us_japan = false,
+            LastingEffect::Formosan => self.formosan = false,
+            LastingEffect::WeWillBuryYou { .. } => self.we_will_bury_you = None,
+            LastingEffect::WillyBrandt => self.willy_brandt = false,
+            LastingEffect::FlowerPower => self.flower_power = false,
+            LastingEffect::ShuttleDiplomacy => self.shuttle_diplomacy = false,
+        }
+    }
+
+    /// Everything in force, in card-number order.
+    pub fn active(&self) -> Vec<LastingEffect> {
+        let mut v = Vec::new();
+        if self.de_gaulle {
+            v.push(LastingEffect::DeGaulle);
+        }
+        if self.nato {
+            v.push(LastingEffect::Nato);
+        }
+        if self.us_japan {
+            v.push(LastingEffect::UsJapan);
+        }
+        if self.formosan {
+            v.push(LastingEffect::Formosan);
+        }
+        if let Some(skip) = self.we_will_bury_you {
+            v.push(LastingEffect::WeWillBuryYou { skip });
+        }
+        if self.willy_brandt {
+            v.push(LastingEffect::WillyBrandt);
+        }
+        if self.flower_power {
+            v.push(LastingEffect::FlowerPower);
+        }
+        if self.shuttle_diplomacy {
+            v.push(LastingEffect::ShuttleDiplomacy);
+        }
+        v
+    }
+
+    /// The card that bars `attacker` from coup/realign rolls (or Brush War)
+    /// against `id`, if any: NATO for a US-controlled European country
+    /// (France and West Germany exempt once De Gaulle / Willy Brandt are
+    /// in force), the US/Japan pact for Japan. Only the USSR is ever barred.
+    pub fn protects(&self, map: &WorldMap, board: &Board, attacker: Superpower, id: CountryId) -> Option<CardId> {
+        if attacker != Superpower::Ussr {
+            return None;
+        }
+        let country = map.country(id);
+        if self.us_japan && country.name == "Japan" {
+            return Some(CardId(27));
+        }
+        let exempt = (self.de_gaulle && country.name == "France") || (self.willy_brandt && country.name == "West Germany");
+        if self.nato && country.region == Region::Europe && !exempt && board.is_controlled_by(map, id, Superpower::Us) {
+            return Some(CardId(21));
+        }
+        None
+    }
+
+    /// Whether Taiwan counts as a battleground for Asia Scoring: Formosan
+    /// Resolution while the US controls it.
+    pub fn taiwan_battleground(&self, map: &WorldMap, board: &Board, id: CountryId) -> bool {
+        self.formosan && map.country(id).name == "Taiwan" && board.is_controlled_by(map, id, Superpower::Us)
+    }
+
+    /// Whether Shuttle Diplomacy bites on `card` (Asia #1 or Middle East #3 scoring).
+    pub fn shuttle_applies(&self, card: CardId) -> bool {
+        self.shuttle_diplomacy && matches!(card.0, 1 | 3)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -310,5 +484,86 @@ mod tests {
         assert_eq!(cards, vec![9, 25, 94]);
         let json = serde_json::to_string(&t).unwrap();
         assert_eq!(serde_json::from_str::<TurnEffects>(&json).unwrap(), t);
+    }
+
+    // --- lasting effects ---
+
+    fn lasting(effects: &[LastingEffect]) -> LastingEffects {
+        let mut l = LastingEffects::default();
+        for &e in effects {
+            l.apply(e);
+        }
+        l
+    }
+
+    fn us_controls(map: &WorldMap, board: &mut Board, name: &str) {
+        let id = map.id_by_name(name).unwrap();
+        board.set_influence(id, Us, map.country(id).stability + 1);
+    }
+
+    #[test]
+    fn lasting_effects_start_empty_apply_cancel_and_round_trip_through_serde() {
+        let mut l = LastingEffects::default();
+        assert!(l.is_empty());
+        for e in [LastingEffect::Nato, LastingEffect::Formosan, LastingEffect::WeWillBuryYou { skip: 1 }] {
+            l.apply(e);
+        }
+        assert_eq!(l.active().iter().map(|e| e.card().0).collect::<Vec<_>>(), vec![21, 35, 50]);
+        let back: LastingEffects = serde_json::from_str(&serde_json::to_string(&l).unwrap()).unwrap();
+        assert_eq!(back, l);
+        l.cancel(LastingEffect::Nato);
+        l.cancel(LastingEffect::WeWillBuryYou { skip: 0 });
+        assert_eq!(l.active(), vec![LastingEffect::Formosan]);
+    }
+
+    #[test]
+    fn nato_shields_only_us_controlled_europe_from_the_ussr() {
+        let map = WorldMap::standard().unwrap();
+        let mut board = Board::new(&map);
+        us_controls(&map, &mut board, "Italy");
+        us_controls(&map, &mut board, "Iran");
+        let (italy, iran, spain) = (map.id_by_name("Italy").unwrap(), map.id_by_name("Iran").unwrap(), map.id_by_name("Spain/Portugal").unwrap());
+        let l = lasting(&[LastingEffect::Nato]);
+        assert_eq!(l.protects(&map, &board, Ussr, italy), Some(CardId(21)));
+        assert_eq!(l.protects(&map, &board, Us, italy), None, "only the USSR is barred");
+        assert_eq!(l.protects(&map, &board, Ussr, iran), None, "not Europe");
+        assert_eq!(l.protects(&map, &board, Ussr, spain), None, "not US-controlled");
+        assert_eq!(LastingEffects::default().protects(&map, &board, Ussr, italy), None, "no NATO");
+    }
+
+    #[test]
+    fn de_gaulle_and_willy_brandt_exempt_france_and_west_germany() {
+        let map = WorldMap::standard().unwrap();
+        let mut board = Board::new(&map);
+        for n in ["France", "West Germany"] {
+            us_controls(&map, &mut board, n);
+        }
+        let (france, wg) = (map.id_by_name("France").unwrap(), map.id_by_name("West Germany").unwrap());
+        let l = lasting(&[LastingEffect::Nato, LastingEffect::DeGaulle]);
+        assert_eq!((l.protects(&map, &board, Ussr, france), l.protects(&map, &board, Ussr, wg)), (None, Some(CardId(21))));
+        let l = lasting(&[LastingEffect::Nato, LastingEffect::WillyBrandt]);
+        assert_eq!((l.protects(&map, &board, Ussr, france), l.protects(&map, &board, Ussr, wg)), (Some(CardId(21)), None));
+    }
+
+    #[test]
+    fn the_japan_pact_shields_japan_even_without_nato() {
+        let map = WorldMap::standard().unwrap();
+        let board = Board::new(&map);
+        let japan = map.id_by_name("Japan").unwrap();
+        assert_eq!(lasting(&[LastingEffect::UsJapan]).protects(&map, &board, Ussr, japan), Some(CardId(27)));
+    }
+
+    #[test]
+    fn formosan_needs_a_us_controlled_taiwan_and_shuttle_only_bites_asia_and_middle_east() {
+        let map = WorldMap::standard().unwrap();
+        let mut board = Board::new(&map);
+        let taiwan = map.id_by_name("Taiwan").unwrap();
+        let l = lasting(&[LastingEffect::Formosan, LastingEffect::ShuttleDiplomacy]);
+        assert!(!l.taiwan_battleground(&map, &board, taiwan));
+        us_controls(&map, &mut board, "Taiwan");
+        assert!(l.taiwan_battleground(&map, &board, taiwan));
+        assert!(!l.taiwan_battleground(&map, &board, map.id_by_name("Japan").unwrap()));
+        assert!([1, 3].iter().all(|&n| l.shuttle_applies(CardId(n))));
+        assert!(![2, 79, 38].iter().any(|&n| l.shuttle_applies(CardId(n))));
     }
 }

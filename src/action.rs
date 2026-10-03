@@ -147,7 +147,7 @@ impl Game {
             }
             None => {
                 if let Some(id) = self.card_in_play() {
-                    if events::is_implemented(id) && events::is_prevented(id, self.removed_from_game()).is_none() {
+                    if events::is_implemented(id) && events::blocked(id, self.removed_from_game()).is_none() {
                         actions.push(Action::Event);
                     }
                     // A scoring card has no ops for `Begin` to spend —

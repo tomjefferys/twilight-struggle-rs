@@ -527,6 +527,23 @@ pub fn ongoing_effect_line(effect: &crate::ongoing::OngoingEffect) -> String {
     }
 }
 
+/// One game-long event, worded like [`ongoing_effect_line`] — `NATO: US-held Europe
+/// is safe from USSR coups and realignment`. Coloured by
+/// [`crate::ongoing::LastingEffect::side`].
+pub fn lasting_effect_line(effect: &crate::ongoing::LastingEffect) -> String {
+    use crate::ongoing::LastingEffect as E;
+    match effect {
+        E::DeGaulle => "De Gaulle: France is outside NATO".to_string(),
+        E::Nato => "NATO: USSR can't coup/realign US-held Europe".to_string(),
+        E::UsJapan => "US/Japan Pact: USSR can't coup/realign Japan".to_string(),
+        E::Formosan => "Formosan Resolution: US-held Taiwan scores as a battleground".to_string(),
+        E::WeWillBuryYou { .. } => "We Will Bury You: USSR +3 VP after the US's next round".to_string(),
+        E::WillyBrandt => "Willy Brandt: West Germany is outside NATO".to_string(),
+        E::FlowerPower => "Flower Power: USSR +2 VP per US war card".to_string(),
+        E::ShuttleDiplomacy => "Shuttle Diplomacy: -1 USSR battleground at next Asia/Middle East scoring".to_string(),
+    }
+}
+
 /// The "where has this operation acted so far" half of
 /// [`operation_balance_line`] on its own. See that function's own doc for
 /// what each operation kind's per-country summary says.

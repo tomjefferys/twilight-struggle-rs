@@ -10,7 +10,7 @@ rolls), twenty *choice* cards (the card's own side picks the
 countries to add/remove influence in, whoever is phasing), and ten
 *turn-long* effects ("for the remainder of this turn" — Containment,
 Chernobyl, …, held in `GameStatus::effects` until the turn rolls over),
-and the five *war* cards (a die roll against a target, Military Ops tracked), which can end the game outright (VP reaching ±20, DEFCON
+the five *war* cards (a die roll against a target, Military Ops tracked), and eight *lasting* cards (NATO, US/Japan Pact, Formosan Resolution, We Will Bury You, Willy Brandt, Flower Power, Shuttle Diplomacy — held in `GameStatus::lasting`, never cleared by a turn rolling over — plus Solidarity's prerequisite), which can end the game outright (VP reaching ±20, DEFCON
 reaching 1, or Europe Scoring's Control tier). `CARDS.md` tracks which of
 the 110 cards have their event implemented (`tests/cards_progress.rs`
 keeps it honest). Every other card's text, DEFCON degradation *other than a battleground
@@ -193,6 +193,7 @@ uniformly random legal moves.
   `remaining()` and the AI must ask `InfluencePlacement::can_place` /
   `Realignment::can_afford`, never compare `cost` to `remaining` themselves.
   `Operation::pending_bonus` is what headers hint at.
+  **Lasting effects** (`LastingEffects`/`LastingEffect`, same file) are the game-long sibling of `TurnEffects`: a `GameStatus::lasting` field (`#[serde(default, skip_serializing_if = is_empty)]`) that `Game::advance` never resets. Pure queries only: `protects(map, board, attacker, id)` (NATO for US-controlled Europe, minus France under De Gaulle and West Germany under Willy Brandt; the US/Japan pact for Japan — only the USSR is ever barred; returns the responsible `CardId`), `taiwan_battleground` (Formosan) and `shuttle_applies`. `Coup`/`Realignment` take `with_lasting` and refuse a protected target (`CoupError`/`RealignError::Protected`, and `is_legal_target` is false so the existing dimming works, judged on the live board); `War::with_lasting` does the same for Brush War vs NATO. `events::scoring::resolve` takes the effects too and lists what applied in `ScoringResult::modifiers` (shown in the score modal and log line). `EffectResult::lasting`/`cancels` start or end one (`Ctx::persist`/`cancel`); `Game::finish_effect` applies them. Three triggers live in `Game`, each logged as `Event::Triggered` (`trigger` line): Flower Power (`flower_power_check`, from `discard_played_card` for ops and `finish_war` for events), We Will Bury You (in `advance`, when the US finishes the round it was owed — `skip` is 1 if the US itself played it), and Formosan's cancel on the US playing the China Card. Shuttle Diplomacy isn't discarded when played: the scoring it modifies spends and discards it.
 - **`ops`** (`src/ops/`) — the game's ops-spending operations, plus (as
   `Operation::Event`) a choice card's event in progress. Four kinds
   so far, sharing the `Operation` enum (`src/ops/mod.rs`) as the seam the
@@ -322,9 +323,8 @@ uniformly random legal moves.
     `military_ops_*` clamped 0–5, `Event::War`, discard/remove, hand the turn
     over — no `confirm`; `confirm`/`cancel` are refused with `WarNotRolled`,
     `abandon` is free before the roll). The AI sees it as `Action::Roll`
-    per target. `events::is_prevented` is the first modelled "prevents"
-    clause (Camp David in `Hands::removed` bars #13; `GameError::EventPrevented`,
-    and `Action::Event` isn't offered). Brush War's NATO clause isn't modelled.
+    per target. `events::blocked` (prevents *and* requires clauses: #13←#65, #7←#83, #56←#110, #59←#97; NATO needs #16/#23, Solidarity #68; `GameError::EventPrevented`/`EventRequires`) is the modelled "prevents"
+    clause (a played card sits in `Hands::removed`, which is all `blocked` reads; `Action::Event` isn't offered). Brush War's NATO clause is (`War::with_lasting`).
     In interactive mode `e` jumps to the country screen of a lone
     target (Korean, Arab-Israeli) or to the region view of the first target
     (preferring the current region) with non-targets dimmed; `r` rolls on the
@@ -1198,7 +1198,7 @@ deliberate exception, for debug-mode test states specifically.
 - `backup/` — earlier full snapshots of the world map, kept in case a
   future change needs to compare against or revert to an earlier version.
 - `states/` — named test states (`src/states.rs`'s own `StateLibrary`),
-  one JSON file per topic (`scoring.json` is the first, then `events.json` for the fixed-effect cards, `choices.json` for the choice cards and `turn-effects.json` for the turn-long ones — each card's own event, plus `*-active` states with an effect already in force), each holding a
+  one JSON file per topic (`scoring.json` is the first, then `events.json` for the fixed-effect cards, `choices.json` for the choice cards, `turn-effects.json` for the turn-long ones and `lasting.json` for the game-long ones — each card's own event, plus `*-active` states with an effect already in force), each holding a
   `{"states": [...]}` array of several named `Scenario` snapshots. Read
   from disk at runtime, not `include_str!`-embedded — see `states.rs`'s
   own doc above for why.

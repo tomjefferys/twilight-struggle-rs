@@ -44,6 +44,9 @@ pub fn render_scoring_result(
             push_side_lines(&mut lines, Superpower::Ussr, ussr, text_width);
             lines.push((String::new(), Style::default()));
             push_text(&mut lines, &format!("{region} scoring"), Style::color(Color::Muted), text_width);
+            for &card in &result.modifiers {
+                push_text(&mut lines, &format!("affected by {}", cards.card(card).name), Style::color(Color::Muted), text_width);
+            }
         }
         ScoringKind::SoutheastAsia { controlled } if controlled.is_empty() => {
             push_text(&mut lines, "no Southeast Asia country is controlled", Style::color(Color::Muted), text_width);
@@ -171,7 +174,7 @@ mod tests {
             card,
             kind: ScoringKind::Region { region: Region::MiddleEast, us, ussr },
             vp_delta: 3 - (5 + 1),
-            automatic_victory: None,
+            automatic_victory: None, modifiers: vec![]
         };
         let canvas = render_scoring_result(&map, &cards, &result, -3, None);
         let text = canvas.render(ColorMode::Never);
@@ -194,7 +197,7 @@ mod tests {
             card,
             kind: ScoringKind::Region { region: Region::Africa, us: score, ussr: score },
             vp_delta: 0,
-            automatic_victory: None,
+            automatic_victory: None, modifiers: vec![]
         };
         let canvas = render_scoring_result(&map, &cards, &result, 0, None);
         let text = canvas.render(ColorMode::Never);
@@ -212,7 +215,7 @@ mod tests {
             card,
             kind: ScoringKind::Region { region: Region::Europe, us, ussr },
             vp_delta: -5,
-            automatic_victory: Some(Ussr),
+            automatic_victory: Some(Ussr), modifiers: vec![]
         };
         let canvas = render_scoring_result(&map, &cards, &result, -5, None);
         let text = canvas.render(ColorMode::Always);
@@ -232,7 +235,7 @@ mod tests {
             card,
             kind: ScoringKind::SoutheastAsia { controlled: vec![(thailand, Ussr, 2), (vietnam, Us, 1)] },
             vp_delta: 1 - 2,
-            automatic_victory: None,
+            automatic_victory: None, modifiers: vec![]
         };
         let canvas = render_scoring_result(&map, &cards, &result, -1, Some((2, 3)));
         let text = canvas.render(ColorMode::Never);
@@ -247,7 +250,7 @@ mod tests {
         let map = map();
         let card = cards.id_by_name("Southeast Asia Scoring").unwrap();
         let result =
-            ScoringResult { card, kind: ScoringKind::SoutheastAsia { controlled: vec![] }, vp_delta: 0, automatic_victory: None };
+            ScoringResult { card, kind: ScoringKind::SoutheastAsia { controlled: vec![] }, vp_delta: 0, automatic_victory: None, modifiers: vec![] };
         let canvas = render_scoring_result(&map, &cards, &result, 0, None);
         let text = canvas.render(ColorMode::Never);
         assert!(text.contains("no Southeast Asia country is controlled"), "{text}");
@@ -266,13 +269,13 @@ mod tests {
             let crate::cards::CardFound::One(card) = card else { panic!("card #{id} should resolve uniquely") };
             let result = match cards.card(card).name.as_str() {
                 "Southeast Asia Scoring" => {
-                    ScoringResult { card, kind: ScoringKind::SoutheastAsia { controlled: vec![] }, vp_delta: 0, automatic_victory: None }
+                    ScoringResult { card, kind: ScoringKind::SoutheastAsia { controlled: vec![] }, vp_delta: 0, automatic_victory: None, modifiers: vec![] }
                 }
                 _ => ScoringResult {
                     card,
                     kind: ScoringKind::Region { region: Region::Europe, us: score, ussr: score },
                     vp_delta: 0,
-                    automatic_victory: None,
+                    automatic_victory: None, modifiers: vec![]
                 },
             };
             let canvas = render_scoring_result(&map, &cards, &result, 0, None);

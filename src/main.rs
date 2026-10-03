@@ -1395,6 +1395,9 @@ fn run_status_command(session: &Session) {
         format!("{}/{}", status.action_round, status.action_rounds_per_turn)
     };
     println!("TURN {}   AR {ar}   {} to act   {card}   {} ops available", status.turn, session.game.active(), session.game.ops_available());
+    for effect in status.lasting.active() {
+        println!("in effect: {}", twilight_struggle::render::lasting_effect_line(&effect));
+    }
     for effect in status.effects.active() {
         println!("in effect this turn: {}", ongoing_effect_line(&effect));
     }

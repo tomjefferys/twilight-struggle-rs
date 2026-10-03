@@ -30,7 +30,8 @@ use crate::board::Board;
 use crate::country::{CountryId, Region, Superpower};
 use crate::dice::Dice;
 use crate::map::WorldMap;
-use crate::ongoing::TurnEffects;
+use crate::cards::CardId;
+use crate::ongoing::{LastingEffects, TurnEffects};
 use crate::country::SubRegion;
 
 /// The number a coup's modified roll must strictly exceed to succeed:
@@ -138,6 +139,8 @@ pub enum CoupError {
     /// An ongoing event forbids `side` coups in `country`'s region (The
     /// Reformer: no more USSR coups in Europe).
     Banned { country: String, region: Region },
+    /// A lasting event (NATO, the US/Japan pact) shields `country` from this side's coups.
+    Protected { country: String, by: CardId },
 }
 
 impl fmt::Display for CoupError {
@@ -146,6 +149,7 @@ impl fmt::Display for CoupError {
             CoupError::NoOpponentInfluence { country, side } => {
                 write!(f, "{} has no influence in {country} for {side} to coup", side.opponent())
             }
+            CoupError::Protected { country, by } => write!(f, "card #{} protects {country} from coups", by.0),
             CoupError::Banned { country, region } => write!(f, "an event forbids coups in {region} ({country})"),
             CoupError::AlreadyResolved { country } => {
                 write!(f, "this coup has already resolved its one attempt (against {country})")
@@ -174,11 +178,13 @@ pub struct Coup {
     /// Turn-long events that adjust the roll or the ops (Death Squads,
     /// Vietnam Revolts).
     effects: TurnEffects,
+    /// Game-long events that shield countries (NATO, the US/Japan pact).
+    lasting: LastingEffects,
 }
 
 impl Coup {
     pub fn new(side: Superpower, ops: u8, board: &Board) -> Self {
-        Coup { side, ops_total: ops, result: None, base: board.clone(), banned: Vec::new(), effects: TurnEffects::default() }
+        Coup { side, ops_total: ops, result: None, base: board.clone(), banned: Vec::new(), effects: TurnEffects::default(), lasting: LastingEffects::default() }
     }
 
     /// Forbids this coup from targeting any country in `regions` — what an
@@ -192,6 +198,17 @@ impl Coup {
     pub fn with_effects(mut self, effects: TurnEffects) -> Self {
         self.effects = effects;
         self
+    }
+
+    /// Applies the game-long events in force (see [`crate::ongoing`]).
+    pub fn with_lasting(mut self, lasting: LastingEffects) -> Self {
+        self.lasting = lasting;
+        self
+    }
+
+    /// The card shielding `id` from this coup right now, if any.
+    pub fn protected_by(&self, map: &WorldMap, board: &Board, id: CountryId) -> Option<CardId> {
+        self.lasting.protects(map, board, self.side, id)
     }
 
     pub fn side(&self) -> Superpower {
@@ -252,7 +269,7 @@ impl Coup {
     /// that's `attempt`'s job, so a spent session doesn't dim every
     /// country in the region.
     pub fn is_legal_target(&self, map: &WorldMap, board: &Board, id: CountryId) -> bool {
-        !self.banned.contains(&map.country(id).region) && board.influence(id, self.side.opponent()) > 0
+        !self.banned.contains(&map.country(id).region) && board.influence(id, self.side.opponent()) > 0 && self.protected_by(map, board, id).is_none()
     }
 
     /// Resolves this action's one attempt against `id`, spending every op
@@ -266,6 +283,9 @@ impl Coup {
         let region = map.country(id).region;
         if self.banned.contains(&region) {
             return Err(CoupError::Banned { country: map.country(id).name.clone(), region });
+        }
+        if let Some(by) = self.protected_by(map, board, id) {
+            return Err(CoupError::Protected { country: map.country(id).name.clone(), by });
         }
         if !self.is_legal_target(map, board, id) {
             return Err(CoupError::NoOpponentInfluence { country: map.country(id).name.clone(), side: self.side });

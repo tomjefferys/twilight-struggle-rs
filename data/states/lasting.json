@@ -1,0 +1,360 @@
+{
+  "states": [
+    {
+      "name": "nato",
+      "description": "US to act with NATO (Marshall Plan already played): afterwards the USSR can't coup or realign US-controlled Europe.",
+      "status": {
+        "active": "Us"
+      },
+      "hands": {
+        "us": [
+          "NATO"
+        ],
+        "ussr": []
+      },
+      "removed": [
+        "Marshall Plan"
+      ]
+    },
+    {
+      "name": "nato-needs-prerequisite",
+      "description": "US holds NATO but neither Warsaw Pact nor Marshall Plan has been played: the event is refused.",
+      "status": {
+        "active": "Us"
+      },
+      "hands": {
+        "us": [
+          "NATO"
+        ],
+        "ussr": []
+      }
+    },
+    {
+      "name": "nato-active",
+      "description": "USSR to act with NATO in force; the US controls West Germany, Italy and France (with the US controlling France at 4-1). USSR can coup/realign none of them, but can still hit Poland.",
+      "status": {
+        "active": "Ussr",
+        "lasting": {
+          "nato": true
+        }
+      },
+      "influence": {
+        "West Germany": [5, 1],
+        "Italy": [3, 1],
+        "France": [4, 1],
+        "Poland": [1, 0]
+      },
+      "hands": {
+        "us": [],
+        "ussr": [
+          "Comecon"
+        ]
+      }
+    },
+    {
+      "name": "nato-de-gaulle",
+      "description": "As nato-active, but De Gaulle is also in force: France is exempt, West Germany is not.",
+      "status": {
+        "active": "Ussr",
+        "lasting": {
+          "nato": true,
+          "de_gaulle": true
+        }
+      },
+      "influence": {
+        "West Germany": [5, 1],
+        "France": [4, 1]
+      },
+      "hands": {
+        "us": [],
+        "ussr": [
+          "Comecon"
+        ]
+      }
+    },
+    {
+      "name": "nato-willy-brandt",
+      "description": "As nato-active, but Willy Brandt is also in force: West Germany is exempt, Italy is not.",
+      "status": {
+        "active": "Ussr",
+        "lasting": {
+          "nato": true,
+          "willy_brandt": true
+        }
+      },
+      "influence": {
+        "West Germany": [5, 1],
+        "Italy": [3, 1]
+      },
+      "hands": {
+        "us": [],
+        "ussr": [
+          "Comecon"
+        ]
+      }
+    },
+    {
+      "name": "brush-war-nato",
+      "description": "USSR to act with Brush War and NATO in force: US-controlled Greece can't be targeted.",
+      "status": {
+        "active": "Ussr",
+        "lasting": {
+          "nato": true
+        }
+      },
+      "influence": {
+        "Greece": [3, 0]
+      },
+      "hands": {
+        "us": [],
+        "ussr": [
+          "Brush War"
+        ]
+      }
+    },
+    {
+      "name": "special-relationship-nato",
+      "description": "US to act with Special Relationship, NATO in force and the UK US-controlled: +2 influence in one Western European country and +2 VP.",
+      "status": {
+        "active": "Us",
+        "lasting": {
+          "nato": true
+        }
+      },
+      "influence": {
+        "UK": [5, 0]
+      },
+      "hands": {
+        "us": [
+          "Special Relationship"
+        ],
+        "ussr": []
+      }
+    },
+    {
+      "name": "us-japan",
+      "description": "US to act with the US/Japan Mutual Defense Pact: Japan ends US-controlled and the USSR can't coup or realign it.",
+      "status": {
+        "active": "Us"
+      },
+      "influence": {
+        "Japan": [1, 2]
+      },
+      "hands": {
+        "us": [
+          "US/Japan Mutual Defense Pact"
+        ],
+        "ussr": []
+      }
+    },
+    {
+      "name": "us-japan-active",
+      "description": "USSR to act with the pact in force: Japan (US 4) is off limits, South Korea isn't.",
+      "status": {
+        "active": "Ussr",
+        "lasting": {
+          "us_japan": true
+        }
+      },
+      "influence": {
+        "Japan": [4, 0],
+        "South Korea": [2, 0]
+      },
+      "hands": {
+        "us": [],
+        "ussr": [
+          "Comecon"
+        ]
+      }
+    },
+    {
+      "name": "formosan",
+      "description": "US to act with Formosan Resolution.",
+      "status": {
+        "active": "Us"
+      },
+      "hands": {
+        "us": [
+          "Formosan Resolution"
+        ],
+        "ussr": []
+      }
+    },
+    {
+      "name": "formosan-asia-scoring",
+      "description": "US to act with Asia Scoring, Formosan Resolution in force and the US controlling only Taiwan: Taiwan counts as a battleground.",
+      "status": {
+        "active": "Us",
+        "lasting": {
+          "formosan": true
+        }
+      },
+      "influence": {
+        "Taiwan": [3, 0]
+      },
+      "hands": {
+        "us": [
+          "Asia Scoring"
+        ],
+        "ussr": []
+      }
+    },
+    {
+      "name": "formosan-china-card",
+      "description": "US to act with Formosan Resolution in force and the China Card: playing it ends the event.",
+      "status": {
+        "active": "Us",
+        "china_card": "Us",
+        "lasting": {
+          "formosan": true
+        }
+      },
+      "influence": {
+        "Taiwan": [3, 0]
+      },
+      "hands": {
+        "us": [],
+        "ussr": []
+      }
+    },
+    {
+      "name": "shuttle-diplomacy",
+      "description": "US to act with Shuttle Diplomacy: it stays in effect (not discarded) until a Middle East or Asia scoring.",
+      "status": {
+        "active": "Us"
+      },
+      "hands": {
+        "us": [
+          "Shuttle Diplomacy"
+        ],
+        "ussr": []
+      }
+    },
+    {
+      "name": "shuttle-me-scoring",
+      "description": "US to act with Middle East Scoring and Shuttle Diplomacy in force; the USSR holds Iran, Iraq, Egypt and Jordan: one fewer USSR battleground counts.",
+      "status": {
+        "active": "Us",
+        "lasting": {
+          "shuttle_diplomacy": true
+        }
+      },
+      "influence": {
+        "Iran": [0, 3],
+        "Iraq": [0, 3],
+        "Egypt": [0, 3],
+        "Jordan": [0, 3]
+      },
+      "hands": {
+        "us": [
+          "Middle East Scoring"
+        ],
+        "ussr": []
+      }
+    },
+    {
+      "name": "willy-brandt",
+      "description": "USSR to act with Willy Brandt.",
+      "status": {
+        "active": "Ussr"
+      },
+      "hands": {
+        "us": [],
+        "ussr": [
+          "Willy Brandt"
+        ]
+      }
+    },
+    {
+      "name": "flower-power",
+      "description": "USSR to act with Flower Power.",
+      "status": {
+        "active": "Ussr"
+      },
+      "hands": {
+        "us": [],
+        "ussr": [
+          "Flower Power"
+        ]
+      }
+    },
+    {
+      "name": "flower-power-active",
+      "description": "US to act with Flower Power in force and a war card in hand: spending it, for ops or event, pays the USSR 2 VP.",
+      "status": {
+        "active": "Us",
+        "lasting": {
+          "flower_power": true
+        }
+      },
+      "hands": {
+        "us": [
+          "Korean War",
+          "Duck and Cover"
+        ],
+        "ussr": []
+      }
+    },
+    {
+      "name": "evil-empire-cancels-flower-power",
+      "description": "US to act with Flower Power in force and An Evil Empire: playing it ends Flower Power.",
+      "status": {
+        "active": "Us",
+        "lasting": {
+          "flower_power": true
+        }
+      },
+      "hands": {
+        "us": [
+          "“An Evil Empire”"
+        ],
+        "ussr": []
+      }
+    },
+    {
+      "name": "we-will-bury-you",
+      "description": "USSR to act with We Will Bury You and DEFCON 4; the US holds a card to spend next.",
+      "status": {
+        "active": "Ussr",
+        "defcon": 4
+      },
+      "hands": {
+        "us": [
+          "Duck and Cover"
+        ],
+        "ussr": [
+          "“We Will Bury You”"
+        ]
+      }
+    },
+    {
+      "name": "solidarity",
+      "description": "US to act with Solidarity, John Paul II already played.",
+      "status": {
+        "active": "Us"
+      },
+      "hands": {
+        "us": [
+          "Solidarity"
+        ],
+        "ussr": []
+      },
+      "removed": [
+        "John Paul II Elected Pope"
+      ]
+    },
+    {
+      "name": "solidarity-needs-john-paul-ii",
+      "description": "US holds Solidarity but John Paul II hasn't been played: the event is refused.",
+      "status": {
+        "active": "Us"
+      },
+      "hands": {
+        "us": [
+          "Solidarity"
+        ],
+        "ussr": []
+      }
+    }
+  ]
+}

@@ -54,14 +54,37 @@ pub fn is_implemented(card: CardId) -> bool {
     scoring::is_scoring_card(card) || effects::is_effect_card(card) || choice::is_choice_card(card) || war::is_war_card(card)
 }
 
-/// The card whose event stops `card`'s from being played, if it has
-/// already been played (i.e. is in `removed`) — the first modelled
-/// "prevents" clause: #65 Camp David Accords bars #13 Arab-Israeli War.
-pub fn is_prevented(card: CardId, removed: &[CardId]) -> Option<CardId> {
-    match card.0 {
-        13 => removed.iter().copied().find(|c| c.0 == 65),
-        _ => None,
+/// Why a card's event can't be played right now.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Blocked {
+    /// The event of card `by` has already happened and bars it (Camp David
+    /// vs Arab-Israeli War, The Iron Lady vs Socialist Governments, ...).
+    Prevented { by: CardId },
+    /// It needs one of these cards' events to have happened first.
+    Requires { any_of: &'static [CardId] },
+}
+
+/// Cards whose event is barred once another card's event has happened.
+const PREVENTED_BY: &[(u8, u8)] = &[(7, 83), (13, 65), (56, 110), (59, 97)];
+
+/// Cards whose event may only be played after one of the listed cards'.
+const REQUIRES: &[(u8, &[CardId])] = &[(21, &[CardId(16), CardId(23)]), (101, &[CardId(68)])];
+
+/// Whether `card`'s event is barred, given the cards already removed from
+/// the game (`removed` — a played event's card lands there, which is all
+/// these prevents/requires clauses need to look at).
+pub fn blocked(card: CardId, removed: &[CardId]) -> Option<Blocked> {
+    if let Some(&(_, by)) = PREVENTED_BY.iter().find(|&&(n, _)| n == card.0)
+        && removed.contains(&CardId(by))
+    {
+        return Some(Blocked::Prevented { by: CardId(by) });
     }
+    if let Some(&(_, any_of)) = REQUIRES.iter().find(|&&(n, _)| n == card.0)
+        && !any_of.iter().any(|c| removed.contains(c))
+    {
+        return Some(Blocked::Requires { any_of });
+    }
+    None
 }
 
 /// Resolves `card`'s event against `(map, board)` — `None` for a card
@@ -74,7 +97,26 @@ pub fn is_prevented(card: CardId, removed: &[CardId]) -> Option<CardId> {
 /// they need a session, so `resolve` returns `None` for them too and
 /// `Game::play_event` checks [`choice::is_choice_card`] first.
 pub(crate) fn resolve(map: &WorldMap, board: &Board, status: &GameStatus, card: CardId) -> Option<EventOutcome> {
-    scoring::resolve(map, board, card)
+    scoring::resolve(map, board, &status.lasting, card)
         .map(EventOutcome::Scoring)
         .or_else(|| effects::resolve(map, board, status, card).map(EventOutcome::Effect))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_played_prevents_card_bars_its_target_and_a_requirement_needs_one_of_its_cards() {
+        assert_eq!(blocked(CardId(7), &[]), None);
+        assert_eq!(blocked(CardId(7), &[CardId(83)]), Some(Blocked::Prevented { by: CardId(83) }));
+        assert_eq!(blocked(CardId(13), &[CardId(65)]), Some(Blocked::Prevented { by: CardId(65) }));
+        assert_eq!(blocked(CardId(56), &[CardId(110)]), Some(Blocked::Prevented { by: CardId(110) }));
+        assert_eq!(blocked(CardId(59), &[CardId(97)]), Some(Blocked::Prevented { by: CardId(97) }));
+        assert!(matches!(blocked(CardId(21), &[]), Some(Blocked::Requires { .. })));
+        assert_eq!(blocked(CardId(21), &[CardId(16)]), None);
+        assert_eq!(blocked(CardId(21), &[CardId(23)]), None);
+        assert!(matches!(blocked(CardId(101), &[CardId(16)]), Some(Blocked::Requires { .. })));
+        assert_eq!(blocked(CardId(101), &[CardId(68)]), None);
+    }
 }

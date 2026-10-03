@@ -13,8 +13,8 @@ use crate::layout::MapLayout;
 use crate::ops::Operation;
 use crate::status::GameStatus;
 
-use super::{game_over_line, ongoing_effect_line, operation_balance_line, vp_line, Canvas, Color, Style};
-use crate::ongoing::{short_name, OngoingEffect};
+use super::{game_over_line, lasting_effect_line, ongoing_effect_line, operation_balance_line, vp_line, Canvas, Color, Style};
+use crate::ongoing::short_name;
 
 /// Row 1's wording when no card is in play yet — the status bar's own
 /// three-state hint (see [`render_status_bar`]'s own doc), distinct from
@@ -118,11 +118,18 @@ pub fn render_status_bar(
         }
     };
 
-    let effects = status.effects.active();
+    // Game-long effects first, then the turn-long ones, each in its beneficiary's colour.
+    let effects: Vec<(String, Superpower)> = status
+        .lasting
+        .active()
+        .iter()
+        .map(|e| (lasting_effect_line(e), e.side()))
+        .chain(status.effects.active().iter().map(|e| (ongoing_effect_line(e), e.side())))
+        .collect();
     let effects_width = if effects.is_empty() {
         NO_EFFECTS.chars().count()
     } else {
-        EFFECTS_LABEL.chars().count() + effects.iter().map(|e| ongoing_effect_line(e).chars().count()).sum::<usize>() + EFFECT_SEP.chars().count() * (effects.len() - 1)
+        EFFECTS_LABEL.chars().count() + effects.iter().map(|(t, _)| t.chars().count()).sum::<usize>() + EFFECT_SEP.chars().count() * (effects.len() - 1)
     };
     let content_width = width.max(turn_line.chars().count()).max(op_line.chars().count()).max(effects_width).max(1);
     let mut canvas = Canvas::new(content_width, STATUS_BAR_ROWS);
@@ -162,7 +169,7 @@ fn ops_text(status: &GameStatus, card: &Card) -> String {
 }
 
 /// Row 2, drawn piecewise so each effect carries its beneficiary's colour.
-fn draw_effects_line(canvas: &mut Canvas, effects: &[OngoingEffect]) {
+fn draw_effects_line(canvas: &mut Canvas, effects: &[(String, Superpower)]) {
     if effects.is_empty() {
         canvas.put(2, 0, NO_EFFECTS, Style::color(Color::Muted));
         return;
@@ -170,13 +177,12 @@ fn draw_effects_line(canvas: &mut Canvas, effects: &[OngoingEffect]) {
     let mut col = 0;
     canvas.put(2, col, EFFECTS_LABEL, Style::default());
     col += EFFECTS_LABEL.chars().count();
-    for (i, effect) in effects.iter().enumerate() {
+    for (i, (text, side)) in effects.iter().enumerate() {
         if i > 0 {
             canvas.put(2, col, EFFECT_SEP, Style::color(Color::Muted));
             col += EFFECT_SEP.chars().count();
         }
-        let text = ongoing_effect_line(effect);
-        canvas.put(2, col, &text, side_style(effect.side()));
+        canvas.put(2, col, text, side_style(*side));
         col += text.chars().count();
     }
 }

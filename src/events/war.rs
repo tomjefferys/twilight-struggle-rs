@@ -22,6 +22,7 @@ use crate::board::Board;
 use crate::cards::CardId;
 use crate::country::{CountryId, Superpower};
 use crate::map::WorldMap;
+use crate::ongoing::LastingEffects;
 
 /// Who a war card benefits.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -244,11 +245,24 @@ pub struct War {
     card: CardId,
     /// Whoever played the event (the beneficiary, unless the card fixes it).
     player: Superpower,
+    /// Countries a lasting event shields from this war (NATO vs Brush War).
+    protected: Vec<CountryId>,
 }
 
 impl War {
     pub fn new(card: CardId, player: Superpower) -> Self {
-        War { card, player }
+        War { card, player, protected: Vec::new() }
+    }
+
+    /// Shields the countries NATO protects from Brush War (#36): every
+    /// US-controlled European country not exempted by De Gaulle / Willy
+    /// Brandt. Control can't change before the war's one roll, so this
+    /// is computed once, when the session opens.
+    pub fn with_lasting(mut self, map: &WorldMap, board: &Board, lasting: &LastingEffects) -> Self {
+        if self.card.0 == 36 {
+            self.protected = map.iter().map(|(id, _)| id).filter(|&id| lasting.protects(map, board, Superpower::Ussr, id) == Some(CardId(21))).collect();
+        }
+        self
     }
 
     pub fn card(&self) -> CardId {
@@ -269,7 +283,7 @@ impl War {
     }
 
     pub fn is_legal_target(&self, map: &WorldMap, id: CountryId) -> bool {
-        eligible_targets(map, self.card).contains(&id)
+        !self.protected.contains(&id) && eligible_targets(map, self.card).contains(&id)
     }
 
     pub fn modifier(&self, map: &WorldMap, board: &Board, id: CountryId) -> WarModifier {

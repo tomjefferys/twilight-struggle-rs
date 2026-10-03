@@ -3,7 +3,7 @@ use std::fmt;
 use serde::{Deserialize, Serialize};
 
 use crate::country::Superpower;
-use crate::ongoing::TurnEffects;
+use crate::ongoing::{LastingEffects, TurnEffects};
 
 /// The VP track's own cap (rule 5.5) — reaching either end wins the game
 /// outright ([`crate::game::Game::apply_vp`]), so a valid [`GameStatus`]
@@ -100,6 +100,9 @@ pub struct GameStatus {
     /// Card events in force until the turn ends (see [`crate::ongoing`]).
     #[serde(skip_serializing_if = "TurnEffects::is_empty")]
     pub effects: TurnEffects,
+    /// Card events that stay in force past the turn (see [`crate::ongoing::LastingEffects`]).
+    #[serde(skip_serializing_if = "LastingEffects::is_empty")]
+    pub lasting: LastingEffects,
 }
 
 impl GameStatus {
@@ -156,6 +159,7 @@ impl Default for GameStatus {
             china_card: Superpower::Ussr,
             china_card_face_up: true,
             effects: TurnEffects::default(),
+            lasting: LastingEffects::default(),
         }
     }
 }
