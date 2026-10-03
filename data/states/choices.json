@@ -444,6 +444,12 @@
           "Fidel"
         ]
       }
-    }
+    },
+    {"name": "voice-of-america", "description": "USSR holds 3 in Egypt, 1 in Cuba, 2 in Japan, and 2 in Poland (Europe, not eligible). The Voice of America removes 4 USSR influence outside Europe, at most 2 per country. US chooses.", "status": {"active": "Us"}, "influence": {"Egypt": [0, 3], "Cuba": [0, 1], "Japan": [0, 2], "Poland": [0, 2]}, "hands": {"us": ["The Voice of America"], "ussr": ["Fidel"]}},
+    {"name": "pershing-ii", "description": "US holds 2 in France, UK, West Germany and Italy. Pershing II pays the USSR 1 VP and removes 1 US influence from each of 3 Western European countries. USSR chooses.", "status": {"active": "Ussr"}, "influence": {"France": [2, 0], "UK": [2, 0], "West Germany": [2, 0], "Italy": [2, 0]}, "hands": {"us": ["NATO"], "ussr": ["Pershing II Deployed"]}},
+    {"name": "how-i-learned", "description": "DEFCON 4, USSR at 1 Military Op. How I Learned to Stop Worrying lets the player set DEFCON to any level and adds 5 Military Ops (capped at 5). USSR to act.", "status": {"active": "Ussr", "defcon": 4, "military_ops_ussr": 1}, "hands": {"us": ["NATO"], "ussr": ["How I Learned to Stop Worrying"]}},
+    {"name": "wargames-defcon-2", "description": "DEFCON 2, USSR leads on VP by 8 (vp -8). Wargames may end the game: the US gets 6 VP first (vp -2), so the USSR still wins on VP. USSR to act.", "status": {"active": "Ussr", "defcon": 2, "vp": -8}, "hands": {"us": ["NATO"], "ussr": ["Wargames"]}},
+    {"name": "wargames-defcon-2-loses-lead", "description": "DEFCON 2, USSR leads on VP by 3 (vp -3). Ending the game gives the US 6 VP (vp +3), so the US wins. USSR to act.", "status": {"active": "Ussr", "defcon": 2, "vp": -3}, "hands": {"us": ["NATO"], "ussr": ["Wargames"]}},
+    {"name": "wargames-defcon-3", "description": "DEFCON 3: Wargames does nothing. USSR to act.", "status": {"active": "Ussr", "defcon": 3}, "hands": {"us": ["NATO"], "ussr": ["Wargames"]}}
   ]
 }

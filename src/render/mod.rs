@@ -486,6 +486,7 @@ pub fn game_over_line(victory: crate::game::Victory) -> String {
         crate::game::VictoryReason::Vp => "VP",
         crate::game::VictoryReason::EuropeControl => "Europe control",
         crate::game::VictoryReason::Defcon => "DEFCON 1",
+        crate::game::VictoryReason::Wargames => "Wargames",
     };
     format!("GAME OVER — {} wins ({reason})", victory.side)
 }

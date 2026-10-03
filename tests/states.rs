@@ -1941,3 +1941,151 @@ mod space {
         assert!(!game.legal_actions(&map, &cards).contains(&twilight_struggle::Action::Space));
     }
 }
+
+mod batch_one {
+    use super::*;
+    use twilight_struggle::ops::Operation;
+    use twilight_struggle::CountryId;
+
+    fn id(map: &WorldMap, name: &str) -> CountryId {
+        map.id_by_name(name).unwrap_or_else(|| panic!("no country {name}"))
+    }
+
+    fn open_choice(name: &str, card: &str) -> (WorldMap, Game) {
+        let (map, cards, lib) = fixtures();
+        let (scenario, _) = lib.load(&map, &cards, &format!("choices/{name}")).unwrap_or_else(|e| panic!("{name}: {e}"));
+        let mut game = Game::from_scenario(&scenario);
+        game.play_card(&cards, cards.id_by_name(card).unwrap()).unwrap();
+        game.play_event(&map, &cards).unwrap_or_else(|e| panic!("{name}: play_event: {e}"));
+        (map, game)
+    }
+
+    #[test]
+    fn arms_race_pays_three_with_the_required_amount_one_when_merely_ahead_nothing_on_a_tie() {
+        let (map, cards, lib) = fixtures();
+        assert_eq!(play_effect_state(&map, &cards, &lib, "arms-race-required-met", "Arms Race").status().vp, -3);
+        assert_eq!(play_effect_state(&map, &cards, &lib, "arms-race-ahead-only", "Arms Race").status().vp, -1);
+        assert_eq!(play_effect_state(&map, &cards, &lib, "arms-race-not-ahead", "Arms Race").status().vp, 0);
+    }
+
+    #[test]
+    fn u2_incident_pays_the_ussr_one_vp() {
+        let (map, cards, lib) = fixtures();
+        assert_eq!(play_effect_state(&map, &cards, &lib, "u2-incident", "U2 Incident").status().vp, -1);
+    }
+
+    #[test]
+    fn opec_pays_one_vp_per_controlled_oil_producer() {
+        let (map, cards, lib) = fixtures();
+        assert_eq!(play_effect_state(&map, &cards, &lib, "opec", "OPEC").status().vp, -3);
+    }
+
+    #[test]
+    fn opec_is_barred_once_north_sea_oil_has_been_played() {
+        use twilight_struggle::events::{blocked, Blocked};
+        let (_, cards, _) = fixtures();
+        let (opec, oil) = (cards.id_by_name("OPEC").unwrap(), cards.id_by_name("North Sea Oil").unwrap());
+        assert_eq!(blocked(opec, &[]), None);
+        assert_eq!(blocked(opec, &[oil]), Some(Blocked::Prevented { by: oil }));
+    }
+
+    #[test]
+    fn defectors_pays_the_us_only_when_the_ussr_plays_it() {
+        let (map, cards, lib) = fixtures();
+        assert_eq!(play_effect_state(&map, &cards, &lib, "defectors-played-by-ussr", "Defectors").status().vp, 1);
+        assert_eq!(play_effect_state(&map, &cards, &lib, "defectors-played-by-us", "Defectors").status().vp, 0);
+    }
+
+    #[test]
+    fn voice_of_america_removes_four_outside_europe_two_per_country() {
+        let (map, mut game) = open_choice("voice-of-america", "The Voice of America");
+        let ussr = |g: &Game, n: &str| g.board().influence(id(&map, n), Superpower::Ussr);
+        assert!(game.unplace(&map, id(&map, "Poland")).is_err(), "Europe is excluded");
+        game.unplace(&map, id(&map, "Egypt")).unwrap();
+        game.unplace(&map, id(&map, "Egypt")).unwrap();
+        assert!(game.unplace(&map, id(&map, "Egypt")).is_err(), "max 2 per country");
+        game.unplace(&map, id(&map, "Cuba")).unwrap();
+        assert!(game.confirm().is_err(), "one point is still to remove");
+        game.unplace(&map, id(&map, "Japan")).unwrap();
+        game.confirm().unwrap();
+        assert_eq!((ussr(&game, "Egypt"), ussr(&game, "Cuba"), ussr(&game, "Japan"), ussr(&game, "Poland")), (1, 0, 1, 2));
+    }
+
+    #[test]
+    fn pershing_ii_pays_a_vp_and_removes_one_us_influence_from_three_western_european_countries() {
+        let (map, mut game) = open_choice("pershing-ii", "Pershing II Deployed");
+        for n in ["France", "UK", "Italy"] {
+            game.unplace(&map, id(&map, n)).unwrap();
+        }
+        assert!(game.unplace(&map, id(&map, "West Germany")).is_err(), "only 3 countries");
+        game.confirm().unwrap();
+        assert_eq!(game.status().vp, -1);
+        let us = |n: &str| game.board().influence(id(&map, n), Superpower::Us);
+        assert_eq!((us("France"), us("UK"), us("Italy"), us("West Germany")), (1, 1, 1, 2));
+    }
+
+    #[test]
+    fn how_i_learned_sets_defcon_to_the_chosen_level_and_adds_five_military_ops() {
+        let (map, mut game) = open_choice("how-i-learned", "How I Learned to Stop Worrying");
+        assert!(game.confirm().is_err(), "a level has to be chosen first");
+        game.choose_mode(&map, 4).unwrap();
+        game.choose_mode(&map, 1).unwrap();
+        game.confirm().unwrap();
+        assert_eq!(game.status().defcon, 2);
+        assert_eq!(game.status().military_ops_ussr, 5, "1 + 5 clamps to the track's 5");
+        assert_eq!(game.winner(), None);
+    }
+
+    #[test]
+    fn how_i_learned_to_defcon_1_loses_for_the_player() {
+        let (map, mut game) = open_choice("how-i-learned", "How I Learned to Stop Worrying");
+        game.choose_mode(&map, 0).unwrap();
+        game.confirm().unwrap();
+        assert_eq!(game.winner(), Some(Victory { side: Superpower::Us, reason: VictoryReason::Defcon }));
+    }
+
+    #[test]
+    fn how_i_learned_is_a_mode_only_event_not_a_designation() {
+        let (_, game) = open_choice("how-i-learned", "How I Learned to Stop Worrying");
+        let Some(Operation::Event(e)) = game.operation() else { panic!("the event opens a session") };
+        assert!(!e.is_designation() && !e.picks_countries());
+        assert_eq!(e.modes().len(), 5);
+    }
+
+    #[test]
+    fn wargames_at_defcon_2_ends_the_game_with_the_vp_leader_winning() {
+        let (map, mut game) = open_choice("wargames-defcon-2", "Wargames");
+        game.choose_mode(&map, 0).unwrap();
+        game.confirm().unwrap();
+        assert_eq!(game.status().vp, -2);
+        assert_eq!(game.winner(), Some(Victory { side: Superpower::Ussr, reason: VictoryReason::Wargames }));
+    }
+
+    #[test]
+    fn wargames_can_hand_the_opponent_the_lead() {
+        let (map, mut game) = open_choice("wargames-defcon-2-loses-lead", "Wargames");
+        game.choose_mode(&map, 0).unwrap();
+        game.confirm().unwrap();
+        assert_eq!(game.status().vp, 3);
+        assert_eq!(game.winner(), Some(Victory { side: Superpower::Us, reason: VictoryReason::Wargames }));
+    }
+
+    #[test]
+    fn wargames_can_be_declined() {
+        let (map, mut game) = open_choice("wargames-defcon-2", "Wargames");
+        game.choose_mode(&map, 1).unwrap();
+        game.confirm().unwrap();
+        assert_eq!((game.status().vp, game.winner()), (-8, None));
+        assert_eq!(game.active(), Superpower::Us);
+    }
+
+    #[test]
+    fn wargames_outside_defcon_2_does_nothing() {
+        let (map, cards, lib) = fixtures();
+        let (scenario, _) = lib.load(&map, &cards, "choices/wargames-defcon-3").unwrap();
+        let mut game = Game::from_scenario(&scenario);
+        game.play_card(&cards, cards.id_by_name("Wargames").unwrap()).unwrap();
+        assert!(matches!(game.play_event(&map, &cards).unwrap(), EventOutcome::Effect(_)), "resolves on the spot");
+        assert_eq!((game.status().vp, game.winner(), game.active()), (0, None, Superpower::Us));
+    }
+}

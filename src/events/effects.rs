@@ -63,6 +63,10 @@ pub struct EffectResult {
     pub china: Option<ChinaTransfer>,
     /// The space race marker moving: the side, and the box it was at and moves to.
     pub space: Option<(Superpower, u8, u8)>,
+    /// Military Operations the `player` gains (How I Learned to Stop Worrying); applied clamped to the track.
+    pub mil_ops: i8,
+    /// The event ends the game outright, the VP leader winning (Wargames).
+    pub ends_game: bool,
 }
 
 /// What one card's effect function sees and mutates: the board as it was
@@ -177,6 +181,11 @@ impl Ctx<'_> {
         self.space = Some((side, from, to));
     }
 
+    /// Whether `side` controlled `name` when the event was played.
+    fn controls(&self, name: &str, side: Superpower) -> bool {
+        self.before.is_controlled_by(self.map, self.id(name), side)
+    }
+
     /// Who holds the China Card, face up or down.
     fn china_holder(&self) -> Superpower {
         self.status.china_card
@@ -218,6 +227,7 @@ const EFFECTS: &[(u8, Effect)] = &[
     (31, red_scare_purge),
     (27, us_japan_mutual_defense_pact),
     (34, nuclear_test_ban),
+    (39, arms_race),
     (35, formosan_resolution),
     (80, one_small_step),
     (41, nuclear_subs),
@@ -229,6 +239,8 @@ const EFFECTS: &[(u8, Effect)] = &[
     (55, willy_brandt),
     (58, cultural_revolution),
     (59, flower_power),
+    (60, u2_incident),
+    (61, opec),
     (64, panama_canal_returned),
     (65, camp_david_accords),
     (68, john_paul_ii_elected_pope),
@@ -244,6 +256,7 @@ const EFFECTS: &[(u8, Effect)] = &[
     (93, iran_contra_scandal),
     (97, an_evil_empire),
     (101, solidarity),
+    (103, defectors),
     (109, yuri_and_samantha),
     (110, awacs_sale_to_saudis),
 ];
@@ -263,7 +276,7 @@ pub fn resolve(map: &WorldMap, board: &Board, status: &GameStatus, card: CardId)
     let effect = effect_for(card)?;
     let mut ctx = Ctx { map, before: board, working: board.clone(), status, changes: Vec::new(), vp_delta: 0, defcon: None, ongoing: None, lasting: None, cancels: None, china: None, space: None };
     effect(&mut ctx);
-    Some(EffectResult { card, player: status.active, influence: ctx.changes, vp_delta: ctx.vp_delta, defcon: ctx.defcon, ongoing: ctx.ongoing, lasting: ctx.lasting, cancels: ctx.cancels, china: ctx.china, space: ctx.space })
+    Some(EffectResult { card, player: status.active, influence: ctx.changes, vp_delta: ctx.vp_delta, defcon: ctx.defcon, ongoing: ctx.ongoing, lasting: ctx.lasting, cancels: ctx.cancels, china: ctx.china, space: ctx.space, mil_ops: 0, ends_game: false })
 }
 
 // ---- the cards, in printed-number order ----
@@ -337,6 +350,21 @@ fn nuclear_test_ban(c: &mut Ctx) {
     c.set_defcon(c.status.defcon + 2);
 }
 
+/// #39 Arms Race: the player is ahead on Military Operations → 1 VP, or 3 if they've also met the
+/// required amount (the DEFCON level).
+fn arms_race(c: &mut Ctx) {
+    let player = c.player();
+    let mil = |side| match side {
+        Superpower::Us => c.status.military_ops_us,
+        Superpower::Ussr => c.status.military_ops_ussr,
+    };
+    let (mine, theirs) = (mil(player), mil(player.opponent()));
+    if mine > theirs {
+        let vp = if mine >= c.status.defcon as i8 { 3 } else { 1 };
+        c.award_vp(player, vp);
+    }
+}
+
 /// #41 Nuclear Subs: US battleground coups don't degrade DEFCON for the rest of the turn.
 fn nuclear_subs(c: &mut Ctx) {
     c.start(OngoingEffect::NuclearSubs);
@@ -363,6 +391,21 @@ fn portuguese_empire_crumbles(c: &mut Ctx) {
 /// #54 Allende
 fn allende(c: &mut Ctx) {
     c.add("Chile", Superpower::Ussr, 2);
+}
+
+/// #60 U2 Incident: USSR +1 VP (the extra VP if #32 follows this turn waits for UN Intervention).
+fn u2_incident(c: &mut Ctx) {
+    c.award_vp(Superpower::Ussr, 1);
+}
+
+/// #61 OPEC: the USSR gets 1 VP per controlled country among seven oil producers
+/// (barred once #86 has been played — see `events::blocked`).
+fn opec(c: &mut Ctx) {
+    let n = ["Egypt", "Iran", "Libya", "Saudi Arabia", "Iraq", "Gulf States", "Venezuela"]
+        .into_iter()
+        .filter(|name| c.controls(name, Superpower::Ussr))
+        .count();
+    c.award_vp(Superpower::Ussr, n as i8);
 }
 
 /// #64 Panama Canal Returned
@@ -510,6 +553,14 @@ fn shuttle_diplomacy(c: &mut Ctx) {
 /// #101 Solidarity (needs #68 first — see `events::blocked`).
 fn solidarity(c: &mut Ctx) {
     c.add("Poland", Superpower::Us, 3);
+}
+
+/// #103 Defectors: played in an action round by the USSR, the US gets 1 VP. (The headline
+/// half — cancelling the USSR's headline event — waits for a headline phase.)
+fn defectors(c: &mut Ctx) {
+    if c.player() == Superpower::Ussr {
+        c.award_vp(Superpower::Us, 1);
+    }
 }
 
 #[cfg(test)]

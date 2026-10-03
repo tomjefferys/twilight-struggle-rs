@@ -4,7 +4,7 @@ Which of the 110 cards have their **event** implemented (`events::is_implemented
 Every card can already be played for its ops value; this tracks the event text only.
 `tests/cards_progress.rs` fails if a ✅ here disagrees with the code, so update both together.
 
-**Implemented: 73 / 110**
+**Implemented: 81 / 110**
 
 - `events::scoring` — the seven scoring cards.
 - `events::effects` — fixed influence / VP / DEFCON effects with no choices or die rolls.
@@ -53,14 +53,14 @@ Every card can already be played for its ops value; this tracks the event text o
 | 36 | Brush War | Both | ✅ | War (stability ≤ 2 target, 3+ wins, 1 VP); can't hit NATO-protected Europe (modelled) |
 | 37 | Central America Scoring | Both | ✅ |  |
 | 38 | Southeast Asia Scoring | Both | ✅ |  |
-| 39 | Arms Race | Both |  |  |
+| 39 | Arms Race | Both | ✅ | Player ahead on Military Ops: 1 VP, or 3 if they also meet the required amount (= DEFCON) |
 | 40 | Cuban Missile Crisis | Both |  |  |
 | 41 | Nuclear Subs | US | ✅ | Turn-long: US battleground coups keep DEFCON (the coup DEFCON drop itself is new) |
 | 42 | Quagmire | USSR |  |  |
 | 43 | SALT Negotiations | Both |  |  |
 | 44 | Bear Trap | US |  |  |
 | 45 | Summit | Both |  |  |
-| 46 | How I Learned to Stop Worrying | Both |  |  |
+| 46 | How I Learned to Stop Worrying | Both | ✅ | Choice (mode = DEFCON level 1-5); +5 Military Ops (max 5) |
 | 47 | Junta | Both |  |  |
 | 48 | Kitchen Debates | US | ✅ |  |
 | 49 | Missile Envy | Both |  |  |
@@ -74,8 +74,8 @@ Every card can already be played for its ops value; this tracks the event text o
 | 57 | ABM Treaty | Both |  |  |
 | 58 | Cultural Revolution | USSR | ✅ | US holds China Card → USSR gets it face up; else +1 VP (`EffectResult::china`) |
 | 59 | Flower Power | USSR | ✅ | Lasting: USSR +2 VP per US war card (ops or event); cancelled by #97 |
-| 60 | U2 Incident | USSR |  |  |
-| 61 | OPEC | USSR |  |  |
+| 60 | U2 Incident | USSR | ✅ | USSR +1 VP; the extra VP if #32 follows pending #32 |
+| 61 | OPEC | USSR | ✅ | USSR +1 VP per controlled oil producer; barred after #86 (modelled) |
 | 62 | “Lone Gunman” | USSR |  |  |
 | 63 | Colonial Rear Guards | US | ✅ | Choice |
 | 64 | Panama Canal Returned | US | ✅ |  |
@@ -88,7 +88,7 @@ Every card can already be played for its ops value; this tracks the event text o
 | 71 | Nixon Plays the China Card | US | ✅ | USSR holds China Card → US gets it face down; else +2 VP |
 | 72 | Sadat Expels Soviets | US | ✅ |  |
 | 73 | Shuttle Diplomacy | US | ✅ | Lasting: −1 USSR battleground at the next Asia/Middle East scoring, then discarded |
-| 74 | The Voice of America | US |  |  |
+| 74 | The Voice of America | US | ✅ | Choice; 4 USSR influence outside Europe, max 2 per country |
 | 75 | Liberation Theology | USSR | ✅ | Choice |
 | 76 | Ussuri River Skirmish | US | ✅ | Choice: USSR holds China Card → US gets it face up; else +4 US in Asia (max 2 each) |
 | 77 | “Ask Not What Your Country…” | US |  |  |
@@ -100,7 +100,7 @@ Every card can already be played for its ops value; this tracks the event text o
 | 83 | The Iron Lady | US | ✅ | Prevents #7 (modelled) |
 | 84 | Reagan Bombs Libya | US | ✅ |  |
 | 85 | Star Wars | US |  |  |
-| 86 | North Sea Oil | US | ✅ | Turn-long: US plays an 8th action round; 'prevents #61' clause pending #61 |
+| 86 | North Sea Oil | US | ✅ | Turn-long: US plays an 8th action round; prevents #61 (modelled) |
 | 87 | The Reformer | USSR | ✅ | Choice; USSR can't coup in Europe afterwards (modelled) |
 | 88 | Marine Barracks Bombing | USSR | ✅ | Choice; Lebanon cleared up front |
 | 89 | Soviets Shoot Down KAL-007 | US |  |  |
@@ -113,11 +113,11 @@ Every card can already be played for its ops value; this tracks the event text o
 | 96 | Tear Down this Wall | US |  |  |
 | 97 | “An Evil Empire” | US | ✅ | Cancels #59 (modelled) |
 | 98 | Aldrich Ames Remix | USSR |  |  |
-| 99 | Pershing II Deployed | USSR |  |  |
-| 100 | Wargames | Both |  |  |
+| 99 | Pershing II Deployed | USSR | ✅ | Choice; USSR +1 VP, 1 US influence from each of 3 Western European countries |
+| 100 | Wargames | Both | ✅ | Choice (end the game / play on) at DEFCON 2: the opponent gets 6 VP, the VP leader wins (a tie goes to the opponent); nothing at other levels |
 | 101 | Solidarity | US | ✅ | Needs #68 first |
 | 102 | Iran-Iraq War | Both | ✅ | War (choose Iran/Iraq) |
-| 103 | Defectors | US |  |  |
+| 103 | Defectors | US | ✅ | USSR playing it gives the US 1 VP; the headline half pending a headline phase |
 | 104 | The Cambridge Five | USSR |  |  |
 | 105 | Special Relationship | US | ✅ | Choice; adjacent-to-UK branch, or with NATO in effect +2 influence in Western Europe and +2 VP |
 | 106 | NORAD | US |  |  |

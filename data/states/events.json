@@ -195,6 +195,13 @@
         "France": [3, 0]
       },
       "hands": {"us": ["NATO"], "ussr": ["Kitchen Debates"]}
-    }
+    },
+    {"name": "arms-race-required-met", "description": "USSR has 4 Military Ops to the US's 2, DEFCON 4 (required 4): ahead and the required amount met, so Arms Race pays the USSR 3 VP. USSR to act.", "status": {"active": "Ussr", "defcon": 4, "military_ops_ussr": 4, "military_ops_us": 2}, "hands": {"us": ["NATO"], "ussr": ["Arms Race"]}},
+    {"name": "arms-race-ahead-only", "description": "USSR has 3 Military Ops to the US's 1, DEFCON 5 (required 5): ahead but short of the required amount, so Arms Race pays 1 VP. USSR to act.", "status": {"active": "Ussr", "defcon": 5, "military_ops_ussr": 3, "military_ops_us": 1}, "hands": {"us": ["NATO"], "ussr": ["Arms Race"]}},
+    {"name": "arms-race-not-ahead", "description": "Both sides at 3 Military Ops: a tie isn't 'higher', so Arms Race pays nothing. USSR to act.", "status": {"active": "Ussr", "defcon": 3, "military_ops_ussr": 3, "military_ops_us": 3}, "hands": {"us": ["NATO"], "ussr": ["Arms Race"]}},
+    {"name": "u2-incident", "description": "U2 Incident pays the USSR 1 VP. USSR to act.", "status": {"active": "Ussr"}, "hands": {"us": ["NATO"], "ussr": ["U2 Incident"]}},
+    {"name": "opec", "description": "USSR controls Egypt, Iran and Venezuela; Libya is only contested (US 2 / USSR 2) and Saudi Arabia is US-controlled. OPEC pays 3 VP. USSR to act.", "status": {"active": "Ussr"}, "influence": {"Egypt": [0, 4], "Iran": [0, 4], "Venezuela": [0, 3], "Libya": [2, 2], "Saudi Arabia": [5, 0]}, "hands": {"us": ["NATO"], "ussr": ["OPEC"]}},
+    {"name": "defectors-played-by-ussr", "description": "USSR holds Defectors, a US card, and plays it in its action round: the US gets 1 VP. USSR to act.", "status": {"active": "Ussr"}, "hands": {"us": ["NATO"], "ussr": ["Defectors"]}},
+    {"name": "defectors-played-by-us", "description": "The US plays Defectors in its own action round: with no USSR headline to cancel, nothing happens. US to act.", "status": {"active": "Us"}, "hands": {"us": ["Defectors"], "ussr": ["Fidel"]}}
   ]
 }

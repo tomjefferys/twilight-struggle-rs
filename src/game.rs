@@ -74,6 +74,8 @@ pub enum VictoryReason {
     /// DEFCON reached 1 (rule 5.1): the side that played the event
     /// degrading it loses, so `Victory::side` is its opponent.
     Defcon,
+    /// Wargames: the player ended the game, the VP leader winning.
+    Wargames,
 }
 
 /// The game is over: who won, and why.
@@ -1059,6 +1061,21 @@ impl Game {
             self.apply_defcon(after);
         }
         self.apply_vp(result.vp_delta);
+        if result.mil_ops != 0 {
+            let track = match result.player {
+                Superpower::Us => &mut self.status.military_ops_us,
+                Superpower::Ussr => &mut self.status.military_ops_ussr,
+            };
+            *track = (*track + result.mil_ops).clamp(0, war::MIL_OPS_MAX);
+        }
+        if result.ends_game && self.winner.is_none() {
+            let side = match self.status.vp.signum() {
+                1 => Superpower::Us,
+                -1 => Superpower::Ussr,
+                _ => result.player.opponent(),
+            };
+            self.set_winner(side, VictoryReason::Wargames);
+        }
         if let Some(effect) = result.ongoing {
             self.status.effects.apply(effect);
         }

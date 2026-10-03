@@ -65,7 +65,7 @@ pub enum Blocked {
 }
 
 /// Cards whose event is barred once another card's event has happened.
-const PREVENTED_BY: &[(u8, u8)] = &[(7, 83), (13, 65), (56, 110), (59, 97)];
+const PREVENTED_BY: &[(u8, u8)] = &[(7, 83), (13, 65), (56, 110), (59, 97), (61, 86)];
 
 /// Cards whose event may only be played after one of the listed cards'.
 const REQUIRES: &[(u8, &[CardId])] = &[(21, &[CardId(16), CardId(23)]), (101, &[CardId(68)])];

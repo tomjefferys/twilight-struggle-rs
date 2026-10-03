@@ -46,6 +46,9 @@ pub fn render_event_result(
     if let Some((before, after)) = result.defcon {
         lines.push((format!("DEFCON {before} → {after}"), Style::color(Color::Muted).bold()));
     }
+    if result.mil_ops != 0 {
+        lines.push((format!("{} Military Operations {:+}", result.player, result.mil_ops), Style::color(side_color(result.player))));
+    }
     if let Some(t) = &result.china {
         lines.push((format!("China Card → {} ({})", t.to, if t.face_up { "face up" } else { "face down" }), Style::color(side_color(t.to)).bold()));
     }
@@ -113,7 +116,7 @@ mod tests {
     use crate::render::ColorMode;
 
     fn result(ongoing: Option<OngoingEffect>, vp_delta: i8) -> EffectResult {
-        EffectResult { card: CardId(25), player: Superpower::Us, influence: Vec::new(), vp_delta, defcon: None, ongoing, lasting: None, cancels: None, china: None, space: None }
+        EffectResult { card: CardId(25), player: Superpower::Us, influence: Vec::new(), vp_delta, defcon: None, ongoing, lasting: None, cancels: None, china: None, space: None, mil_ops: 0, ends_game: false }
     }
 
     #[test]

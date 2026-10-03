@@ -296,6 +296,9 @@ fn event_detail(map: &WorldMap, cards: &CardCatalog, result: &EffectResult, vp_a
     if let Some((before, after)) = result.defcon {
         parts.push(format!("DEFCON {before}→{after}"));
     }
+    if result.mil_ops != 0 {
+        parts.push(format!("{} Mil Ops {:+}", result.player, result.mil_ops));
+    }
     if let Some(t) = &result.china {
         parts.push(format!("China Card→{} ({})", t.to, if t.face_up { "face up" } else { "face down" }));
     }
@@ -355,6 +358,7 @@ fn game_over_detail(victory: Victory) -> String {
         VictoryReason::Vp => "VP",
         VictoryReason::EuropeControl => "Europe control",
         VictoryReason::Defcon => "DEFCON 1",
+        VictoryReason::Wargames => "Wargames",
     };
     format!("{} wins ({reason})", victory.side)
 }

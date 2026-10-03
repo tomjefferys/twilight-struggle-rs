@@ -94,6 +94,7 @@ pub fn render_status_bar(
                     (None, true) => format!("Enter on world map or 1-{n} to choose region"),
                     (None, false) => format!("1-{n} choose mode"),
                     (Some(_), true) => format!("Enter/1-{n} change region · ⌫ clear · c done"),
+                    (Some(_), false) if !e.picks_countries() => format!("1-{n} change · c done"),
                     (Some(_), false) => "+ add · - remove · u undo · c done".to_string(),
                 };
                 (

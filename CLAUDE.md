@@ -333,6 +333,7 @@ uniformly random legal moves.
     card does, so `Game::finish_effect` applies and logs both. Clauses
     about other cards (prevents/allows #N, NATO) aren't modelled;
     Special Relationship (#105) only has its "NATO not in effect" branch.
+    **Mode-only events** (#46 How I Learned to Stop Worrying: one mode per DEFCON level; #100 Wargames: end the game / play on, only at DEFCON 2) pick no countries: a `Mode`'s `Extra` carries a DEFCON target, Military Ops gained, and `ends_game`, which `into_result` turns into `EffectResult::{defcon, mil_ops, ends_game}` (`Game::finish_effect` clamps Military Ops to 0-5 and, for `ends_game`, makes the VP leader win with `VictoryReason::Wargames` — a tie goes to the player's opponent). `is_designation` is only true for region designations (every mode carries an `ongoing`); `picks_countries` tells a mode-only event from one with countries to pick.
     **Chernobyl (#94)** is the one *designation* (`EventChoice::is_designation`):
     no countries are picked — each of its six modes is a `Region`
     (`Mode::ongoing` carries the `OngoingEffect::Chernobyl { region }` that

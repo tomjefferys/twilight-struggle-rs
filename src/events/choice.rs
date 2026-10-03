@@ -209,6 +209,22 @@ pub struct Mode {
     vp: i8,
     /// The China Card changing hands when this mode is played (Ussuri River Skirmish).
     china: Option<ChinaTransfer>,
+    extra: Extra,
+}
+
+/// What choosing a mode does beyond influence: DEFCON, Military Ops, ending the game.
+#[derive(Debug, Clone, Copy)]
+struct Extra {
+    /// DEFCON is set to this (How I Learned to Stop Worrying).
+    defcon: Option<u8>,
+    /// Military Operations the chooser gains.
+    mil_ops: i8,
+    /// The game ends, the VP leader winning (Wargames).
+    ends_game: bool,
+}
+
+impl Extra {
+    const NONE: Extra = Extra { defcon: None, mil_ops: 0, ends_game: false };
 }
 
 /// A card's whole choice: who chooses, whether they must finish, and the
@@ -223,7 +239,7 @@ pub struct Spec {
 
 impl Spec {
     fn single(chooser: Superpower, label: impl Into<String>, rule: Rule) -> Self {
-        Spec { chooser, optional: false, modes: vec![Mode { ongoing: None, vp: 0, china: None, label: label.into(), fixed: Vec::new(), rule: Some(rule) }] }
+        Spec { chooser, optional: false, modes: vec![Mode { ongoing: None, vp: 0, china: None, extra: Extra::NONE, label: label.into(), fixed: Vec::new(), rule: Some(rule) }] }
     }
 
     fn optional(mut self) -> Self {
@@ -661,7 +677,9 @@ impl EventChoice {
         if self.is_designation() {
             return if self.mode.is_some() { "region chosen".into() } else { "choose a region".into() };
         }
-        let Some(rule) = self.rule() else { return "choose a mode".into() };
+        let Some(rule) = self.rule() else {
+            return if self.mode.is_some() { "mode chosen".into() } else { "choose a mode".into() };
+        };
         let mut parts = Vec::new();
         if rule.countries != ANY && rule.kind != Kind::Reallocate {
             parts.push(format!("{}/{} countries", self.touched_count(), rule.countries));
@@ -695,7 +713,9 @@ impl EventChoice {
         if self.is_designation() {
             return format!("digits 1-{} pick the region · c confirms", self.modes.len());
         }
-        let Some(rule) = self.rule() else { return "choose a mode first".into() };
+        let Some(rule) = self.rule() else {
+            return if self.mode.is_some() { format!("digits 1-{} change the choice · c confirms", self.modes.len()) } else { "choose a mode first".into() };
+        };
         let mut parts = Vec::new();
         for (sign, key, verb) in [(Sign::Plus, '+', "add"), (Sign::Minus, '-', "remove")] {
             if let Some(n) = self.can_forward(map, id, sign) {
@@ -718,7 +738,22 @@ impl EventChoice {
         let vp = self.mode.map_or(0, |i| self.modes[i].vp);
         let vp_delta = if self.chooser == Superpower::Us { vp } else { -vp };
         let china = self.mode.and_then(|i| self.modes[i].china);
-        EffectResult { card: self.card, player: status.active, influence: self.changes.clone(), vp_delta, defcon: None, ongoing, lasting: None, cancels: None, china, space: None }
+        let extra = self.mode.map_or(Extra::NONE, |i| self.modes[i].extra);
+        let defcon = extra.defcon.map(|d| (status.defcon, d));
+        EffectResult {
+            card: self.card,
+            player: status.active,
+            influence: self.changes.clone(),
+            vp_delta,
+            defcon,
+            ongoing,
+            lasting: None,
+            cancels: None,
+            china,
+            space: None,
+            mil_ops: extra.mil_ops,
+            ends_game: extra.ends_game,
+        }
     }
 
     /// The region a region-designating event (Chernobyl) has been set to
@@ -733,7 +768,13 @@ impl EventChoice {
     /// Whether this event only designates something (no countries to
     /// pick), so the map views have nothing to mark as live.
     pub fn is_designation(&self) -> bool {
-        self.modes.iter().all(|m| m.rule.is_none())
+        self.modes.iter().all(|m| m.rule.is_none() && m.ongoing.is_some())
+    }
+
+    /// Whether any mode has countries to pick — false for an event that
+    /// is settled by choosing a mode alone (a DEFCON level, Wargames).
+    pub fn picks_countries(&self) -> bool {
+        self.modes.iter().any(|m| m.rule.is_some())
     }
 }
 
@@ -754,16 +795,20 @@ const CHOICES: &[(u8, SpecFn)] = &[
     (29, east_european_unrest),
     (30, decolonization),
     (33, de_stalinization),
+    (46, how_i_learned_to_stop_worrying),
     (53, south_african_unrest),
     (56, muslim_revolution),
     (63, colonial_rear_guards),
     (66, puppet_governments),
     (70, oas_founded),
+    (74, the_voice_of_america),
     (75, liberation_theology),
     (76, ussuri_river_skirmish),
     (87, the_reformer),
     (88, marine_barracks_bombing),
     (94, chernobyl),
+    (99, pershing_ii_deployed),
+    (100, wargames),
     (105, special_relationship),
 ];
 
@@ -806,12 +851,12 @@ fn warsaw_pact_formed(_: &WorldMap, _: &Board, _: &GameStatus) -> Spec {
         optional: false,
         modes: vec![
             Mode {
-                ongoing: None, vp: 0, china: None, label: "remove all US influence from 4 Eastern European countries".into(),
+                ongoing: None, vp: 0, china: None, extra: Extra::NONE, label: "remove all US influence from 4 Eastern European countries".into(),
                 fixed: Vec::new(),
                 rule: Some(Rule::remove(Us, Eligible::new(EASTERN), ANY, ANY, 4).chunk(Chunk::All)),
             },
             Mode {
-                ongoing: None, vp: 0, china: None, label: "add 5 USSR influence to Eastern Europe (max 2 per country)".into(),
+                ongoing: None, vp: 0, china: None, extra: Extra::NONE, label: "add 5 USSR influence to Eastern Europe (max 2 per country)".into(),
                 fixed: Vec::new(),
                 rule: Some(Rule::add(Ussr, Eligible::new(EASTERN), 5, 2, ANY)),
             },
@@ -906,12 +951,12 @@ fn south_african_unrest(_: &WorldMap, _: &Board, _: &GameStatus) -> Spec {
         optional: false,
         modes: vec![
             Mode {
-                ongoing: None, vp: 0, china: None, label: "add 2 USSR influence to South Africa".into(),
+                ongoing: None, vp: 0, china: None, extra: Extra::NONE, label: "add 2 USSR influence to South Africa".into(),
                 fixed: vec![Fixed { country: "South Africa", side: Ussr, op: FixedOp::Add(2) }],
                 rule: None,
             },
             Mode {
-                ongoing: None, vp: 0, china: None, label: "add 1 USSR influence to South Africa and 2 to one adjacent country".into(),
+                ongoing: None, vp: 0, china: None, extra: Extra::NONE, label: "add 1 USSR influence to South Africa and 2 to one adjacent country".into(),
                 fixed: vec![Fixed { country: "South Africa", side: Ussr, op: FixedOp::Add(1) }],
                 rule: Some(Rule::add(Ussr, Eligible::new(Where::AdjacentTo("South Africa")), ANY, 2, 1).chunk(Chunk::Fixed(2))),
             },
@@ -963,6 +1008,21 @@ fn oas_founded(_: &WorldMap, _: &Board, _: &GameStatus) -> Spec {
     )
 }
 
+/// #74 The Voice of America
+fn the_voice_of_america(_: &WorldMap, _: &Board, _: &GameStatus) -> Spec {
+    Spec::single(
+        Us,
+        "remove 4 USSR influence from countries outside Europe (max 2 per country)",
+        Rule::remove(Ussr, Eligible::new(Where::Any(&[
+            Where::Region(Region::Asia),
+            Where::Region(Region::MiddleEast),
+            Where::Region(Region::Africa),
+            Where::Region(Region::CentralAmerica),
+            Where::Region(Region::SouthAmerica),
+        ])), 4, 2, ANY),
+    )
+}
+
 /// #75 Liberation Theology
 fn liberation_theology(_: &WorldMap, _: &Board, _: &GameStatus) -> Spec {
     Spec::single(
@@ -981,7 +1041,7 @@ fn ussuri_river_skirmish(_: &WorldMap, _: &Board, status: &GameStatus) -> Spec {
             optional: false,
             modes: vec![Mode {
                 ongoing: None, vp: 0,
-                china: Some(ChinaTransfer { to: Us, face_up: true }),
+                china: Some(ChinaTransfer { to: Us, face_up: true }), extra: Extra::NONE,
                 label: "the US takes the China Card (face up)".into(),
                 fixed: Vec::new(),
                 rule: None,
@@ -1012,7 +1072,7 @@ fn marine_barracks_bombing(_: &WorldMap, _: &Board, _: &GameStatus) -> Spec {
         chooser: Ussr,
         optional: false,
         modes: vec![Mode {
-            ongoing: None, vp: 0, china: None, label: "remove 2 more US influence from the Middle East (Lebanon's is already gone)".into(),
+            ongoing: None, vp: 0, china: None, extra: Extra::NONE, label: "remove 2 more US influence from the Middle East (Lebanon's is already gone)".into(),
             fixed: vec![Fixed { country: "Lebanon", side: Us, op: FixedOp::Clear }],
             rule: Some(Rule::remove(Us, Eligible::new(Where::Region(Region::MiddleEast)), 2, ANY, ANY)),
         }],
@@ -1033,9 +1093,61 @@ fn chernobyl(_: &WorldMap, _: &Board, _: &GameStatus) -> Spec {
                 rule: None,
                 ongoing: Some(OngoingEffect::Chernobyl { region }),
                 vp: 0,
-                china: None,
+                china: None, extra: Extra::NONE,
             })
             .collect(),
+    }
+}
+
+/// #46 How I Learned to Stop Worrying: the player sets DEFCON to any level and
+/// adds 5 to their Military Operations. One mode per level, no countries.
+fn how_i_learned_to_stop_worrying(_: &WorldMap, _: &Board, status: &GameStatus) -> Spec {
+    Spec {
+        chooser: status.active,
+        optional: false,
+        modes: (1..=5u8)
+            .map(|level| Mode {
+                label: format!("set DEFCON to {level}"),
+                fixed: Vec::new(),
+                rule: None,
+                ongoing: None,
+                vp: 0,
+                china: None,
+                extra: Extra { defcon: Some(level), mil_ops: 5, ends_game: false },
+            })
+            .collect(),
+    }
+}
+
+/// #99 Pershing II Deployed: USSR +1 VP; remove 1 US influence from each of 3 Western European countries.
+fn pershing_ii_deployed(_: &WorldMap, _: &Board, _: &GameStatus) -> Spec {
+    Spec::single(
+        Ussr,
+        "remove 1 US influence from each of 3 Western European countries (+1 VP)",
+        Rule::remove(Us, Eligible::new(WESTERN), 3, 1, 3),
+    )
+    .with_vp(1)
+}
+
+/// #100 Wargames: at DEFCON 2 the player may end the game, giving the opponent 6 VP first;
+/// the VP leader then wins (a tie goes to the opponent). At any other level nothing happens.
+fn wargames(_: &WorldMap, _: &Board, status: &GameStatus) -> Spec {
+    let none = Mode { label: String::new(), fixed: Vec::new(), rule: None, ongoing: None, vp: 0, china: None, extra: Extra::NONE };
+    if status.defcon != 2 {
+        return Spec { chooser: status.active, optional: false, modes: vec![Mode { label: "no effect (DEFCON isn't 2)".into(), ..none }] };
+    }
+    Spec {
+        chooser: status.active,
+        optional: false,
+        modes: vec![
+            Mode {
+                label: "end the game: the opponent gets 6 VP, then the VP leader wins".into(),
+                vp: -6,
+                extra: Extra { defcon: None, mil_ops: 0, ends_game: true },
+                ..none.clone()
+            },
+            Mode { label: "play on".into(), ..none },
+        ],
     }
 }
 
