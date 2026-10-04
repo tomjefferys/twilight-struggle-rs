@@ -68,7 +68,7 @@ pub fn render_status_bar(
     winner: Option<Victory>,
     width: usize,
 ) -> Canvas {
-    render_status_bar_with(layout, board, status, card, op, winner, None, None, None, width)
+    render_status_bar_with(layout, board, status, card, op, winner, None, None, None, false, width)
 }
 
 /// [`render_status_bar`] for a game whose card in play has already had its
@@ -85,6 +85,7 @@ pub fn render_status_bar_with(
     after_event: Option<crate::events::OpsGrant>,
     forced_by: Option<(&Card, crate::events::PlayAs)>,
     piles: Option<(usize, usize)>,
+    setup: bool,
     width: usize,
 ) -> Canvas {
     // An open event's chooser (the card's own side) is who's really to
@@ -97,7 +98,7 @@ pub fn render_status_bar_with(
     let turn_line = format!(
         "TURN {} · {} · {} to act · DEFCON {} · VP {}{}{}",
         status.turn,
-        round_label(status),
+        round_label(status, setup),
         to_act,
         status.defcon,
         vp_line(status.vp),
@@ -123,7 +124,7 @@ pub fn render_status_bar_with(
                 (line, side_style(e.chooser()).bold())
             }
             (_, Some(operation @ Operation::Event(e))) => {
-                let name = card.map(|c| c.name.as_str()).unwrap_or(if e.is_triggered() { "NORAD" } else { "?" });
+                let name = card.map(|c| c.name.as_str()).unwrap_or(e.title().unwrap_or(if e.is_triggered() { "NORAD" } else { "?" }));
                 let n = e.modes().len();
                 let keys = match (e.mode(), e.is_designation()) {
                     _ if e.is_pile_pick() && e.pile().is_empty() => "c confirm · ⌫ take the card back".to_string(),
@@ -234,7 +235,7 @@ pub fn render_status_bar_with(
     let content_width = width.max(turn_line.chars().count()).max(op_line.chars().count()).max(effects_width).max(1);
     let mut canvas = Canvas::new(content_width, STATUS_BAR_ROWS);
 
-    draw_turn_line(&mut canvas, status, to_act);
+    draw_turn_line(&mut canvas, status, to_act, setup);
     canvas.put(1, 0, &op_line, op_style);
     draw_effects_line(&mut canvas, &effects);
     canvas.put(3, 0, &"─".repeat(content_width), Style::color(Color::Muted));
@@ -267,8 +268,10 @@ fn space_hint(card: &Card) -> &'static str {
 }
 
 /// `AR 3/7`, or `Headline` before the first action round.
-fn round_label(status: &GameStatus) -> String {
-    if status.in_headline() { "Headline".to_string() } else { format!("AR {}", ar_label(status)) }
+fn round_label(status: &GameStatus, setup: bool) -> String {
+    if setup {
+        "Setup".to_string()
+    } else if status.in_headline() { "Headline".to_string() } else { format!("AR {}", ar_label(status)) }
 }
 
 /// `3`, or `8/7+1` for the extra round North Sea Oil gives the US.
@@ -322,14 +325,14 @@ fn side_style(side: Superpower) -> Style {
 /// Row 0, drawn as several `put` calls rather than one string so the
 /// active side's own name can carry its own colour (`Color::Us`/`Ussr`)
 /// and bold weight while the rest of the row stays plain.
-fn draw_turn_line(canvas: &mut Canvas, status: &GameStatus, to_act: Superpower) {
+fn draw_turn_line(canvas: &mut Canvas, status: &GameStatus, to_act: Superpower, setup: bool) {
     let mut col = 0;
     let mut put = |canvas: &mut Canvas, text: &str, style: Style| {
         canvas.put(0, col, text, style);
         col += text.chars().count();
     };
 
-    put(canvas, &format!("TURN {} · {} · ", status.turn, round_label(status)), Style::default());
+    put(canvas, &format!("TURN {} · {} · ", status.turn, round_label(status, setup)), Style::default());
     let side_style = match to_act {
         Superpower::Us => Style::color(Color::Us).bold(),
         Superpower::Ussr => Style::color(Color::Ussr).bold(),

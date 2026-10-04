@@ -426,6 +426,8 @@ pub struct EventChoice {
     pile_offset: usize,
     /// Which mode the picker's highlight is on.
     cursor: usize,
+    /// What the event is called when no card is (the opening setup).
+    title: Option<&'static str>,
 }
 
 impl EventChoice {
@@ -468,6 +470,7 @@ impl EventChoice {
             pile_use: PileUse::Take,
             pile_offset: 0,
             cursor: 0,
+            title: None,
         };
         if choice.modes.len() == 1 {
             choice.select(map, 0);
@@ -720,6 +723,28 @@ impl EventChoice {
         choice.triggered = true;
         choice.second_stage = true;
         Some(choice)
+    }
+
+    /// The opening placement (rule 3.2): `side` adds its starting influence — 6 anywhere in
+    /// Eastern Europe for the USSR, 7 anywhere in Western Europe for the US — with no presence,
+    /// cost or per-country limit. Not a card's event, so it has a `title`, and like NORAD it
+    /// can't be backed out of.
+    pub fn setup(map: &WorldMap, board: &Board, side: Superpower) -> Self {
+        let (points, place, label) = match side {
+            Ussr => (6, Where::Sub(SubRegion::EasternEurope), "USSR: place 6 influence anywhere in Eastern Europe"),
+            Us => (7, Where::Sub(SubRegion::WesternEurope), "US: place 7 influence anywhere in Western Europe"),
+        };
+        let spec = Spec::single(side, label, Rule::add(side, Eligible::new(place), points, points, points));
+        let mut choice = Self::from_spec(map, board, CardId(106), spec);
+        choice.triggered = true;
+        choice.second_stage = true;
+        choice.title = Some("Setup");
+        choice
+    }
+
+    /// What to call this event when no card is behind it.
+    pub fn title(&self) -> Option<&'static str> {
+        self.title
     }
 
     /// Whether a trigger, not a played card, opened this event.
@@ -1358,6 +1383,7 @@ impl EventChoice {
             takes: extra.take.into_iter().collect(),
             plays: extra.play,
             contest: if extra.contest { self.contest.clone() } else { None },
+            title: self.title,
         }
     }
 

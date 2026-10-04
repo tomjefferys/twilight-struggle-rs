@@ -363,6 +363,8 @@ pub struct Game {
     /// The Eagle/Bear has Landed holder who has yet to decide whether to discard.
     held_discard: Option<Superpower>,
     headline: HeadlineState,
+    /// Who still has to place their opening influence ([`Phase::Setup`]).
+    setup_next: Superpower,
 }
 
 /// What [`Game::end_turn`] has already done, kept while it waits for the perk holder's decision.
@@ -381,6 +383,9 @@ const FINAL_SCORING: [CardId; 6] = [CardId(2), CardId(1), CardId(3), CardId(37),
 /// catalog and dice, which the rest of turn handling (`advance`) deliberately doesn't have.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Phase {
+    /// The opening placement: the USSR adds its 6 influence in Eastern Europe, then the US
+    /// its 7 in Western Europe.
+    Setup,
     /// Each side chooses a headline card, then the two are revealed and played as events.
     Headline,
     ActionRounds,
@@ -450,6 +455,48 @@ impl Game {
             turn_end: TurnEndProgress::default(),
             held_discard: None,
             headline: HeadlineState::default(),
+            setup_next: Superpower::Ussr,
+        }
+    }
+
+    /// A new game from the printed start: the standard influence, the Early War cards shuffled
+    /// and eight dealt to each side, and the opening placement — the USSR's 6 influence in
+    /// Eastern Europe, then the US's 7 in Western Europe — waiting to be made (it opens at
+    /// the first [`Game::settle`]), after which the first turn's headline phase begins.
+    pub fn new_game(map: &WorldMap, cards: &CardCatalog, dice: &mut Dice) -> Game {
+        let scenario = Scenario::standard_start(map, cards).expect("the standard start loads");
+        let mut game = Game::from_scenario(&scenario);
+        let early: Vec<CardId> = cards.ids().filter(|&c| c != CHINA_CARD && cards.card(c).phase == CardPhase::Early).collect();
+        game.hands.shuffle_into_deck(early, dice);
+        game.deal_up(hand_size_for_turn(1), dice);
+        game.phase = Phase::Setup;
+        game.setup_next = Superpower::Ussr;
+        game.status.active = Superpower::Ussr;
+        game
+    }
+
+    /// Deals both hands up to `target` cards, the USSR first, alternating, reshuffling the
+    /// discard pile whenever the deck runs out; stops when there is nothing left to deal.
+    /// Returns how many each side got `(US, USSR)`.
+    fn deal_up(&mut self, target: usize, dice: &mut Dice) -> (u8, u8) {
+        let mut dealt = (0, 0);
+        loop {
+            let mut dealt_any = false;
+            for side in [Superpower::Ussr, Superpower::Us] {
+                if self.hands.hand(side).len() < target
+                    && let Some(card) = self.hands.draw(dice)
+                {
+                    self.hands.push_to_hand(side, card);
+                    match side {
+                        Superpower::Us => dealt.0 += 1,
+                        Superpower::Ussr => dealt.1 += 1,
+                    }
+                    dealt_any = true;
+                }
+            }
+            if !dealt_any {
+                return dealt;
+            }
         }
     }
 
@@ -516,6 +563,7 @@ impl Game {
             turn_end: self.turn_end,
             held_discard: self.held_discard,
             headline: self.headline,
+            setup_next: self.setup_next,
         }
     }
 
@@ -1071,6 +1119,9 @@ impl Game {
             let result = e.into_result(&self.status);
             if e.is_triggered() {
                 self.finish_triggered(result);
+                if self.phase == Phase::Setup {
+                    self.finish_setup_side();
+                }
                 return Ok(op);
             }
             self.finish_effect(result, e.grant());
@@ -1358,6 +1409,9 @@ impl Game {
         if self.phase == Phase::Headline {
             return Err(GameError::Trap("this is the headline phase — choose your headline card (headline <card>)".into()));
         }
+        if self.phase == Phase::Setup {
+            return Err(GameError::Trap("the opening placement comes first".into()));
+        }
         Ok(())
     }
 
@@ -1366,6 +1420,7 @@ impl Game {
     pub fn settlement_due(&self) -> bool {
         self.norad_due
             || (self.phase == Phase::TurnEnd && self.op.is_none() && self.winner.is_none() && self.held_discard.is_none())
+            || (self.phase == Phase::Setup && self.op.is_none() && self.winner.is_none())
             || (self.phase == Phase::Headline
                 && self.op.is_none()
                 && self.card.is_none()
@@ -1412,6 +1467,10 @@ impl Game {
                 }
             } else if self.phase == Phase::TurnEnd {
                 self.end_turn(map, cards, dice);
+            } else if self.phase == Phase::Setup {
+                // Open the next side's opening placement.
+                self.status.active = self.setup_next;
+                self.op = Some(Operation::Event(Box::new(EventChoice::setup(map, &self.board, self.setup_next))));
             } else if self.phase == Phase::Headline {
                 self.headline_step(map, cards, dice);
             }
@@ -1421,10 +1480,11 @@ impl Game {
     /// Refuses what only an action round allows (operations, space attempts, taking a card
     /// back) during the headline phase, where a card is played for its event alone.
     fn headline_guard(&self) -> Result<(), GameError> {
-        if self.phase == Phase::Headline {
-            return Err(GameError::Trap("headline cards are played for their events only".into()));
+        match self.phase {
+            Phase::Headline => Err(GameError::Trap("headline cards are played for their events only".into())),
+            Phase::Setup => Err(GameError::Trap("the opening placement comes first".into())),
+            _ => Ok(()),
         }
-        Ok(())
     }
 
     /// Whether the side to act is choosing its headline card right now.
@@ -1633,26 +1693,8 @@ impl Game {
             report.added = unseen.len() as u8;
             self.hands.shuffle_into_deck(unseen, dice);
         }
-        let target = hand_size_for_turn(turn);
         let discards_before = self.hands.discards().len();
-        loop {
-            let mut dealt_any = false;
-            for side in [Superpower::Ussr, Superpower::Us] {
-                if self.hands.hand(side).len() < target
-                    && let Some(card) = self.hands.draw(dice)
-                {
-                    self.hands.push_to_hand(side, card);
-                    match side {
-                        Superpower::Us => report.dealt.0 += 1,
-                        Superpower::Ussr => report.dealt.1 += 1,
-                    }
-                    dealt_any = true;
-                }
-            }
-            if !dealt_any {
-                break;
-            }
-        }
+        report.dealt = self.deal_up(hand_size_for_turn(turn), dice);
         report.reshuffled = discards_before > 0 && self.hands.discards().is_empty();
     }
 
@@ -2133,6 +2175,20 @@ impl Game {
             event: Event::EventResolved { result, vp_after },
         });
         self.log_game_over();
+    }
+
+    /// One side's opening placement is done: the other side's follows, then the first turn's
+    /// headline phase.
+    fn finish_setup_side(&mut self) {
+        if self.setup_next == Superpower::Ussr {
+            self.setup_next = Superpower::Us;
+            self.status.active = Superpower::Us;
+            return;
+        }
+        self.phase = Phase::Headline;
+        self.status.action_round = 0;
+        self.status.active = headline_order(&self.status)[0];
+        self.headline = HeadlineState::default();
     }
 
     /// Applies the influence of an event nothing played (NORAD): no card to spend, no turn to hand over.

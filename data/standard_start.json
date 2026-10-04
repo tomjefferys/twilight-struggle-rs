@@ -1,0 +1,28 @@
+{
+  "status": {
+    "turn": 1,
+    "action_round": 0,
+    "action_rounds_per_turn": 6,
+    "defcon": 5,
+    "vp": 0,
+    "china_card": "Ussr",
+    "china_card_face_up": true
+  },
+  "influence": {
+    "Syria": [0, 1],
+    "Iraq": [0, 1],
+    "North Korea": [0, 3],
+    "East Germany": [0, 3],
+    "Finland": [0, 1],
+    "Canada": [2, 0],
+    "Iran": [1, 0],
+    "Israel": [1, 0],
+    "Japan": [1, 0],
+    "Australia": [4, 0],
+    "Philippines": [1, 0],
+    "South Korea": [1, 0],
+    "Panama": [1, 0],
+    "South Africa": [1, 0],
+    "UK": [5, 0]
+  }
+}

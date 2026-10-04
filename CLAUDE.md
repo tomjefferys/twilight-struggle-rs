@@ -16,8 +16,8 @@ the 110 cards have their event implemented (`tests/cards_progress.rs`
 keeps it honest). The end of a turn (Military Operations, held scoring
 cards, DEFCON +1, the Mid/Late War deck additions and the redeal) is
 implemented (`Game::settle`, below), as is final scoring after turn 10; the
-headline phase (below) is too; new-game setup and an opponent's card's
-ops-and-event dual use are still out of scope. A first AI opponent plays
+headline phase and new-game setup (below) are too; an opponent's card's
+ops-and-event dual use is still out of scope. A first AI opponent plays
 uniformly random legal moves.
 
 ## Architecture
@@ -481,6 +481,21 @@ uniformly random legal moves.
   to `status::hand_size_for_turn` (8, then 9), USSR first, alternating,
   reshuffling the discard pile when the deck runs out, and opens the **headline
   phase**.
+  **New game** (`Game::new_game(map, cards, dice)`, REPL `new`, launch flag
+  `--new`): `Scenario::standard_start` (`data/standard_start.json`: the printed
+  influence, turn 1, DEFCON 5, the China Card with the USSR; round 0) plus the
+  Early War cards (never the China Card) shuffled into `Hands::deck` and eight
+  dealt to each side (`Game::deal_up`, shared with the end-of-turn deal), then
+  `Phase::Setup`: `settle` opens `EventChoice::setup(side)` — the opening
+  placement, 6 points anywhere in Eastern Europe for the USSR, then 7 in Western
+  Europe for the US, no presence, cost or per-country limit — as a *triggered*
+  event like NORAD (so `Game::confirm` goes through `finish_triggered`, then
+  `finish_setup_side` moves on to the other side and, after the US, to the first
+  turn's headline phase; it can't be abandoned). It isn't a card's event, so
+  `EventChoice::title`/`EffectResult::title` (`"Setup"`; `EffectResult::name`)
+  name it in the log, the modal and the status bar, where the round reads
+  "Setup" (`render_status_bar_with`'s `setup` argument). `begin`, `play_card`,
+  `pass` and the rest are refused until it's done.
   **The headline phase** (rule 4.4) is `Phase::Headline`, where `status.action_round`
   is 0 (`GameStatus::in_headline`; `validate` accepts it, `Game::from_scenario`
   starts a scenario with round 0 there, the status bar and the REPL prompt say
@@ -1292,6 +1307,8 @@ deliberate exception, for debug-mode test states specifically.
   tooling — see `world_background.md`).
 - `world_background.md` — **read this before changing the world map's
   background art, country positions, or region colour tinting.**
+- `standard_start.json` — the printed starting position (`Scenario::standard_start`),
+  the base `Game::new_game` deals and sets up from.
 - `demo_state.json` — the bundled demo scenario's starting `Board` +
   `Hands` + `GameStatus`.
 - `cards.json` — the 110-card standard deck (`CardCatalog`). Converted
@@ -1304,7 +1321,7 @@ deliberate exception, for debug-mode test states specifically.
 - `backup/` — earlier full snapshots of the world map, kept in case a
   future change needs to compare against or revert to an earlier version.
 - `states/` — named test states (`src/states.rs`'s own `StateLibrary`),
-  one JSON file per topic (`scoring.json` is the first, then `events.json` for the fixed-effect cards, `choices.json` for the choice cards, `turn-effects.json` for the turn-long ones and `lasting.json` for the game-long ones, `coups.json` for Military Ops and the DEFCON region limits, `piles.json` for the deck and pile views, `turn-end.json` for the end of a turn, `final.json` for final scoring, `headline.json` for the headline phase — each card's own event, plus `*-active` states with an effect already in force), each holding a
+  one JSON file per topic (`scoring.json` is the first, then `events.json` for the fixed-effect cards, `choices.json` for the choice cards, `turn-effects.json` for the turn-long ones and `lasting.json` for the game-long ones, `coups.json` for Military Ops and the DEFCON region limits, `piles.json` for the deck and pile views, `turn-end.json` for the end of a turn, `final.json` for final scoring, `headline.json` for the headline phase (`tests/setup.rs` covers new-game setup) — each card's own event, plus `*-active` states with an effect already in force), each holding a
   `{"states": [...]}` array of several named `Scenario` snapshots. Read
   from disk at runtime, not `include_str!`-embedded — see `states.rs`'s
   own doc above for why.

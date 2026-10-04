@@ -140,6 +140,8 @@ pub struct EffectResult {
     /// A card from the discard pile the player must now play as an event (Star Wars): its id,
     /// printed ops and whether its event removes it from the game.
     pub plays: Option<PlayCard>,
+    /// What to call the event when it isn't a card's (the opening setup): shown instead of `card`'s name.
+    pub title: Option<&'static str>,
 }
 
 /// How a card that another event has put into play has to be played.
@@ -187,6 +189,15 @@ impl EffectResult {
             takes: Vec::new(),
             plays: None,
             contest: None,
+            title: None,
+        }
+    }
+
+    /// The name to show for this event: its title, or the card's own.
+    pub fn name<'a>(&self, cards: &'a crate::cards::CardCatalog) -> &'a str {
+        match self.title {
+            Some(title) => title,
+            None => &cards.card(self.card).name,
         }
     }
 }
@@ -427,7 +438,7 @@ pub fn resolve(map: &WorldMap, board: &Board, status: &GameStatus, card: CardId)
     let effect = effect_for(card)?;
     let mut ctx = Ctx { map, before: board, working: board.clone(), status, changes: Vec::new(), vp_delta: 0, defcon: None, ongoing: None, lasting: None, cancels: None, china: None, space: None, reveals: None };
     effect(&mut ctx);
-    Some(EffectResult { card, player: status.active, influence: ctx.changes, vp_delta: ctx.vp_delta, defcon: ctx.defcon, ongoing: ctx.ongoing, lasting: ctx.lasting, cancels: ctx.cancels, china: ctx.china, space: ctx.space, mil_ops: 0, ends_game: false, reveals: ctx.reveals, discards: Vec::new(), takes: Vec::new(), plays: None, contest: None })
+    Some(EffectResult { card, player: status.active, influence: ctx.changes, vp_delta: ctx.vp_delta, defcon: ctx.defcon, ongoing: ctx.ongoing, lasting: ctx.lasting, cancels: ctx.cancels, china: ctx.china, space: ctx.space, mil_ops: 0, ends_game: false, reveals: ctx.reveals, discards: Vec::new(), takes: Vec::new(), plays: None, contest: None, title: None })
 }
 
 // ---- the cards, in printed-number order ----

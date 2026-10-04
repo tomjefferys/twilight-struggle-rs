@@ -10,6 +10,7 @@ use crate::map::WorldMap;
 use crate::status::{GameStatus, StatusError};
 
 const DEMO_STATE_JSON: &str = include_str!("../data/demo_state.json");
+const STANDARD_START_JSON: &str = include_str!("../data/standard_start.json");
 
 #[derive(Debug)]
 pub enum ScenarioError {
@@ -126,6 +127,13 @@ impl Scenario {
     /// exercise the display views without needing game rules yet.
     pub fn demo(map: &WorldMap, cards: &CardCatalog) -> Result<Self, ScenarioError> {
         Self::from_json(map, cards, DEMO_STATE_JSON)
+    }
+
+    /// The printed starting position (rule 3.1): each side's fixed influence, DEFCON 5, no VP,
+    /// the China Card with the USSR, and no cards dealt yet — [`crate::game::Game::new_game`]
+    /// deals them and runs the opening placement.
+    pub fn standard_start(map: &WorldMap, cards: &CardCatalog) -> Result<Self, ScenarioError> {
+        Self::from_json(map, cards, STANDARD_START_JSON)
     }
 
     /// An empty board, default status, and empty hands/discard/removed

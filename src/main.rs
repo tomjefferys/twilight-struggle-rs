@@ -33,7 +33,7 @@ const COMMANDS: &[&str] = &[
     "map", "world", "worldmap", "wm", "region", "country", "set", "add", "remove", "clear", "blank", "load", "save", "states", "play",
     "influence", "realign", "coup", "event", "place", "roll", "undo", "confirm", "cancel", "abandon", "status", "pass", "ai", "hand",
     "card", "log", "history", "export", "seed", "width", "color", "debug", "vp", "defcon", "turn", "ar", "active", "china", "give",
-    "discard", "exile", "help", "+", "-", "take", "mode", "space", "spacerace", "track", "escape", "defuse", "piles", "headline",
+    "discard", "exile", "help", "+", "-", "take", "mode", "space", "spacerace", "track", "escape", "defuse", "piles", "headline", "new",
 ];
 
 struct Session {
@@ -98,6 +98,7 @@ fn main() {
     let mut seed: Option<u64> = None;
     let mut ai_side: Option<Superpower> = None;
     let mut state_ref: Option<String> = None;
+    let mut new_game_flag = false;
     let mut command_words = Vec::new();
 
     while let Some(arg) = args.next() {
@@ -126,6 +127,7 @@ fn main() {
             "--state" => {
                 state_ref = args.next();
             }
+            "--new" => new_game_flag = true,
             other => command_words.push(other.to_string()),
         }
     }
@@ -171,6 +173,10 @@ fn main() {
         states: StateLibrary::standard(),
     };
 
+    if new_game_flag {
+        session.game = Game::new_game(&session.map, &session.cards, &mut session.dice);
+        session.game.record_note("new game");
+    }
     if let Some(reference) = &state_ref {
         run_load_state_command(&mut session, reference);
     }
@@ -243,7 +249,6 @@ fn maybe_run_ai_turn(session: &mut Session) {
             }
         }
         if session.game.operation().is_some() {
-            println!("NORAD: the US adds 1 influence to a country where it has some");
             print_event_prompt(session);
         }
     }
@@ -311,7 +316,7 @@ fn prompt(session: &Session) -> String {
         Some(Operation::Event(e)) => format!("{} choosing ", e.chooser()),
         _ => String::new(),
     };
-    let round = if status.in_headline() { "headline".to_string() } else { format!("AR {}/{}", status.action_round, status.action_rounds_per_turn) };
+    let round = if session.game.phase() == twilight_struggle::game::Phase::Setup { "setup".to_string() } else if status.in_headline() { "headline".to_string() } else { format!("AR {}/{}", status.action_round, status.action_rounds_per_turn) };
     format!("{debug}{} {round} {card}{choosing}> ", session.game.active())
 }
 
@@ -647,6 +652,16 @@ fn run_command(session: &mut Session, line: &str) {
             Err(e) => println!("{e}"),
         },
         "save" => run_save_command(session, &words),
+        "new" => {
+            if let Some(op) = session.game.operation() {
+                println!("finish or cancel the {} first ({} of {} ops left)", op.verb(), op.remaining(), op.ops_total());
+                return;
+            }
+            session.game = Game::new_game(&session.map, &session.cards, &mut session.dice);
+            session.debug = false;
+            session.game.record_note("new game");
+            println!("new game: the USSR places 6 influence in Eastern Europe, then the US 7 in Western Europe");
+        }
         "load" => match words.get(1) {
             Some(&"demo") => {
                 let scenario = Scenario::demo(&session.map, &session.cards).expect("demo scenario should be valid");
@@ -1024,7 +1039,7 @@ fn print_event_prompt(session: &Session) {
         return;
     }
     let Some(Operation::Event(e)) = session.game.operation() else { return };
-    let card = session.game.card_in_play().map(|id| session.cards.card(id).name.as_str()).unwrap_or("?");
+    let card = session.game.card_in_play().map(|id| session.cards.card(id).name.as_str()).unwrap_or(e.title().unwrap_or(if e.is_triggered() { "NORAD" } else { "?" }));
     println!("{card} — {} chooses: {}", e.chooser(), e.prompt());
     if e.needs_roll() {
         println!("throw the dice with: roll");
@@ -1508,7 +1523,7 @@ fn run_status_command(session: &Session) {
     } else {
         format!("{}/{}", status.action_round, status.action_rounds_per_turn)
     };
-    let round = if status.in_headline() { "Headline".to_string() } else { format!("AR {ar}") };
+    let round = if session.game.phase() == twilight_struggle::game::Phase::Setup { "Setup".to_string() } else if status.in_headline() { "Headline".to_string() } else { format!("AR {ar}") };
     println!("TURN {}   {round}   {} to act   {card}   {} ops available", status.turn, session.game.active(), session.game.ops_available());
     for effect in status.lasting.active() {
         println!("in effect: {}", twilight_struggle::render::lasting_effect_line(&effect));
@@ -1688,6 +1703,11 @@ Commands:
                           overlay, space plays it
   region <name>, 1-6      zoom into one region (europe/asia/middleeast/africa/centralamerica/southamerica)
   country <name>, /<name> a single country's detail, with all its neighbours (name or code)
+  new                     start a real game: the printed starting influence, the
+                          Early War cards shuffled and dealt, then the opening
+                          placement (USSR 6 in Eastern Europe, US 7 in Western
+                          Europe, with + and confirm) and the first headline
+                          phase — or launch with `--new`
   load demo               reload the bundled demo scenario
   load <file>/<name>      load a named test state from data/states/ (Tab-
                           completes) — turns debug mode on automatically;

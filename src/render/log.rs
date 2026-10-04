@@ -398,7 +398,7 @@ fn event_detail(map: &WorldMap, cards: &CardCatalog, result: &EffectResult, vp_a
         parts.push(format!("this turn: {}", line.split_once(": ").map_or(line.as_str(), |(_, rest)| rest)));
     }
     let body = if parts.is_empty() { "no effect".to_string() } else { parts.join(", ") };
-    format!("{}: {body}", cards.card(result.card).name)
+    format!("{}: {body}", result.name(cards))
 }
 
 /// `Duck and Cover → Animal in Space: d6:2 need:≤4 — box 2, +0 VP (now -3)`,

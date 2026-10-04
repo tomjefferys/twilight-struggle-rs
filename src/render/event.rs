@@ -35,7 +35,7 @@ pub fn render_event_result(
     winner: Option<Victory>,
     queue_pos: Option<(usize, usize)>,
 ) -> Canvas {
-    let title = cards.card(result.card).name.clone();
+    let title = result.name(cards).to_string();
     let text_width = EVENT_WIDTH - 2 - 2 * PADDING;
     let mut lines: Vec<(String, Style)> = Vec::new();
 
@@ -258,7 +258,7 @@ pub fn render_event_session(cards: &CardCatalog, e: &crate::events::EventChoice,
     let height = 2 + lines.len();
     let mut canvas = Canvas::new(SESSION_WIDTH, height);
     canvas.draw_thick_box(0, 0, SESSION_WIDTH, height, Style::color(border));
-    let title = cards.card(e.card()).name.clone();
+    let title = e.title().map_or_else(|| cards.card(e.card()).name.clone(), str::to_string);
     put_border_title(&mut canvas, 0, 0, &title, Style::default().bold(), "", Style::default(), SESSION_WIDTH);
     for (i, (line, style)) in lines.iter().enumerate() {
         canvas.put(1 + i, 1 + PADDING, line, *style);
@@ -346,7 +346,7 @@ mod tests {
     use crate::render::ColorMode;
 
     fn result(ongoing: Option<OngoingEffect>, vp_delta: i8) -> EffectResult {
-        EffectResult { card: CardId(25), player: Superpower::Us, influence: Vec::new(), vp_delta, defcon: None, ongoing, lasting: None, cancels: None, china: None, space: None, mil_ops: 0, ends_game: false, reveals: None, discards: Vec::new(), takes: Vec::new(), plays: None, contest: None }
+        EffectResult { card: CardId(25), player: Superpower::Us, influence: Vec::new(), vp_delta, defcon: None, ongoing, lasting: None, cancels: None, china: None, space: None, mil_ops: 0, ends_game: false, reveals: None, discards: Vec::new(), takes: Vec::new(), plays: None, contest: None, title: None }
     }
 
     #[test]
