@@ -168,11 +168,14 @@ impl Game {
                         }
                     }
                     actions.push(Action::Pass);
-                } else if self.forced_event() {
+                } else if self.forced_how() == Some(crate::events::PlayAs::Event) {
                     // A card another event put into play: its event is all that can happen.
                     actions.push(Action::Event);
                 } else if let Some(id) = self.card_in_play() {
-                    if events::is_implemented(id) && events::blocked_at(id, self.removed_from_game(), self.status().turn).is_none() {
+                    if events::is_implemented(id)
+                        && events::blocked_at(id, self.removed_from_game(), self.status().turn).is_none()
+                        && self.forced_how() != Some(crate::events::PlayAs::Ops)
+                    {
                         actions.push(Action::Event);
                     }
                     // A scoring card has no ops for `Begin` to spend —
@@ -189,6 +192,12 @@ impl Game {
                         if !self.status().effects.coup_forbidden(self.active()) {
                             actions.push(Action::Begin(OperationKind::Coup));
                         }
+                    }
+                } else if let Some((_, forced)) = self.status().forced_play.filter(|&(s, _)| s == self.active()) {
+                    // Missile Envy's new holder has to spend it on operations.
+                    match self.hand(self.active()).iter().copied().find(|c| c.number() == forced) {
+                        Some(card) => actions.push(Action::PlayCard(card)),
+                        None => actions.push(Action::Pass),
                     }
                 } else if let Some((_, trap)) = self.trap() {
                     match trap {

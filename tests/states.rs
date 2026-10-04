@@ -3751,7 +3751,7 @@ mod nested {
         game.choose_event_cursor(&map).unwrap();
         let Some(Operation::Event(e)) = game.operation() else { panic!() };
         let text = render_event_session(&cards, e, game.status()).render(ColorMode::Never);
-        assert!(text.contains("plays it as an event") && text.contains("is played as an event next"), "{text}");
+        assert!(text.contains("plays it as an event") && text.contains("has to be played as an event"), "{text}");
         for line in text.lines() {
             assert!(line.chars().count() <= 69, "{line:?}");
         }
@@ -3776,6 +3776,251 @@ mod nested {
                     }
                 }
                 assert!(game.winner().is_some() || game.active() == Superpower::Ussr, "{state} seed {seed}");
+            }
+        }
+    }
+}
+
+/// Grain Sales to Soviets and Missile Envy: cards swapped across the table.
+mod swaps {
+    use super::*;
+    use twilight_struggle::events::PlayAs;
+    use twilight_struggle::game::GameError;
+    use twilight_struggle::ops::Operation;
+    use twilight_struggle::{Action, Dice, OperationKind};
+
+    fn start(state: &str, card: &str) -> (WorldMap, CardCatalog, Game) {
+        let (map, cards, lib) = fixtures();
+        let (scenario, _) = lib.load(&map, &cards, &format!("events/{state}")).unwrap_or_else(|e| panic!("{state}: {e}"));
+        let mut game = Game::from_scenario(&scenario);
+        game.play_card(&cards, cards.id_by_name(card).unwrap()).unwrap();
+        (map, cards, game)
+    }
+
+    fn id(cards: &CardCatalog, name: &str) -> twilight_struggle::CardId {
+        cards.id_by_name(name).unwrap()
+    }
+
+    fn open(game: &mut Game, map: &WorldMap, cards: &CardCatalog) {
+        game.play_event_with(map, cards, &mut Dice::from_seed(1)).unwrap();
+    }
+
+    #[test]
+    fn grain_sales_needs_dice() {
+        let (map, cards, mut game) = start("grain-sales", "Grain Sales to Soviets");
+        assert!(matches!(game.play_event(&map, &cards), Err(GameError::NeedsDice { .. })));
+    }
+
+    #[test]
+    fn grain_sales_shows_the_drawn_card_and_offers_play_or_return() {
+        use twilight_struggle::render::render_event_session;
+        let (map, cards, mut game) = start("grain-sales", "Grain Sales to Soviets");
+        open(&mut game, &map, &cards);
+        let Some(Operation::Event(e)) = game.operation() else { panic!() };
+        assert_eq!(e.chooser(), Superpower::Us);
+        let labels: Vec<&str> = e.modes().iter().map(|m| m.label.as_str()).collect();
+        assert!(labels[0].starts_with("play Fidel") && labels[1].starts_with("return Fidel"), "{labels:?}");
+        assert!(e.prompt().contains("Fidel"), "{}", e.prompt());
+        let _ = render_event_session;
+    }
+
+    #[test]
+    fn playing_the_drawn_card_puts_it_in_play_for_event_or_ops() {
+        let (map, cards, mut game) = start("grain-sales", "Grain Sales to Soviets");
+        open(&mut game, &map, &cards);
+        game.choose_mode(&map, 0).unwrap();
+        game.confirm().unwrap();
+        let fidel = id(&cards, "Fidel");
+        assert_eq!(game.card_in_play(), Some(fidel));
+        assert_eq!(game.forced_how(), Some(PlayAs::Either));
+        assert!(game.hand(Superpower::Ussr).is_empty());
+        assert!(game.return_card().is_err() && game.pass().is_err());
+        let legal = game.legal_actions(&map, &cards);
+        assert!(legal.contains(&Action::Event) && legal.contains(&Action::Begin(OperationKind::Influence)));
+        // Ops: Fidel is worth 2.
+        game.begin(OperationKind::Influence).unwrap();
+        game.confirm().unwrap();
+        assert!(game.discards().contains(&fidel));
+        assert!(game.discards().contains(&id(&cards, "Grain Sales to Soviets")));
+        assert_eq!(game.active(), Superpower::Ussr);
+    }
+
+    #[test]
+    fn the_drawn_card_can_be_played_for_its_event_instead() {
+        let (map, cards, mut game) = start("grain-sales", "Grain Sales to Soviets");
+        open(&mut game, &map, &cards);
+        game.choose_mode(&map, 0).unwrap();
+        game.confirm().unwrap();
+        game.play_event(&map, &cards).unwrap();
+        // Fidel's event: Cuba goes to USSR control.
+        assert_eq!(game.board().influence(map.id_by_name("Cuba").unwrap(), Superpower::Ussr), 3);
+    }
+
+    #[test]
+    fn returning_the_card_leaves_it_in_the_ussr_hand_and_grants_grain_sales_ops() {
+        let (map, cards, mut game) = start("grain-sales", "Grain Sales to Soviets");
+        open(&mut game, &map, &cards);
+        game.choose_mode(&map, 1).unwrap();
+        game.confirm().unwrap();
+        assert_eq!(game.hand(Superpower::Ussr), &[id(&cards, "Fidel")]);
+        assert_eq!(game.card_in_play(), Some(id(&cards, "Grain Sales to Soviets")));
+        assert!(game.ops_after_event().is_some());
+        game.begin(OperationKind::Influence).unwrap();
+    }
+
+    #[test]
+    fn with_no_ussr_cards_only_the_operations_remain() {
+        let (map, cards, mut game) = start("grain-sales-empty-ussr-hand", "Grain Sales to Soviets");
+        open(&mut game, &map, &cards);
+        game.confirm().unwrap();
+        assert!(game.ops_after_event().is_some());
+    }
+
+    #[test]
+    fn a_drawn_scoring_card_can_only_be_played_as_an_event() {
+        let (map, cards, mut game) = start("grain-sales-scoring-card", "Grain Sales to Soviets");
+        open(&mut game, &map, &cards);
+        game.choose_mode(&map, 0).unwrap();
+        game.confirm().unwrap();
+        assert!(game.begin(OperationKind::Influence).is_err());
+        game.play_event(&map, &cards).unwrap();
+        assert_eq!(game.active(), Superpower::Ussr);
+    }
+
+    #[test]
+    fn when_the_ussr_plays_grain_sales_a_returned_card_gives_the_us_the_operations() {
+        let (map, cards, mut game) = start("grain-sales-played-by-ussr", "Grain Sales to Soviets");
+        open(&mut game, &map, &cards);
+        assert_eq!(game.decider(), Superpower::Us);
+        game.choose_mode(&map, 1).unwrap();
+        game.confirm().unwrap();
+        // The USSR is still phasing, but the US conducts the operations.
+        assert_eq!(game.active(), Superpower::Ussr);
+        assert_eq!(game.ops_side(), Superpower::Us);
+        assert_eq!(game.decider(), Superpower::Us);
+        game.begin(OperationKind::Influence).unwrap();
+        assert_eq!(game.operation().unwrap().side(), Superpower::Us);
+        game.confirm().unwrap();
+        assert_eq!(game.active(), Superpower::Us, "the turn passes on as usual");
+    }
+
+    #[test]
+    fn with_no_ussr_cards_the_us_gets_the_operations_even_when_the_ussr_played_it() {
+        let (map, cards, mut game) = start("grain-sales-played-by-ussr-empty-hand", "Grain Sales to Soviets");
+        open(&mut game, &map, &cards);
+        game.confirm().unwrap();
+        assert_eq!(game.ops_side(), Superpower::Us);
+        let legal = game.legal_actions(&map, &cards);
+        assert!(legal.contains(&Action::Begin(OperationKind::Coup)));
+    }
+
+    #[test]
+    fn a_us_coup_taking_defcon_to_one_loses_the_game_for_the_phasing_ussr() {
+        let (map, cards, mut game) = start("grain-sales-played-by-ussr-empty-hand", "Grain Sales to Soviets");
+        open(&mut game, &map, &cards);
+        game.confirm().unwrap();
+        game.begin(OperationKind::Coup).unwrap();
+        game.roll(&map, map.id_by_name("Iran").unwrap(), &mut Dice::from_seed(1)).unwrap();
+        assert_eq!(game.status().defcon, 1);
+        assert_eq!(game.winner(), Some(twilight_struggle::game::Victory { side: Superpower::Us, reason: twilight_struggle::game::VictoryReason::Defcon }));
+    }
+
+    #[test]
+    fn missile_envy_takes_the_highest_ops_card_and_gives_the_opponent_missile_envy() {
+        let (map, cards, mut game) = start("missile-envy", "Missile Envy");
+        open(&mut game, &map, &cards);
+        let (dac, me) = (id(&cards, "Duck and Cover"), id(&cards, "Missile Envy"));
+        assert_eq!(game.card_in_play(), Some(dac));
+        assert!(game.hand(Superpower::Us).contains(&me) && !game.hand(Superpower::Us).contains(&dac));
+        assert_eq!(game.status().forced_play, Some((Superpower::Us, 49)));
+        // Duck and Cover is the US's own event: used by the USSR, only its ops count.
+        assert_eq!(game.forced_how(), Some(PlayAs::Ops));
+        assert!(game.play_event(&map, &cards).is_err());
+        assert!(!game.legal_actions(&map, &cards).contains(&Action::Event));
+        game.begin(OperationKind::Influence).unwrap();
+        game.confirm().unwrap();
+        assert!(game.discards().contains(&dac));
+        assert_eq!(game.active(), Superpower::Us);
+    }
+
+    #[test]
+    fn the_new_holder_must_play_missile_envy_for_ops() {
+        let (map, cards, mut game) = start("missile-envy", "Missile Envy");
+        open(&mut game, &map, &cards);
+        game.begin(OperationKind::Influence).unwrap();
+        game.confirm().unwrap();
+        let (me, fidel) = (id(&cards, "Missile Envy"), id(&cards, "Fidel"));
+        assert!(matches!(game.play_card(&cards, fidel), Err(GameError::Trap(_))));
+        assert!(matches!(game.pass(), Err(GameError::Trap(_))));
+        assert_eq!(game.legal_actions(&map, &cards), vec![Action::PlayCard(me)]);
+        game.play_card(&cards, me).unwrap();
+        assert!(game.play_event(&map, &cards).is_err(), "ops only");
+        assert!(game.begin(OperationKind::Realign).is_ok());
+        game.abandon().unwrap();
+        // It can be taken back until used, and the obligation survives that.
+        game.return_card().unwrap();
+        assert_eq!(game.status().forced_play, Some((Superpower::Us, 49)));
+        game.play_card(&cards, me).unwrap();
+        game.begin(OperationKind::Influence).unwrap();
+        game.confirm().unwrap();
+        assert_eq!(game.status().forced_play, None);
+        assert!(game.discards().contains(&me));
+    }
+
+    #[test]
+    fn an_exchanged_card_whose_event_is_the_players_own_occurs_at_once() {
+        let (map, cards, mut game) = start("missile-envy-own-event", "Missile Envy");
+        open(&mut game, &map, &cards);
+        assert_eq!(game.forced_how(), Some(PlayAs::Event));
+        assert_eq!(game.legal_actions(&map, &cards), vec![Action::Event]);
+        assert!(game.begin(OperationKind::Influence).is_err());
+        game.play_event(&map, &cards).unwrap();
+    }
+
+    #[test]
+    fn tied_cards_are_chosen_by_the_opponent() {
+        let (map, cards, mut game) = start("missile-envy-tie", "Missile Envy");
+        open(&mut game, &map, &cards);
+        let Some(Operation::Event(e)) = game.operation() else { panic!("a choice opens") };
+        assert_eq!(e.chooser(), Superpower::Us);
+        let labels: Vec<&str> = e.modes().iter().map(|m| m.label.as_str()).collect();
+        assert_eq!(labels, ["hand over Duck and Cover", "hand over Containment"]);
+        assert_eq!(game.decider(), Superpower::Us);
+        game.choose_mode(&map, 1).unwrap();
+        game.confirm().unwrap();
+        assert_eq!(game.card_in_play(), Some(id(&cards, "Containment")));
+        assert!(game.hand(Superpower::Us).contains(&id(&cards, "Missile Envy")));
+        assert!(game.hand(Superpower::Us).contains(&id(&cards, "Duck and Cover")));
+    }
+
+    #[test]
+    fn with_nothing_to_take_missile_envy_just_ends() {
+        let (map, cards, mut game) = start("missile-envy-no-ops-cards", "Missile Envy");
+        open(&mut game, &map, &cards);
+        assert!(game.card_in_play().is_none() && game.status().forced_play.is_none());
+        assert_eq!(game.active(), Superpower::Us);
+    }
+
+    #[test]
+    fn the_ai_gets_through_both_cards() {
+        use twilight_struggle::{play_turn, RandomAi};
+        for (state, card) in [("grain-sales", "Grain Sales to Soviets"), ("missile-envy", "Missile Envy"), ("missile-envy-tie", "Missile Envy"), ("missile-envy-forced-play", "Missile Envy")] {
+            for seed in 0..15 {
+                let (map, cards, lib) = fixtures();
+                let (scenario, _) = lib.load(&map, &cards, &format!("events/{state}")).unwrap();
+                let mut game = Game::from_scenario(&scenario);
+                let mut ai = RandomAi::from_seed(seed);
+                let mut dice = Dice::from_seed(seed);
+                if state != "missile-envy-forced-play" {
+                    game.play_card(&cards, cards.id_by_name(card).unwrap()).unwrap();
+                    game.play_event_with(&map, &cards, &mut dice).unwrap();
+                }
+                for _ in 0..8 {
+                    if game.winner().is_none() {
+                        play_turn(&mut ai, &mut game, &map, &cards, &mut dice).unwrap();
+                    }
+                }
+                assert!(game.winner().is_some() || game.status().forced_play.is_none() || game.active() != game.status().forced_play.unwrap().0, "{state} seed {seed}");
             }
         }
     }

@@ -32,7 +32,7 @@
 
 use std::fmt;
 
-use super::effects::{ChinaTransfer, Contest, EffectResult, InfluenceChange, Reveal};
+use super::effects::{ChinaTransfer, Contest, EffectResult, InfluenceChange, PlayAs, PlayCard, Reveal};
 use super::OpsGrant;
 use crate::dice::Dice;
 use crate::board::Board;
@@ -287,7 +287,7 @@ struct Extra {
     /// This side takes this card out of the discard pile (SALT Negotiations).
     take: Option<(Superpower, CardId)>,
     /// The card is played as an event straight away (Star Wars): id, printed ops, removed after its event.
-    play: Option<(CardId, u8, bool)>,
+    play: Option<PlayCard>,
 }
 
 impl Extra {
@@ -563,7 +563,7 @@ impl EventChoice {
     /// and must play it as an event at once. Mode `i` plays `pile[i]`; an empty pile leaves one
     /// mode that plays nothing, so the modal can say why.
     pub fn play_from_pile(map: &WorldMap, board: &Board, card: CardId, picker: Superpower, pile: &[PileCard]) -> Self {
-        let mode = |label: String, play: Option<(CardId, u8, bool)>| Mode {
+        let mode = |label: String, play: Option<PlayCard>| Mode {
             label,
             fixed: Vec::new(),
             rule: None,
@@ -575,7 +575,7 @@ impl EventChoice {
         let modes = if pile.is_empty() {
             vec![mode("play nothing".to_string(), None)]
         } else {
-            pile.iter().map(|p| mode(format!("play {}", p.name), Some((p.id, p.ops, p.removed)))).collect()
+            pile.iter().map(|p| mode(format!("play {}", p.name), Some(PlayCard { id: p.id, ops: p.ops, removed: p.removed, scoring: false, how: PlayAs::Event, exchange: false }))).collect()
         };
         Self::pile_choice(map, board, card, picker, pile, modes, (0, PileUse::Play))
     }
@@ -588,6 +588,41 @@ impl EventChoice {
         choice.pile_offset = offset;
         choice.session_modal = true;
         choice.cursor = 0;
+        choice
+    }
+
+    /// Grain Sales to Soviets (#67): the US has drawn `drawn` (card, name, how to play it) from the
+    /// USSR hand — shown to it — and either plays it (event or operations) or returns it and
+    /// conducts Grain Sales' own operations. `None`: the USSR has no cards, so only the operations.
+    pub fn grain_sales(map: &WorldMap, board: &Board, card: CardId, chooser: Superpower, drawn: Option<(PlayCard, String)>) -> Self {
+        let blank = Mode { label: String::new(), fixed: Vec::new(), rule: None, ongoing: None, vp: 0, china: None, extra: Extra::NONE };
+        let ops = Extra { grant: Some(OpsGrant::ANY.for_side(chooser)), ..Extra::NONE };
+        let (modes, reveal) = match &drawn {
+            Some((pc, name)) => (
+                vec![
+                    Mode { label: format!("play {name} (its event, or its operations)"), extra: Extra { play: Some(*pc), ..Extra::NONE }, ..blank.clone() },
+                    Mode { label: format!("return {name} to the USSR, then conduct Grain Sales' operations"), extra: ops, ..blank },
+                ],
+                Some(Reveal { side: chooser.opponent(), cards: vec![pc.id] }),
+            ),
+            None => (vec![Mode { label: "the USSR has no cards — conduct Grain Sales' operations".to_string(), extra: ops, ..blank }], None),
+        };
+        let mut choice = Self::from_spec(map, board, card, Spec { chooser, optional: false, modes });
+        choice.reveal = reveal;
+        choice.context = match &drawn {
+            Some((_, name)) => format!("the {} card drawn at random is {name}", chooser.opponent()),
+            None => String::new(),
+        };
+        choice
+    }
+
+    /// Missile Envy (#49): the opponent of its player, holding several cards tied for the
+    /// highest Operations value, chooses which one is handed over (`options`: label, card).
+    pub fn choose_exchange(map: &WorldMap, board: &Board, card: CardId, chooser: Superpower, options: &[(String, PlayCard)]) -> Self {
+        let blank = Mode { label: String::new(), fixed: Vec::new(), rule: None, ongoing: None, vp: 0, china: None, extra: Extra::NONE };
+        let modes = options.iter().map(|(name, pc)| Mode { label: format!("hand over {name}"), extra: Extra { play: Some(*pc), ..Extra::NONE }, ..blank.clone() }).collect();
+        let mut choice = Self::from_spec(map, board, card, Spec { chooser, optional: false, modes });
+        choice.context = "tied for the highest Operations value — choose the card to give up".to_string();
         choice
     }
 

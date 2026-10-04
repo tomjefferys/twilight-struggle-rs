@@ -52,7 +52,7 @@ use crate::dice::Dice;
 use crate::cards::CardSide;
 use crate::events::choice::{EventChoiceError, PileCard, Sign};
 use crate::events::EventChoice;
-use crate::events::{self, war, EffectResult, EventOutcome, OpsGrant, WarResult};
+use crate::events::{self, war, EffectResult, EventOutcome, OpsGrant, PlayAs, PlayCard, WarResult};
 use crate::log::{CoupAftermath, Event, GameLog, LogEntry};
 use crate::map::WorldMap;
 use crate::ongoing::{LastingEffect, TurnEffects};
@@ -331,7 +331,7 @@ struct PlayedCard {
     ops_after_event: Option<OpsGrant>,
     /// The card arrived through another card's event (Star Wars, Five Year Plan): its event must
     /// be played now — no ops, no space attempt, no taking it back.
-    forced_event: Option<CardId>,
+    forced_event: Option<(CardId, PlayAs)>,
 }
 
 /// The live game: status (including whose turn it is), the committed
@@ -533,7 +533,7 @@ impl Game {
         self.op
             .as_ref()
             .map(Operation::remaining)
-            .or(self.card.map(|c| self.status.effects.card_ops(c.ops_after_event.and_then(|g| g.ops).unwrap_or(c.ops), self.status.active).0))
+            .or(self.card.map(|c| self.status.effects.card_ops(c.ops_after_event.and_then(|g| g.ops).unwrap_or(c.ops), self.ops_side()).0))
             .unwrap_or(0)
     }
 
@@ -574,8 +574,15 @@ impl Game {
     pub fn decider(&self) -> Superpower {
         match &self.op {
             Some(Operation::Event(e)) => e.chooser(),
-            _ => self.status.active,
+            Some(op) => op.side(),
+            None => self.ops_side(),
         }
+    }
+
+    /// The side that conducts the operations of the card in play: its player, except where its
+    /// event hands them to the other side (Grain Sales to Soviets).
+    pub fn ops_side(&self) -> Superpower {
+        self.card.and_then(|c| c.ops_after_event).and_then(|g| g.side).unwrap_or(self.status.active)
     }
 
     /// The open operation, narrowed to an [`InfluencePlacement`] — `None`
@@ -624,6 +631,12 @@ impl Game {
             return Err(GameError::OperationOpen { verb: op.verb(), remaining: op.remaining(), total: op.ops_total() });
         }
         self.trigger_guard()?;
+        if let Some((side, forced)) = self.status.forced_play
+            && side == self.status.active
+            && id.0 != forced
+        {
+            return Err(GameError::Trap(format!("{} must be used for operations this action round", cards.card(CardId(forced)).name)));
+        }
         if let Some((fx, trap)) = self.trap() {
             match trap {
                 Trap::Escape(_) => return Err(GameError::Trap(format!("{} has {} trapped — discard an Operations card worth 2+ and roll to escape", fx.label(), self.status.active))),
@@ -646,7 +659,7 @@ impl Game {
         } else {
             Some(self.hands.remove(side, id).ok_or(GameError::NotInHand)?)
         };
-        self.card = Some(PlayedCard { id, ops: card.ops, hand_index, logged: false, scoring: card.scoring, removed_after_event: card.removed_after_event, ops_after_event: None, forced_event: None });
+        self.card = Some(PlayedCard { id, ops: card.ops, hand_index, logged: false, scoring: card.scoring, removed_after_event: card.removed_after_event, ops_after_event: None, forced_event: self.status.forced_play.filter(|&(s, c)| s == side && c == id.0).map(|_| (id, PlayAs::Ops)) });
         Ok(())
     }
 
@@ -662,8 +675,8 @@ impl Game {
         if let Some(card) = self.card.filter(|c| c.ops_after_event.is_some()) {
             return Err(GameError::EventPlayed { card: card.id });
         }
-        if self.card.is_some_and(|c| c.forced_event.is_some()) {
-            return Err(GameError::Trap("this card came out of another event — its event has to be played".into()));
+        if self.card.is_some_and(|c| c.forced_event.is_some_and(|(host, _)| host != c.id)) {
+            return Err(GameError::Trap("this card came out of another event — it has to be played".into()));
         }
         let card = self.card.take().ok_or(GameError::NoCard)?;
         if let Some(index) = card.hand_index {
@@ -689,7 +702,7 @@ impl Game {
         if card.scoring {
             return Err(GameError::ScoringCard);
         }
-        if card.forced_event.is_some() {
+        if matches!(card.forced_event, Some((_, PlayAs::Event))) {
             return Err(GameError::Trap("this card came out of another event — its event has to be played".into()));
         }
         if let Some(grant) = card.ops_after_event
@@ -698,7 +711,7 @@ impl Game {
             return Err(GameError::OpsNotGranted { allowed: grant.describe() });
         }
         let scope = card.ops_after_event.and_then(OpsGrant::target_scope);
-        let side = self.status.active;
+        let side = self.ops_side();
         let effects = self.status.effects;
         // An event can make the card worth something else for its operation (Olympic Games' boycott: 4).
         let printed = card.ops_after_event.and_then(|g| g.ops).unwrap_or(card.ops);
@@ -767,7 +780,12 @@ impl Game {
 
     /// The card whose event put the card in play there (Five Year Plan, Star Wars), if it did.
     pub fn forced_by(&self) -> Option<CardId> {
-        self.card.and_then(|c| c.forced_event)
+        self.card.and_then(|c| c.forced_event).map(|(host, _)| host)
+    }
+
+    /// How the card put into play by another event has to be played.
+    pub fn forced_how(&self) -> Option<PlayAs> {
+        self.card.and_then(|c| c.forced_event).map(|(_, how)| how)
     }
 
     /// Moves the highlight of an open discard-pile pick.
@@ -810,7 +828,8 @@ impl Game {
     /// finally writes the card's own entry, immediately before the roll's
     /// own.
     pub fn roll(&mut self, map: &WorldMap, id: CountryId, dice: &mut Dice) -> Result<RollOutcome, GameError> {
-        let side = self.status.active;
+        // The operation's own side: usually the phasing player, but Grain Sales gives the US the ops.
+        let side = self.op.as_ref().map_or(self.status.active, Operation::side);
         if let Some(Operation::War(w)) = &self.op {
             if !w.is_legal_target(map, id) {
                 return Err(w.resolve(map, &self.board, id, 0).expect_err("an illegal target is refused").into());
@@ -1092,6 +1111,9 @@ impl Game {
         });
         self.log_game_over();
         self.card = None;
+        if self.status.forced_play.is_some_and(|(_, c)| c == card.id.0) {
+            self.status.forced_play = None;
+        }
         self.hands.discard(card.id);
         if self.winner.is_none() {
             self.advance();
@@ -1117,7 +1139,7 @@ impl Game {
         if card.ops_after_event.is_some() {
             return Err(GameError::EventPlayed { card: card.id });
         }
-        if card.forced_event.is_some() {
+        if matches!(card.forced_event, Some((_, PlayAs::Event))) {
             return Err(GameError::Trap("this card came out of another event — its event has to be played".into()));
         }
         let side = self.status.active;
@@ -1245,6 +1267,13 @@ impl Game {
             return Err(GameError::OperationOpen { verb: op.verb(), remaining: op.remaining(), total: op.ops_total() });
         }
         self.trigger_guard()?;
+        if let Some((side, forced)) = self.status.forced_play
+            && side == self.status.active
+            && self.card.is_none()
+            && self.hands.hand(side).iter().any(|c| c.0 == forced)
+        {
+            return Err(GameError::Trap(format!("card #{forced} has to be used for operations this action round — play it")));
+        }
         if let Some((fx, trap)) = self.trap()
             && trap != Trap::Skip
         {
@@ -1313,6 +1342,9 @@ impl Game {
         if card.ops_after_event.is_some() {
             return Err(GameError::EventPlayed { card: card.id });
         }
+        if matches!(card.forced_event, Some((_, PlayAs::Ops))) {
+            return Err(GameError::Trap("this card has to be used for operations, not its event".into()));
+        }
         if !events::is_implemented(card.id) {
             return Err(GameError::EventNotImplemented { card: card.id });
         }
@@ -1346,6 +1378,53 @@ impl Game {
             return Ok(EventOutcome::Pending { card: card.id, chooser: self.status.active });
         }
 
+        // Grain Sales to Soviets: the US draws a USSR card at random, then plays it or returns it.
+        if card.id == CardId(67) {
+            let hand = self.hands.hand(Superpower::Ussr).to_vec();
+            let drawn = (!hand.is_empty()).then(|| {
+                let pick = hand[dice.index(hand.len())];
+                let c = cards.card(pick);
+                (PlayCard { id: pick, ops: c.ops, removed: c.removed_after_event, scoring: c.scoring, how: PlayAs::Either, exchange: false }, c.name.clone())
+            });
+            let choice = EventChoice::grain_sales(map, &self.board, card.id, Superpower::Us, drawn);
+            self.op = Some(Operation::Event(Box::new(choice)));
+            return Ok(EventOutcome::Pending { card: card.id, chooser: Superpower::Us });
+        }
+
+        // Missile Envy: swap for the opponent's highest-Operations card (they pick among ties).
+        if card.id == CardId(49) {
+            let player = self.status.active;
+            let opponent = player.opponent();
+            let best = self.hands.hand(opponent).iter().filter(|&&c| !cards.card(c).scoring).map(|&c| cards.card(c).ops).max();
+            if let Some(best) = best {
+                let options: Vec<(String, PlayCard)> = self
+                    .hands
+                    .hand(opponent)
+                    .iter()
+                    .filter(|&&c| !cards.card(c).scoring && cards.card(c).ops == best)
+                    .map(|&c| {
+                        let taken = cards.card(c);
+                        // Its event occurs at once if it is the player's own or neutral and can be played;
+                        // an opponent's event is not played — only its Operations value is used.
+                        let fires = taken.side != crate::cards::side_of(opponent)
+                            && events::is_implemented(c)
+                            && events::blocked_at(c, self.hands.removed(), self.status.turn).is_none();
+                        (taken.name.clone(), PlayCard { id: c, ops: taken.ops, removed: taken.removed_after_event, scoring: false, how: if fires { PlayAs::Event } else { PlayAs::Ops }, exchange: true })
+                    })
+                    .collect();
+                if options.len() == 1 {
+                    let mut result = EffectResult::blank(card.id, player);
+                    result.plays = Some(options[0].1);
+                    let outcome = EventOutcome::Effect(result.clone());
+                    self.finish_effect(result, None);
+                    return Ok(outcome);
+                }
+                let choice = EventChoice::choose_exchange(map, &self.board, card.id, opponent, &options);
+                self.op = Some(Operation::Event(Box::new(choice)));
+                return Ok(EventOutcome::Pending { card: card.id, chooser: opponent });
+            }
+        }
+
         // Five Year Plan: the USSR discards a random card; a US event fires at once (the card
         // then waits in play, its event to be played — see `PlayedCard::forced_event`).
         if card.id == CardId(5) {
@@ -1360,7 +1439,7 @@ impl Game {
                 let mut result = EffectResult::blank(card.id, self.status.active);
                 result.discards.push((Superpower::Ussr, pick));
                 if fires {
-                    result.plays = Some((pick, picked.ops, picked.removed_after_event));
+                    result.plays = Some(PlayCard { id: pick, ops: picked.ops, removed: picked.removed_after_event, scoring: false, how: PlayAs::Event, exchange: false });
                 }
                 let outcome = EventOutcome::Effect(result.clone());
                 self.finish_effect(result, None);
@@ -1516,13 +1595,23 @@ impl Game {
         let plays = result.plays;
         let host = result.card;
         self.apply_effect(result);
-        // Another card's event is played next (Star Wars, Five Year Plan): this card is spent and
-        // the one it names takes its place, to have its event played before the turn ends.
-        if let (None, Some((id, ops, removed))) = (self.winner, plays)
-            && self.hands.take(id)
+        // Another card's event puts a card into play (Star Wars, Five Year Plan, Grain Sales,
+        // Missile Envy): this card is spent and the one it names takes its place, the turn
+        // not yet over.
+        if let (None, Some(p)) = (self.winner, plays)
+            && self.hands.take(p.id)
         {
-            self.discard_or_remove_event_card();
-            self.card = Some(PlayedCard { id, ops, hand_index: None, logged: false, scoring: false, removed_after_event: removed, ops_after_event: None, forced_event: Some(host) });
+            if p.exchange {
+                // Missile Envy changes hands; its new holder must use it for operations.
+                let opponent = self.status.active.opponent();
+                if let Some(me) = self.card.take() {
+                    self.hands.push_to_hand(opponent, me.id);
+                    self.status.forced_play = Some((opponent, me.id.0));
+                }
+            } else {
+                self.discard_or_remove_event_card();
+            }
+            self.card = Some(PlayedCard { id: p.id, ops: p.ops, hand_index: None, logged: false, scoring: p.scoring, removed_after_event: p.removed, ops_after_event: None, forced_event: Some((host, p.how)) });
             return;
         }
         // A card whose event allows an operation stays in play for it.
@@ -1763,6 +1852,9 @@ impl Game {
     /// up once [`Game::advance`] rolls the turn over to a new one.
     fn discard_played_card(&mut self) {
         let Some(card) = self.card.take() else { return };
+        if self.status.forced_play.is_some_and(|(_, c)| c == card.id.0) {
+            self.status.forced_play = None;
+        }
         if card.id == CHINA_CARD && self.status.active == Superpower::Us {
             // Formosan Resolution ends once the US plays the China Card.
             self.status.lasting.cancel(LastingEffect::Formosan);
@@ -2646,8 +2738,8 @@ mod tests {
     fn play_event_refuses_a_card_whose_event_is_not_implemented_yet() {
         let map = map();
         let cards = cards();
-        let mut game = Game::from_scenario(&scenario_with_extra_card(&map, &cards, Ussr, "Missile Envy"));
-        let sg = play(&mut game, &cards, "Missile Envy");
+        let mut game = Game::from_scenario(&scenario_with_extra_card(&map, &cards, Ussr, "UN Intervention"));
+        let sg = play(&mut game, &cards, "UN Intervention");
         assert!(matches!(
             game.play_event(&map, &cards),
             Err(GameError::EventNotImplemented { card }) if card == sg

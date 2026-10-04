@@ -27,7 +27,7 @@ pub mod scoring;
 pub mod war;
 
 pub use choice::EventChoice;
-pub use effects::{ChinaTransfer, Contest, ContestRoll, EffectResult, Reveal};
+pub use effects::{PlayAs, PlayCard, ChinaTransfer, Contest, ContestRoll, EffectResult, Reveal};
 pub use scoring::ScoringResult;
 pub use war::{War, WarResult};
 
@@ -76,11 +76,14 @@ pub struct OpsGrant {
     pub follow_up: bool,
     /// The operation is worth this many ops instead of the card's own (Olympic Games' boycott: 4).
     pub ops: Option<u8>,
+    /// The side that conducts the operation when it is not the phasing player (Grain Sales: the US,
+    /// even if the USSR played the card). `None`: the player of the card.
+    pub side: Option<crate::country::Superpower>,
 }
 
 impl OpsGrant {
     const fn kinds(influence: bool, realign: bool, coup: bool) -> OpsGrant {
-        OpsGrant { influence, realign, coup, scope: choice::Where::Everywhere, scope_label: "", exclude: None, follow_up: false, ops: None }
+        OpsGrant { influence, realign, coup, scope: choice::Where::Everywhere, scope_label: "", exclude: None, follow_up: false, ops: None, side: None }
     }
 
     /// Any operation.
@@ -91,6 +94,11 @@ impl OpsGrant {
     /// Coups and realignments (not placement) within `scope`.
     const fn coup_or_realign_in(scope: choice::Where, label: &'static str) -> OpsGrant {
         OpsGrant { scope, scope_label: label, ..OpsGrant::kinds(false, true, true) }
+    }
+
+    /// The same grant, conducted by `side` rather than the card's player.
+    pub const fn for_side(self, side: crate::country::Superpower) -> OpsGrant {
+        OpsGrant { side: Some(side), ..self }
     }
 
     /// The same grant, worth `ops` operation points rather than the card's own.
@@ -196,7 +204,7 @@ pub fn blocked_at(card: CardId, removed: &[CardId], turn: u8) -> Option<Blocked>
 /// Whether resolving `card`'s event draws on chance (Terrorism's random discard, , and so
 /// needs `Game::play_event_with`'s dice.
 pub fn needs_dice(card: CardId) -> bool {
-    matches!(card.0, 5 | 92)
+    matches!(card.0, 5 | 67 | 92)
 }
 
 /// Cards whose event is barred once another card's event has happened.

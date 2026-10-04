@@ -35,6 +35,14 @@ pub const CHINA_CARD: CardId = CardId(6);
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, serde::Deserialize)]
 pub struct CardId(pub(crate) u8);
 
+/// The card side that belongs to `side`.
+pub fn side_of(side: Superpower) -> CardSide {
+    match side {
+        Superpower::Us => CardSide::Us,
+        Superpower::Ussr => CardSide::Ussr,
+    }
+}
+
 impl CardId {
     pub fn number(self) -> u8 {
         self.0

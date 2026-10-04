@@ -115,6 +115,9 @@ pub struct GameStatus {
     /// Card events that stay in force past the turn (see [`crate::ongoing::LastingEffects`]).
     #[serde(skip_serializing_if = "LastingEffects::is_empty")]
     pub lasting: LastingEffects,
+    /// Missile Envy: this side must use this card (its number) for operations in its next action round.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub forced_play: Option<(Superpower, u8)>,
 }
 
 fn is_zero(n: &u8) -> bool {
@@ -192,6 +195,7 @@ impl Default for GameStatus {
             china_card_face_up: true,
             effects: TurnEffects::default(),
             lasting: LastingEffects::default(),
+            forced_play: None,
         }
     }
 }

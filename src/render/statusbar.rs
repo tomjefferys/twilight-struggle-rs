@@ -83,14 +83,15 @@ pub fn render_status_bar_with(
     op: Option<&Operation>,
     winner: Option<Victory>,
     after_event: Option<crate::events::OpsGrant>,
-    forced_by: Option<&Card>,
+    forced_by: Option<(&Card, crate::events::PlayAs)>,
     width: usize,
 ) -> Canvas {
     // An open event's chooser (the card's own side) is who's really to
     // act, even when the other side is phasing.
     let to_act = match op {
         Some(Operation::Event(e)) => e.chooser(),
-        _ => status.active,
+        Some(op) => op.side(),
+        None => after_event.and_then(|g| g.side).unwrap_or(status.active),
     };
     let turn_line = format!(
         "TURN {} · AR {} · {} to act · DEFCON {} · VP {}{}",
@@ -164,16 +165,23 @@ pub fn render_status_bar_with(
                     Style::color(Color::Selected),
                 )
             }
-            (Some(card), None) if forced_by.is_some() => (
-                format!(
-                    "{} puts {} in play · its event has to be played now · e play {} ({})",
-                    forced_by.map_or("?", |c| c.name.as_str()),
-                    card.name,
-                    card.name,
-                    ops_text(status, card)
-                ),
-                Style::color(Color::Selected).bold(),
-            ),
+            (Some(card), None) if forced_by.is_some() => {
+                let (host, how) = forced_by.expect("guard checked");
+                let line = if host.id == card.id {
+                    format!("{} must be used for operations this round · i influence · a realign · o coup ({})", card.name, ops_text(status, card))
+                } else {
+                    match how {
+                        crate::events::PlayAs::Event => format!("{} puts {} in play · its event has to be played now · e play it ({})", host.name, card.name, ops_text(status, card)),
+                        crate::events::PlayAs::Either => {
+                            format!("{} puts {} in play · play it now: e its event · i/a/o its operations ({})", host.name, card.name, ops_text(status, card))
+                        }
+                        crate::events::PlayAs::Ops => {
+                            format!("{} puts {} in play · an opponent's event, so use its operations: i/a/o ({})", host.name, card.name, ops_text(status, card))
+                        }
+                    }
+                };
+                (line, Style::color(Color::Selected).bold())
+            }
             (Some(card), None) if card.scoring => {
                 (format!("playing {} — e score · ⌫ return card", card.name), Style::color(Color::Selected))
             }
@@ -184,6 +192,10 @@ pub fn render_status_bar_with(
             (Some(card), None) => (
                 format!("playing {} ({}) — i influence · a realign · o coup{} · ⌫ return card", card.name, ops_text(status, card), space_hint(card)),
                 Style::color(Color::Selected),
+            ),
+            (None, None) if status.forced_play.is_some_and(|(side, _)| side == status.active) => (
+                format!("{} to act · you must play Missile Envy for operations this round · [ ] select it · space play", status.active),
+                side_style(status.active).bold(),
             ),
             (None, None) => match status.lasting.trap_on(status.active) {
                 Some(trap) => (

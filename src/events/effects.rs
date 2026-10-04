@@ -139,7 +139,31 @@ pub struct EffectResult {
     pub takes: Vec<(Superpower, CardId)>,
     /// A card from the discard pile the player must now play as an event (Star Wars): its id,
     /// printed ops and whether its event removes it from the game.
-    pub plays: Option<(CardId, u8, bool)>,
+    pub plays: Option<PlayCard>,
+}
+
+/// How a card that another event has put into play has to be played.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PlayAs {
+    /// Its event, and nothing else (Star Wars, Five Year Plan).
+    Event,
+    /// Its event or its operations, as the player likes (Grain Sales).
+    Either,
+    /// Its operations only — it is an opponent's event (Missile Envy's exchanged card).
+    Ops,
+}
+
+/// A card another event puts into play: what the game needs to take it up.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PlayCard {
+    pub id: CardId,
+    pub ops: u8,
+    /// Whether its event removes it from the game.
+    pub removed: bool,
+    pub scoring: bool,
+    pub how: PlayAs,
+    /// Missile Envy: the card in play changes places with this one, which goes to the opponent's hand.
+    pub exchange: bool,
 }
 
 impl EffectResult {
@@ -321,6 +345,8 @@ type Effect = fn(&mut Ctx);
 const EFFECTS: &[(u8, Effect)] = &[
     (4, duck_and_cover),
     (5, five_year_plan),
+    (49, missile_envy),
+    (67, grain_sales),
     (8, fidel),
     (9, vietnam_revolts),
     (10, blockade),
@@ -720,6 +746,14 @@ fn quagmire(c: &mut Ctx) {
 /// `Game::play_event_with` (it needs dice); with nothing to discard, nothing happens.
 fn five_year_plan(_: &mut Ctx) {}
 
+/// #49 Missile Envy: exchanged for the opponent's best Operations card — decided by
+/// `Game::play_event_with`; with nothing to take, nothing happens.
+fn missile_envy(_: &mut Ctx) {}
+
+/// #67 Grain Sales to Soviets: the US draws a USSR card and plays or returns it — decided by
+/// `Game::play_event_with` (it needs dice).
+fn grain_sales(_: &mut Ctx) {}
+
 /// #85 Star Wars: if the US leads the space race it picks a discarded non-scoring card and plays it
 /// as an event (`EventChoice::pick_from_pile`, opened by `Game::play_event_with`); otherwise nothing.
 fn star_wars(_: &mut Ctx) {}
@@ -847,7 +881,7 @@ mod tests {
     fn an_unrecognised_card_resolves_to_none() {
         let (map, _) = fixtures();
         let board = Board::new(&map);
-        assert!(resolve(&map, &board, &GameStatus::default(), CardId(49)).is_none());
-        assert!(!is_effect_card(CardId(49)));
+        assert!(resolve(&map, &board, &GameStatus::default(), CardId(32)).is_none());
+        assert!(!is_effect_card(CardId(32)));
     }
 }

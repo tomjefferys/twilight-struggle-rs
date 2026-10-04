@@ -60,9 +60,14 @@ pub fn render_event_result(
     for &(side, card) in &result.takes {
         lines.push((format!("{side} takes {} from the discard pile (revealed)", cards.card(card).name), Style::color(side_color(side))));
     }
-    if let Some((card, _, _)) = result.plays {
-        for part in wrap(&format!("{} now has to be played as an event (press e)", cards.card(card).name), text_width) {
+    if let Some(play) = result.plays {
+        for part in wrap(&format!("{} {}", cards.card(play.id).name, play_next(&play)), text_width) {
             lines.push((part, Style::color(Color::Selected).bold()));
+        }
+        if play.exchange {
+            for part in wrap(&format!("{} goes to {}'s hand, to be used for operations in their next action round", cards.card(result.card).name, result.player.opponent()), text_width) {
+                lines.push((part, Style::default()));
+            }
         }
     }
     if let Some(reveal) = &result.reveals {
@@ -261,6 +266,15 @@ pub fn render_event_session(cards: &CardCatalog, e: &crate::events::EventChoice,
     canvas
 }
 
+/// What happens to a card another event has put into play.
+fn play_next(play: &crate::events::PlayCard) -> &'static str {
+    match play.how {
+        crate::events::PlayAs::Event => "has to be played as an event (press e)",
+        crate::events::PlayAs::Either => "goes into play: play it as an event (e) or for operations (i/a/o)",
+        crate::events::PlayAs::Ops => "goes into play: an opponent's event, so only its operations are used (i/a/o)",
+    }
+}
+
 /// The numbered options, the chosen one marked `▶`, long labels wrapped under their number.
 fn push_modes(lines: &mut Vec<(String, Style)>, e: &crate::events::EventChoice, text_width: usize, side: Color) {
     for (i, mode) in e.modes().iter().enumerate() {
@@ -306,11 +320,11 @@ fn push_result(cards: &CardCatalog, lines: &mut Vec<(String, Style)>, e: &crate:
     for &(side, card) in &result.takes {
         lines.push((format!("  {side} takes {} (revealed)", cards.card(card).name), Style::color(side_color(side))));
     }
-    if let Some((card, _, _)) = result.plays {
-        lines.push((format!("  {} is played as an event next", cards.card(card).name), Style::color(side_color(e.chooser()))));
+    if let Some(play) = result.plays {
+        lines.push((format!("  {} {}", cards.card(play.id).name, play_next(&play)), Style::color(side_color(e.chooser()))));
     }
     if let Some(grant) = e.grant() {
-        let sponsor = e.chooser().opponent();
+        let sponsor = grant.side.unwrap_or(status.active);
         for part in wrap(&format!("{sponsor} may then conduct {}", grant.describe()), text_width.saturating_sub(2)) {
             lines.push((format!("  {part}"), Style::color(side_color(sponsor))));
         }

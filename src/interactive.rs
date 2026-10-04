@@ -16,7 +16,7 @@ use twilight_struggle::render::{
     log_entry_line, operation_abandoned_line, operation_closed_line, operation_header, render_card, render_country, render_forced_card, render_hand,
     render_event_result, render_event_session, render_space_confirm, render_space_result, render_trap_confirm, render_trap_result, render_space_track_with_hint, render_war_result, render_region, render_roll_result, render_scoring_result, render_status_bar_with, render_world_map, Canvas, RollReport, HAND_ROWS,
 };
-use twilight_struggle::events::{EffectResult, ScoringResult, WarResult};
+use twilight_struggle::events::{PlayAs, EffectResult, ScoringResult, WarResult};
 use twilight_struggle::game::{Trap, TrapResult, Victory};
 use twilight_struggle::space::SpaceResult;
 use twilight_struggle::ops::Operation;
@@ -276,7 +276,7 @@ pub fn run(
                                         if let Some(at) = entries[logged..].iter().rposition(|e| matches!(&e.event, Event::EventResolved { result, .. } if !result.takes.is_empty() || result.plays.is_some())) {
                                             if let Event::EventResolved { result, .. } = &entries[logged + at].event {
                                                 let mut names: Vec<String> = result.takes.iter().map(|&(side, c)| format!("{side} takes {} from the discard pile", cards.card(c).name)).collect();
-                                                names.extend(result.plays.map(|(c, _, _)| format!("{} must be played as an event — e", cards.card(c).name)));
+                                                names.extend(result.plays.map(|p| format!("{} is now in play — {}", cards.card(p.id).name, match p.how { PlayAs::Event => "e to play its event", PlayAs::Either => "e event, or i/a/o", PlayAs::Ops => "i/a/o" })));
                                                 message = Some(names.join(" · "));
                                             }
                                             queue_turn_modals(&mut modal, game.board(), &entries[logged + at..]);
@@ -1091,8 +1091,11 @@ fn draw(
 ) -> io::Result<()> {
     // A choice waiting only for its confirmation stays on the message row
     // (unless something more pressing replaced it) until confirmed or undone.
-    let forced = game.forced_by().zip(game.card_in_play()).map(|(host, card)| {
-        format!("{} puts {} in play — press e to play its event (it can't be skipped or taken back)", cards.card(host).name, cards.card(card).name)
+    let forced = game.forced_by().zip(game.card_in_play()).zip(game.forced_how()).map(|((host, card), how)| match how {
+        _ if host == card => format!("{} has to be used for operations this action round — i, a or o", cards.card(card).name),
+        PlayAs::Event => format!("{} puts {} in play — press e to play its event (it can't be skipped or taken back)", cards.card(host).name, cards.card(card).name),
+        PlayAs::Either => format!("{} puts {} in play — play it now: e for its event, or i/a/o for its operations", cards.card(host).name, cards.card(card).name),
+        PlayAs::Ops => format!("{} puts {} in play — an opponent's event, so use its operations (i/a/o)", cards.card(host).name, cards.card(card).name),
     });
     let reminder = pending_choice_reminder(game, cards).or(forced).or_else(|| {
         (hand_selected.peek && peeking_allowed(game) && !discard_gate_open(game))
@@ -1113,8 +1116,8 @@ fn draw(
     let hand = game.hand(side);
     let item_count = hand.len() + china.is_some() as usize;
     let selected_idx = (item_count > 0).then(|| hand_selected.selected[side_index(side)].min(item_count - 1));
-    let hand_canvas = match (game.forced_by(), game.card_in_play()) {
-        (Some(host), Some(card)) => render_forced_card(cards, card, host, game.active()),
+    let hand_canvas = match (game.forced_by(), game.card_in_play(), game.forced_how()) {
+        (Some(host), Some(card), Some(how)) if host != card => render_forced_card(cards, card, host, how, game.active()),
         _ => render_hand(cards, hand, china, side, selected_idx, game.card_in_play_slot().filter(|_| side == game.active())),
     };
 
@@ -1154,7 +1157,7 @@ fn draw(
     }
 
     let card_in_play = game.card_in_play().map(|id| cards.card(id));
-    let bar = render_status_bar_with(layout, board, game.status(), card_in_play, op, game.winner(), game.ops_after_event(), game.forced_by().map(|c| cards.card(c)), canvas.width());
+    let bar = render_status_bar_with(layout, board, game.status(), card_in_play, op, game.winner(), game.ops_after_event(), game.forced_by().zip(game.forced_how()).map(|(c, how)| (cards.card(c), how)), canvas.width());
 
     let rows = terminal::size().map(|(_, h)| h as usize).unwrap_or(bar.height() + canvas.height() + HAND_ROWS);
     let view_budget = rows.saturating_sub(bar.height() + message.is_some() as usize + HAND_ROWS);

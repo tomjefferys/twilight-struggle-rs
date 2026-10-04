@@ -4,7 +4,7 @@ Which of the 110 cards have their **event** implemented (`events::is_implemented
 Every card can already be played for its ops value; this tracks the event text only.
 `tests/cards_progress.rs` fails if a ✅ here disagrees with the code, so update both together.
 
-**Implemented: 104 / 110**
+**Implemented: 106 / 110**
 
 - `events::scoring` — the seven scoring cards.
 - `events::effects` — fixed influence / VP / DEFCON effects with no choices or die rolls.
@@ -64,7 +64,7 @@ Every card can already be played for its ops value; this tracks the event text o
 | 46 | How I Learned to Stop Worrying | Both | ✅ | Choice (mode = DEFCON level 1-5); +5 Military Ops (max 5) |
 | 47 | Junta | Both | ✅ | Choice (+2 influence in one Central/South America country), then a coup or realignment there with the card's ops |
 | 48 | Kitchen Debates | US | ✅ |  |
-| 49 | Missile Envy | Both |  |  |
+| 49 | Missile Envy | Both | ✅ | Swap for the opponent's highest-ops non-scoring card (they choose among ties); its event occurs at once if it is the player's own or neutral, else only its ops are used (`PlayAs`); the opponent must play Missile Envy for ops next round (`GameStatus::forced_play`) |
 | 50 | “We Will Bury You” | USSR | ✅ | DEFCON −1; USSR +3 VP after the US's next round; UN Intervention escape pending #32 |
 | 51 | Brezhnev Doctrine | USSR | ✅ | Turn-long: USSR ops +1 (max 4) |
 | 52 | Portuguese Empire Crumbles | USSR | ✅ |  |
@@ -82,7 +82,7 @@ Every card can already be played for its ops value; this tracks the event text o
 | 64 | Panama Canal Returned | US | ✅ |  |
 | 65 | Camp David Accords | US | ✅ | 'prevents #13' clause modelled |
 | 66 | Puppet Governments | US | ✅ | Choice ('may') |
-| 67 | Grain Sales to Soviets | US |  |  |
+| 67 | Grain Sales to Soviets | US | ✅ | The US draws a random USSR card (shown) and plays it (event or ops) or returns it and uses Grain Sales' own ops; needs dice. The ops are always the US's, even when the USSR played the card (DEFCON 1 from them still loses for the phasing USSR) |
 | 68 | John Paul II Elected Pope | US | ✅ | 'allows #101' clause pending #101 |
 | 69 | Latin American Death Squads | Both | ✅ | Turn-long: coup roll ±1 in Central/South America |
 | 70 | OAS Founded | US | ✅ | Choice |

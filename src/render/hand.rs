@@ -119,13 +119,18 @@ pub fn render_hand(cards: &CardCatalog, hand: &[CardId], china: Option<bool>, si
 
 /// The strip while a card another event put into play waits to have its event played: just that
 /// card, so nothing else in the hand competes with it, and a header saying where it came from.
-pub fn render_forced_card(cards: &CardCatalog, card: CardId, host: CardId, side: Superpower) -> Canvas {
+pub fn render_forced_card(cards: &CardCatalog, card: CardId, host: CardId, how: crate::events::PlayAs, side: Superpower) -> Canvas {
     let mut canvas = Canvas::new(HAND_WIDTH, HAND_ROWS);
     let side_style = match side {
         Superpower::Us => Style::color(Color::Us).bold(),
         Superpower::Ussr => Style::color(Color::Ussr).bold(),
     };
-    canvas.put(0, 0, &format!("{} puts this card in play — its event has to be played now (e)  ·  z zoom", cards.card(host).name), side_style);
+    let need = match how {
+        crate::events::PlayAs::Event => "play its event (e)",
+        crate::events::PlayAs::Either => "play its event (e) or ops (i/a/o)",
+        crate::events::PlayAs::Ops => "use its ops (i/a/o)",
+    };
+    canvas.put(0, 0, &format!("{}: {need} · z zoom", cards.card(host).name), side_style);
     draw_slot(&mut canvas, 1, 0, cards.card(card), None, SlotRole::Played);
     canvas.put(2, SLOT_W + 2, &format!("{} · {} ops", cards.card(card).name, cards.card(card).ops), Style::default().bold());
     for (i, line) in crate::render::wrap(&cards.card(card).text, 70).iter().take(5).enumerate() {

@@ -307,8 +307,13 @@ fn event_detail(map: &WorldMap, cards: &CardCatalog, result: &EffectResult, vp_a
     for &(side, card) in &result.discards {
         parts.push(format!("{side} discards {}", cards.card(card).name));
     }
-    if let Some((card, _, _)) = result.plays {
-        parts.push(format!("{} is played as an event", cards.card(card).name));
+    if let Some(play) = result.plays {
+        let how = match play.how {
+            crate::events::PlayAs::Event => "is played as an event",
+            crate::events::PlayAs::Either => "is played (event or ops)",
+            crate::events::PlayAs::Ops => "is used for operations",
+        };
+        parts.push(format!("{} {how}", cards.card(play.id).name));
     }
     for &(side, card) in &result.takes {
         parts.push(format!("{side} takes {} from the discard pile", cards.card(card).name));
