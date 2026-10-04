@@ -181,6 +181,25 @@ enum Chunk {
     Double,
 }
 
+/// A discard-pile card on offer: what a pick needs to show and to play it.
+#[derive(Debug, Clone)]
+pub struct PileCard {
+    pub id: CardId,
+    pub name: String,
+    pub ops: u8,
+    /// Whether its event removes it from the game.
+    pub removed: bool,
+}
+
+/// What a discard-pile pick does with the card chosen.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PileUse {
+    /// SALT Negotiations: into the player's hand.
+    Take,
+    /// Star Wars: played as an event.
+    Play,
+}
+
 /// One card mode's budgeted add/remove.
 #[derive(Debug, Clone)]
 pub struct Rule {
@@ -267,10 +286,12 @@ struct Extra {
     grant: Option<OpsGrant>,
     /// This side takes this card out of the discard pile (SALT Negotiations).
     take: Option<(Superpower, CardId)>,
+    /// The card is played as an event straight away (Star Wars): id, printed ops, removed after its event.
+    play: Option<(CardId, u8, bool)>,
 }
 
 impl Extra {
-    const NONE: Extra = Extra { defcon: None, mil_ops: 0, ends_game: false, discard: None, then: false, contest: false, grant: None, take: None };
+    const NONE: Extra = Extra { defcon: None, mil_ops: 0, ends_game: false, discard: None, then: false, contest: false, grant: None, take: None, play: None };
 }
 
 /// One side's bonus to a roll-off and where it comes from.
@@ -401,6 +422,8 @@ pub struct EventChoice {
     pile: Vec<CardId>,
     /// Whether this is a discard-pile pick (even over an empty pile).
     pile_pick: bool,
+    pile_use: PileUse,
+    pile_offset: usize,
     /// Which mode the picker's highlight is on.
     cursor: usize,
 }
@@ -442,6 +465,8 @@ impl EventChoice {
             triggered: false,
             pile: Vec::new(),
             pile_pick: false,
+            pile_use: PileUse::Take,
+            pile_offset: 0,
             cursor: 0,
         };
         if choice.modes.len() == 1 {
@@ -519,7 +544,7 @@ impl EventChoice {
     /// one of the non-scoring cards in the discard `pile` into their hand, revealed. Mode 0 takes
     /// none; mode `i + 1` takes `pile[i]`. With an empty pile there is only mode 0, and the modal
     /// says why nothing can be taken.
-    pub fn pick_from_pile(map: &WorldMap, board: &Board, card: CardId, picker: Superpower, pile: &[(CardId, String)], defcon: Option<u8>, ongoing: Option<OngoingEffect>) -> Option<Self> {
+    pub fn pick_from_pile(map: &WorldMap, board: &Board, card: CardId, picker: Superpower, pile: &[PileCard], defcon: Option<u8>, ongoing: Option<OngoingEffect>) -> Option<Self> {
         let mode = |label: String, take: Option<CardId>| Mode {
             label,
             fixed: Vec::new(),
@@ -530,13 +555,50 @@ impl EventChoice {
             extra: Extra { defcon, take: take.map(|c| (picker, c)), ..Extra::NONE },
         };
         let mut modes = vec![mode("take no card".to_string(), None)];
-        modes.extend(pile.iter().map(|(id, name)| mode(format!("take {name}"), Some(*id))));
+        modes.extend(pile.iter().map(|p| mode(format!("take {}", p.name), Some(p.id))));
+        Some(Self::pile_choice(map, board, card, picker, pile, modes, (1, PileUse::Take)))
+    }
+
+    /// Star Wars (#85): the player picks one of the non-scoring cards in the discard `pile`
+    /// and must play it as an event at once. Mode `i` plays `pile[i]`; an empty pile leaves one
+    /// mode that plays nothing, so the modal can say why.
+    pub fn play_from_pile(map: &WorldMap, board: &Board, card: CardId, picker: Superpower, pile: &[PileCard]) -> Self {
+        let mode = |label: String, play: Option<(CardId, u8, bool)>| Mode {
+            label,
+            fixed: Vec::new(),
+            rule: None,
+            ongoing: None,
+            vp: 0,
+            china: None,
+            extra: Extra { play, ..Extra::NONE },
+        };
+        let modes = if pile.is_empty() {
+            vec![mode("play nothing".to_string(), None)]
+        } else {
+            pile.iter().map(|p| mode(format!("play {}", p.name), Some((p.id, p.ops, p.removed)))).collect()
+        };
+        Self::pile_choice(map, board, card, picker, pile, modes, (0, PileUse::Play))
+    }
+
+    fn pile_choice(map: &WorldMap, board: &Board, card: CardId, picker: Superpower, pile: &[PileCard], modes: Vec<Mode>, (offset, usage): (usize, PileUse)) -> Self {
         let mut choice = Self::from_spec(map, board, card, Spec { chooser: picker, optional: false, modes });
-        choice.pile = pile.iter().map(|(id, _)| *id).collect();
+        choice.pile = pile.iter().map(|p| p.id).collect();
         choice.pile_pick = true;
+        choice.pile_use = usage;
+        choice.pile_offset = offset;
         choice.session_modal = true;
         choice.cursor = 0;
-        Some(choice)
+        choice
+    }
+
+    /// What the pick does with the card: take it into the hand, or play its event.
+    pub fn pile_use(&self) -> PileUse {
+        self.pile_use
+    }
+
+    /// How many modes come before the first pile card (1 when mode 0 declines).
+    pub fn pile_offset(&self) -> usize {
+        self.pile_offset
     }
 
     /// The discard-pile cards on offer (mode `i + 1` is `pile()[i]`); empty unless this is a pile pick.
@@ -1259,6 +1321,7 @@ impl EventChoice {
             reveals: self.reveal.clone(),
             discards: extra.discard.into_iter().collect(),
             takes: extra.take.into_iter().collect(),
+            plays: extra.play,
             contest: if extra.contest { self.contest.clone() } else { None },
         }
     }

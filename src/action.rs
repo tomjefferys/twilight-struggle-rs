@@ -168,6 +168,9 @@ impl Game {
                         }
                     }
                     actions.push(Action::Pass);
+                } else if self.forced_event() {
+                    // A card another event put into play: its event is all that can happen.
+                    actions.push(Action::Event);
                 } else if let Some(id) = self.card_in_play() {
                     if events::is_implemented(id) && events::blocked_at(id, self.removed_from_game(), self.status().turn).is_none() {
                         actions.push(Action::Event);

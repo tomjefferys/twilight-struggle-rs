@@ -68,7 +68,7 @@ pub fn render_status_bar(
     winner: Option<Victory>,
     width: usize,
 ) -> Canvas {
-    render_status_bar_with(layout, board, status, card, op, winner, None, width)
+    render_status_bar_with(layout, board, status, card, op, winner, None, None, width)
 }
 
 /// [`render_status_bar`] for a game whose card in play has already had its
@@ -83,6 +83,7 @@ pub fn render_status_bar_with(
     op: Option<&Operation>,
     winner: Option<Victory>,
     after_event: Option<crate::events::OpsGrant>,
+    forced_by: Option<&Card>,
     width: usize,
 ) -> Canvas {
     // An open event's chooser (the card's own side) is who's really to
@@ -163,6 +164,16 @@ pub fn render_status_bar_with(
                     Style::color(Color::Selected),
                 )
             }
+            (Some(card), None) if forced_by.is_some() => (
+                format!(
+                    "{} puts {} in play · its event has to be played now · e play {} ({})",
+                    forced_by.map_or("?", |c| c.name.as_str()),
+                    card.name,
+                    card.name,
+                    ops_text(status, card)
+                ),
+                Style::color(Color::Selected).bold(),
+            ),
             (Some(card), None) if card.scoring => {
                 (format!("playing {} — e score · ⌫ return card", card.name), Style::color(Color::Selected))
             }

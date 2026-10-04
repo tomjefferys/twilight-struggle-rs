@@ -13,7 +13,7 @@ use crossterm::terminal::{self, Clear, ClearType, EnterAlternateScreen, LeaveAlt
 use crossterm::{execute, queue};
 
 use twilight_struggle::render::{
-    log_entry_line, operation_abandoned_line, operation_closed_line, operation_header, render_card, render_country, render_hand,
+    log_entry_line, operation_abandoned_line, operation_closed_line, operation_header, render_card, render_country, render_forced_card, render_hand,
     render_event_result, render_event_session, render_space_confirm, render_space_result, render_trap_confirm, render_trap_result, render_space_track_with_hint, render_war_result, render_region, render_roll_result, render_scoring_result, render_status_bar_with, render_world_map, Canvas, RollReport, HAND_ROWS,
 };
 use twilight_struggle::events::{EffectResult, ScoringResult, WarResult};
@@ -273,9 +273,10 @@ pub fn run(
                                         modal.pop_front();
                                         message = Some(operation_closed_line(&op, true, game.decider()));
                                         let entries = game.log().entries();
-                                        if let Some(at) = entries[logged..].iter().rposition(|e| matches!(&e.event, Event::EventResolved { result, .. } if !result.takes.is_empty())) {
+                                        if let Some(at) = entries[logged..].iter().rposition(|e| matches!(&e.event, Event::EventResolved { result, .. } if !result.takes.is_empty() || result.plays.is_some())) {
                                             if let Event::EventResolved { result, .. } = &entries[logged + at].event {
-                                                let names: Vec<String> = result.takes.iter().map(|&(side, c)| format!("{side} takes {} from the discard pile", cards.card(c).name)).collect();
+                                                let mut names: Vec<String> = result.takes.iter().map(|&(side, c)| format!("{side} takes {} from the discard pile", cards.card(c).name)).collect();
+                                                names.extend(result.plays.map(|(c, _, _)| format!("{} must be played as an event — e", cards.card(c).name)));
                                                 message = Some(names.join(" · "));
                                             }
                                             queue_turn_modals(&mut modal, game.board(), &entries[logged + at..]);
@@ -1090,7 +1091,10 @@ fn draw(
 ) -> io::Result<()> {
     // A choice waiting only for its confirmation stays on the message row
     // (unless something more pressing replaced it) until confirmed or undone.
-    let reminder = pending_choice_reminder(game, cards).or_else(|| {
+    let forced = game.forced_by().zip(game.card_in_play()).map(|(host, card)| {
+        format!("{} puts {} in play — press e to play its event (it can't be skipped or taken back)", cards.card(host).name, cards.card(card).name)
+    });
+    let reminder = pending_choice_reminder(game, cards).or(forced).or_else(|| {
         (hand_selected.peek && peeking_allowed(game) && !discard_gate_open(game))
             .then(|| format!("showing the {} hand (revealed) — v to return to your own", game.active().opponent()))
     });
@@ -1109,7 +1113,10 @@ fn draw(
     let hand = game.hand(side);
     let item_count = hand.len() + china.is_some() as usize;
     let selected_idx = (item_count > 0).then(|| hand_selected.selected[side_index(side)].min(item_count - 1));
-    let hand_canvas = render_hand(cards, hand, china, side, selected_idx, game.card_in_play_slot().filter(|_| side == game.active()));
+    let hand_canvas = match (game.forced_by(), game.card_in_play()) {
+        (Some(host), Some(card)) => render_forced_card(cards, card, host, game.active()),
+        _ => render_hand(cards, hand, china, side, selected_idx, game.card_in_play_slot().filter(|_| side == game.active())),
+    };
 
     if zoomed && let Some(id) = zoom_card(game, hand_selected) {
         let china_face_up = (id == CHINA_CARD).then_some(status.china_card_face_up);
@@ -1147,7 +1154,7 @@ fn draw(
     }
 
     let card_in_play = game.card_in_play().map(|id| cards.card(id));
-    let bar = render_status_bar_with(layout, board, game.status(), card_in_play, op, game.winner(), game.ops_after_event(), canvas.width());
+    let bar = render_status_bar_with(layout, board, game.status(), card_in_play, op, game.winner(), game.ops_after_event(), game.forced_by().map(|c| cards.card(c)), canvas.width());
 
     let rows = terminal::size().map(|(_, h)| h as usize).unwrap_or(bar.height() + canvas.height() + HAND_ROWS);
     let view_budget = rows.saturating_sub(bar.height() + message.is_some() as usize + HAND_ROWS);

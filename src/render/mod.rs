@@ -26,7 +26,7 @@ pub mod worldmap;
 pub use card::render_card;
 pub use country::render_country;
 pub use event::{render_event_result, render_event_session};
-pub use hand::{render_hand, HAND_ROWS, HAND_WIDTH};
+pub use hand::{render_forced_card, render_hand, HAND_ROWS, HAND_WIDTH};
 pub use log::{log_entry_line, log_text, render_log};
 pub use region::render_region;
 pub use roll::{render_roll_result, RollReport};

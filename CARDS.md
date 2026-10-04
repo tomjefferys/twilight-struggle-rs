@@ -4,7 +4,7 @@ Which of the 110 cards have their **event** implemented (`events::is_implemented
 Every card can already be played for its ops value; this tracks the event text only.
 `tests/cards_progress.rs` fails if a ✅ here disagrees with the code, so update both together.
 
-**Implemented: 102 / 110**
+**Implemented: 104 / 110**
 
 - `events::scoring` — the seven scoring cards.
 - `events::effects` — fixed influence / VP / DEFCON effects with no choices or die rolls.
@@ -20,7 +20,7 @@ Every card can already be played for its ops value; this tracks the event text o
 | 2 | Europe Scoring | Both | ✅ | Control tier is an outright win |
 | 3 | Middle East Scoring | Both | ✅ |  |
 | 4 | Duck and Cover | US | ✅ |  |
-| 5 | Five Year Plan | US |  |  |
+| 5 | Five Year Plan | US | ✅ | The USSR discards a random card (needs dice); a US-side non-scoring event it names is then played (`PlayedCard::forced_event`) before the turn ends; USSR/neutral cards are just discarded |
 | 6 | The China Card | Both |  | Ops only; +1 op if all spent in Asia (`OpsBonus`); passes face down; end-of-Turn-10 VP pending (no final scoring yet) |
 | 7 | Socialist Governments | USSR | ✅ | Choice; prevented by #83 (modelled) |
 | 8 | Fidel | USSR | ✅ |  |
@@ -100,7 +100,7 @@ Every card can already be played for its ops value; this tracks the event text o
 | 82 | Iranian Hostage Crisis | USSR | ✅ |  |
 | 83 | The Iron Lady | US | ✅ | Prevents #7 (modelled) |
 | 84 | Reagan Bombs Libya | US | ✅ |  |
-| 85 | Star Wars | US |  |  |
+| 85 | Star Wars | US | ✅ | With the US ahead on the space race: pick a non-scoring discard whose event can be played (`EventChoice::play_from_pile`) and play it as an event |
 | 86 | North Sea Oil | US | ✅ | Turn-long: US plays an 8th action round; prevents #61 (modelled) |
 | 87 | The Reformer | USSR | ✅ | Choice; USSR can't coup in Europe afterwards (modelled) |
 | 88 | Marine Barracks Bombing | USSR | ✅ | Choice; Lebanon cleared up front |

@@ -137,6 +137,34 @@ pub struct EffectResult {
     pub discards: Vec<(Superpower, CardId)>,
     /// Cards a side takes out of the discard pile into its hand (SALT Negotiations); shown to both.
     pub takes: Vec<(Superpower, CardId)>,
+    /// A card from the discard pile the player must now play as an event (Star Wars): its id,
+    /// printed ops and whether its event removes it from the game.
+    pub plays: Option<(CardId, u8, bool)>,
+}
+
+impl EffectResult {
+    /// A result that changes nothing, for `card` played by `player`.
+    pub fn blank(card: CardId, player: Superpower) -> Self {
+        EffectResult {
+            card,
+            player,
+            influence: Vec::new(),
+            vp_delta: 0,
+            defcon: None,
+            ongoing: None,
+            lasting: None,
+            cancels: None,
+            china: None,
+            space: None,
+            mil_ops: 0,
+            ends_game: false,
+            reveals: None,
+            discards: Vec::new(),
+            takes: Vec::new(),
+            plays: None,
+            contest: None,
+        }
+    }
 }
 
 /// What one card's effect function sees and mutates: the board as it was
@@ -292,6 +320,7 @@ type Effect = fn(&mut Ctx);
 /// both read this table, so there's no second list to keep in step.
 const EFFECTS: &[(u8, Effect)] = &[
     (4, duck_and_cover),
+    (5, five_year_plan),
     (8, fidel),
     (9, vietnam_revolts),
     (10, blockade),
@@ -338,6 +367,7 @@ const EFFECTS: &[(u8, Effect)] = &[
     (83, the_iron_lady),
     (84, reagan_bombs_libya),
     (73, shuttle_diplomacy),
+    (85, star_wars),
     (86, north_sea_oil),
     (89, soviets_shoot_down_kal_007),
     (90, glasnost),
@@ -371,7 +401,7 @@ pub fn resolve(map: &WorldMap, board: &Board, status: &GameStatus, card: CardId)
     let effect = effect_for(card)?;
     let mut ctx = Ctx { map, before: board, working: board.clone(), status, changes: Vec::new(), vp_delta: 0, defcon: None, ongoing: None, lasting: None, cancels: None, china: None, space: None, reveals: None };
     effect(&mut ctx);
-    Some(EffectResult { card, player: status.active, influence: ctx.changes, vp_delta: ctx.vp_delta, defcon: ctx.defcon, ongoing: ctx.ongoing, lasting: ctx.lasting, cancels: ctx.cancels, china: ctx.china, space: ctx.space, mil_ops: 0, ends_game: false, reveals: ctx.reveals, discards: Vec::new(), takes: Vec::new(), contest: None })
+    Some(EffectResult { card, player: status.active, influence: ctx.changes, vp_delta: ctx.vp_delta, defcon: ctx.defcon, ongoing: ctx.ongoing, lasting: ctx.lasting, cancels: ctx.cancels, china: ctx.china, space: ctx.space, mil_ops: 0, ends_game: false, reveals: ctx.reveals, discards: Vec::new(), takes: Vec::new(), plays: None, contest: None })
 }
 
 // ---- the cards, in printed-number order ----
@@ -686,6 +716,14 @@ fn quagmire(c: &mut Ctx) {
     c.cancel(LastingEffect::Norad);
 }
 
+/// #5 Five Year Plan: the USSR discards a card at random; if it is a US event it fires. Decided by
+/// `Game::play_event_with` (it needs dice); with nothing to discard, nothing happens.
+fn five_year_plan(_: &mut Ctx) {}
+
+/// #85 Star Wars: if the US leads the space race it picks a discarded non-scoring card and plays it
+/// as an event (`EventChoice::pick_from_pile`, opened by `Game::play_event_with`); otherwise nothing.
+fn star_wars(_: &mut Ctx) {}
+
 /// #43 SALT Negotiations: DEFCON +2 and -1 on every coup roll this turn. (Taking a card back from
 /// the discard pile isn't modelled yet.)
 fn salt_negotiations(c: &mut Ctx) {
@@ -809,7 +847,7 @@ mod tests {
     fn an_unrecognised_card_resolves_to_none() {
         let (map, _) = fixtures();
         let board = Board::new(&map);
-        assert!(resolve(&map, &board, &GameStatus::default(), CardId(5)).is_none());
-        assert!(!is_effect_card(CardId(5)));
+        assert!(resolve(&map, &board, &GameStatus::default(), CardId(49)).is_none());
+        assert!(!is_effect_card(CardId(49)));
     }
 }

@@ -196,7 +196,7 @@ pub fn blocked_at(card: CardId, removed: &[CardId], turn: u8) -> Option<Blocked>
 /// Whether resolving `card`'s event draws on chance (Terrorism's random discard, , and so
 /// needs `Game::play_event_with`'s dice.
 pub fn needs_dice(card: CardId) -> bool {
-    card.0 == 92
+    matches!(card.0, 5 | 92)
 }
 
 /// Cards whose event is barred once another card's event has happened.

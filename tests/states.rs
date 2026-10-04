@@ -3627,3 +3627,156 @@ mod discard_pile_reveal {
         }
     }
 }
+
+/// Nested events: Five Year Plan and Star Wars put another card's event into play.
+mod nested {
+    use super::*;
+    use twilight_struggle::game::GameError;
+    use twilight_struggle::ops::Operation;
+    use twilight_struggle::{Action, Dice, OperationKind};
+
+    fn start(state: &str, card: &str) -> (WorldMap, CardCatalog, Game) {
+        let (map, cards, lib) = fixtures();
+        let (scenario, _) = lib.load(&map, &cards, &format!("events/{state}")).unwrap_or_else(|e| panic!("{state}: {e}"));
+        let mut game = Game::from_scenario(&scenario);
+        game.play_card(&cards, cards.id_by_name(card).unwrap()).unwrap();
+        (map, cards, game)
+    }
+
+    fn id(cards: &CardCatalog, name: &str) -> twilight_struggle::CardId {
+        cards.id_by_name(name).unwrap()
+    }
+
+    #[test]
+    fn five_year_plan_needs_dice() {
+        let (map, cards, mut game) = start("five-year-plan-us-event", "Five Year Plan");
+        assert!(matches!(game.play_event(&map, &cards), Err(GameError::NeedsDice { .. })));
+    }
+
+    #[test]
+    fn a_us_event_discarded_by_five_year_plan_is_then_played() {
+        let (map, cards, mut game) = start("five-year-plan-us-event", "Five Year Plan");
+        let outcome = game.play_event_with(&map, &cards, &mut Dice::from_seed(1)).unwrap();
+        let twilight_struggle::EventOutcome::Effect(result) = outcome else { panic!() };
+        assert_eq!(result.discards, vec![(Superpower::Ussr, id(&cards, "Marshall Plan"))]);
+        assert!(result.plays.is_some());
+        // Five Year Plan is spent; Marshall Plan is now the card in play, and its event is all that can happen.
+        assert_eq!(game.card_in_play(), Some(id(&cards, "Marshall Plan")));
+        assert!(game.discards().contains(&id(&cards, "Five Year Plan")));
+        assert!(!game.discards().contains(&id(&cards, "Marshall Plan")) && game.hand(Superpower::Ussr).is_empty());
+        assert!(game.forced_event());
+        assert_eq!(game.active(), Superpower::Us, "the turn hasn't ended");
+        assert!(game.begin(OperationKind::Influence).is_err());
+        assert!(game.return_card().is_err());
+        assert!(game.pass().is_err());
+        assert!(!game.can_space());
+        assert_eq!(game.legal_actions(&map, &cards), vec![Action::Event]);
+        // Playing it: Marshall Plan is a choice card, so a session opens; it is removed from the game after.
+        game.play_event_with(&map, &cards, &mut Dice::from_seed(1)).unwrap();
+        assert!(matches!(game.operation(), Some(Operation::Event(_))));
+    }
+
+    #[test]
+    fn a_ussr_event_or_a_scoring_card_is_just_discarded() {
+        for state in ["five-year-plan-ussr-event", "five-year-plan-scoring"] {
+            let (map, cards, mut game) = start(state, "Five Year Plan");
+            let ussr_card = game.hand(Superpower::Ussr)[0];
+            game.play_event_with(&map, &cards, &mut Dice::from_seed(1)).unwrap();
+            assert!(game.discards().contains(&ussr_card), "{state}");
+            assert!(game.card_in_play().is_none() && game.operation().is_none(), "{state}");
+            assert_eq!(game.active(), Superpower::Ussr, "{state}: the turn passed");
+        }
+    }
+
+    #[test]
+    fn with_no_ussr_cards_five_year_plan_does_nothing() {
+        let (map, cards, mut game) = start("five-year-plan-empty-hand", "Five Year Plan");
+        game.play_event_with(&map, &cards, &mut Dice::from_seed(1)).unwrap();
+        assert_eq!(game.active(), Superpower::Ussr);
+        assert!(game.discards().contains(&id(&cards, "Five Year Plan")));
+    }
+
+    #[test]
+    fn star_wars_lists_the_playable_non_scoring_discards_and_plays_the_chosen_one() {
+        let (map, cards, mut game) = start("star-wars", "Star Wars");
+        game.play_event(&map, &cards).unwrap();
+        let Some(Operation::Event(e)) = game.operation() else { panic!("the pick opens") };
+        let labels: Vec<&str> = e.modes().iter().map(|m| m.label.as_str()).collect();
+        assert_eq!(labels, ["play Truman Doctrine", "play Fidel", "play Containment"]);
+        assert_eq!(e.chooser(), Superpower::Us);
+        game.move_event_cursor(2);
+        game.choose_event_cursor(&map).unwrap();
+        game.confirm().unwrap();
+        // Star Wars is removed; Containment waits to be played, off the discard pile.
+        assert!(game.removed_from_game().contains(&id(&cards, "Star Wars")));
+        assert_eq!(game.card_in_play(), Some(id(&cards, "Containment")));
+        assert!(!game.discards().contains(&id(&cards, "Containment")));
+        assert!(game.forced_event() && game.active() == Superpower::Us);
+        game.play_event(&map, &cards).unwrap();
+        assert!(game.status().effects.containment);
+        assert_eq!(game.active(), Superpower::Ussr);
+        let containment = id(&cards, "Containment");
+        assert_eq!(game.removed_from_game().contains(&containment), cards.card(containment).removed_after_event);
+        assert_eq!(game.discards().contains(&containment), !cards.card(containment).removed_after_event);
+    }
+
+    #[test]
+    fn star_wars_does_nothing_unless_the_us_leads_the_space_race() {
+        let (map, cards, mut game) = start("star-wars-not-ahead", "Star Wars");
+        game.play_event(&map, &cards).unwrap();
+        assert!(game.operation().is_none());
+        assert_eq!(game.active(), Superpower::Ussr);
+        assert!(game.removed_from_game().contains(&id(&cards, "Star Wars")));
+    }
+
+    #[test]
+    fn star_wars_with_nothing_to_play_says_so_and_ends() {
+        use twilight_struggle::render::render_event_session;
+        use twilight_struggle::ColorMode;
+        let (map, cards, mut game) = start("star-wars-empty-pile", "Star Wars");
+        game.play_event(&map, &cards).unwrap();
+        let Some(Operation::Event(e)) = game.operation() else { panic!() };
+        let text = render_event_session(&cards, e, game.status()).render(ColorMode::Never);
+        assert!(text.contains("nothing happens"), "{text}");
+        game.confirm().unwrap();
+        assert!(game.card_in_play().is_none() && game.active() == Superpower::Ussr);
+    }
+
+    #[test]
+    fn star_wars_modal_fits() {
+        use twilight_struggle::render::render_event_session;
+        use twilight_struggle::ColorMode;
+        let (map, cards, mut game) = start("star-wars", "Star Wars");
+        game.play_event(&map, &cards).unwrap();
+        game.choose_event_cursor(&map).unwrap();
+        let Some(Operation::Event(e)) = game.operation() else { panic!() };
+        let text = render_event_session(&cards, e, game.status()).render(ColorMode::Never);
+        assert!(text.contains("plays it as an event") && text.contains("is played as an event next"), "{text}");
+        for line in text.lines() {
+            assert!(line.chars().count() <= 69, "{line:?}");
+        }
+    }
+
+    #[test]
+    fn the_ai_plays_through_both_nested_cards() {
+        use twilight_struggle::{play_turn, RandomAi};
+        for state in ["five-year-plan-us-event", "star-wars"] {
+            for seed in 0..15 {
+                let card = if state == "star-wars" { "Star Wars" } else { "Five Year Plan" };
+                let (map, cards, mut game) = start(state, card);
+                let mut ai = RandomAi::from_seed(seed);
+                let mut dice = Dice::from_seed(seed);
+                for _ in 0..6 {
+                    if game.winner().is_none() && game.active() == Superpower::Us {
+                        // Play the first event step as the card's owner, then let the AI finish.
+                        if game.card_in_play().is_some() && game.operation().is_none() && !game.forced_event() {
+                            game.play_event_with(&map, &cards, &mut dice).unwrap();
+                        }
+                        play_turn(&mut ai, &mut game, &map, &cards, &mut dice).unwrap();
+                    }
+                }
+                assert!(game.winner().is_some() || game.active() == Superpower::Ussr, "{state} seed {seed}");
+            }
+        }
+    }
+}

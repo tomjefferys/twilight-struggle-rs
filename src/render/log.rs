@@ -307,6 +307,9 @@ fn event_detail(map: &WorldMap, cards: &CardCatalog, result: &EffectResult, vp_a
     for &(side, card) in &result.discards {
         parts.push(format!("{side} discards {}", cards.card(card).name));
     }
+    if let Some((card, _, _)) = result.plays {
+        parts.push(format!("{} is played as an event", cards.card(card).name));
+    }
     for &(side, card) in &result.takes {
         parts.push(format!("{side} takes {} from the discard pile", cards.card(card).name));
     }

@@ -60,6 +60,11 @@ pub fn render_event_result(
     for &(side, card) in &result.takes {
         lines.push((format!("{side} takes {} from the discard pile (revealed)", cards.card(card).name), Style::color(side_color(side))));
     }
+    if let Some((card, _, _)) = result.plays {
+        for part in wrap(&format!("{} now has to be played as an event (press e)", cards.card(card).name), text_width) {
+            lines.push((part, Style::color(Color::Selected).bold()));
+        }
+    }
     if let Some(reveal) = &result.reveals {
         let names: Vec<&str> = reveal.cards.iter().map(|&c| cards.card(c).name.as_str()).collect();
         let shown = if names.is_empty() { "(empty)".to_string() } else { names.join(", ") };
@@ -198,7 +203,11 @@ pub fn render_event_session(cards: &CardCatalog, e: &crate::events::EventChoice,
         hint = "r roll the dice · ⌫ cancel the event".to_string();
     } else if e.is_pile_pick() && e.pile().is_empty() {
         border = side_color(e.chooser());
-        for part in wrap("The discard pile is empty, so there is no card to take.", text_width) {
+        let why = match e.pile_use() {
+            crate::events::choice::PileUse::Take => "The discard pile is empty, so there is no card to take.",
+            crate::events::choice::PileUse::Play => "No card in the discard pile has an event that can be played, so nothing happens.",
+        };
+        for part in wrap(why, text_width) {
             lines.push((part, Style::default().bold()));
         }
         push_result(cards, &mut lines, e, status, text_width);
@@ -208,7 +217,11 @@ pub fn render_event_session(cards: &CardCatalog, e: &crate::events::EventChoice,
         const WINDOW: usize = 9;
         let side = side_color(e.chooser());
         border = side;
-        for part in wrap(&format!("{} may take one non-scoring card from the discard pile ({} there):", e.chooser(), e.pile().len()), text_width) {
+        let intro = match e.pile_use() {
+            crate::events::choice::PileUse::Take => format!("{} may take one non-scoring card from the discard pile ({} there):", e.chooser(), e.pile().len()),
+            crate::events::choice::PileUse::Play => format!("{} picks a non-scoring card from the discard pile ({} playable) and plays it as an event:", e.chooser(), e.pile().len()),
+        };
+        for part in wrap(&intro, text_width) {
             lines.push((part, Style::default().bold()));
         }
         lines.push((String::new(), Style::default()));
@@ -293,6 +306,9 @@ fn push_result(cards: &CardCatalog, lines: &mut Vec<(String, Style)>, e: &crate:
     for &(side, card) in &result.takes {
         lines.push((format!("  {side} takes {} (revealed)", cards.card(card).name), Style::color(side_color(side))));
     }
+    if let Some((card, _, _)) = result.plays {
+        lines.push((format!("  {} is played as an event next", cards.card(card).name), Style::color(side_color(e.chooser()))));
+    }
     if let Some(grant) = e.grant() {
         let sponsor = e.chooser().opponent();
         for part in wrap(&format!("{sponsor} may then conduct {}", grant.describe()), text_width.saturating_sub(2)) {
@@ -316,7 +332,7 @@ mod tests {
     use crate::render::ColorMode;
 
     fn result(ongoing: Option<OngoingEffect>, vp_delta: i8) -> EffectResult {
-        EffectResult { card: CardId(25), player: Superpower::Us, influence: Vec::new(), vp_delta, defcon: None, ongoing, lasting: None, cancels: None, china: None, space: None, mil_ops: 0, ends_game: false, reveals: None, discards: Vec::new(), takes: Vec::new(), contest: None }
+        EffectResult { card: CardId(25), player: Superpower::Us, influence: Vec::new(), vp_delta, defcon: None, ongoing, lasting: None, cancels: None, china: None, space: None, mil_ops: 0, ends_game: false, reveals: None, discards: Vec::new(), takes: Vec::new(), plays: None, contest: None }
     }
 
     #[test]

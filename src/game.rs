@@ -49,7 +49,8 @@ use crate::board::Board;
 use crate::cards::{CardCatalog, CardId, Hands, CHINA_CARD};
 use crate::country::{CountryId, Region, Superpower};
 use crate::dice::Dice;
-use crate::events::choice::{EventChoiceError, Sign};
+use crate::cards::CardSide;
+use crate::events::choice::{EventChoiceError, PileCard, Sign};
 use crate::events::EventChoice;
 use crate::events::{self, war, EffectResult, EventOutcome, OpsGrant, WarResult};
 use crate::log::{CoupAftermath, Event, GameLog, LogEntry};
@@ -328,6 +329,9 @@ struct PlayedCard {
     /// play, restricted to these kinds, until that operation closes or is
     /// skipped.
     ops_after_event: Option<OpsGrant>,
+    /// The card arrived through another card's event (Star Wars, Five Year Plan): its event must
+    /// be played now — no ops, no space attempt, no taking it back.
+    forced_event: Option<CardId>,
 }
 
 /// The live game: status (including whose turn it is), the committed
@@ -642,7 +646,7 @@ impl Game {
         } else {
             Some(self.hands.remove(side, id).ok_or(GameError::NotInHand)?)
         };
-        self.card = Some(PlayedCard { id, ops: card.ops, hand_index, logged: false, scoring: card.scoring, removed_after_event: card.removed_after_event, ops_after_event: None });
+        self.card = Some(PlayedCard { id, ops: card.ops, hand_index, logged: false, scoring: card.scoring, removed_after_event: card.removed_after_event, ops_after_event: None, forced_event: None });
         Ok(())
     }
 
@@ -657,6 +661,9 @@ impl Game {
         }
         if let Some(card) = self.card.filter(|c| c.ops_after_event.is_some()) {
             return Err(GameError::EventPlayed { card: card.id });
+        }
+        if self.card.is_some_and(|c| c.forced_event.is_some()) {
+            return Err(GameError::Trap("this card came out of another event — its event has to be played".into()));
         }
         let card = self.card.take().ok_or(GameError::NoCard)?;
         if let Some(index) = card.hand_index {
@@ -681,6 +688,9 @@ impl Game {
         let card = self.card.ok_or(GameError::NoCard)?;
         if card.scoring {
             return Err(GameError::ScoringCard);
+        }
+        if card.forced_event.is_some() {
+            return Err(GameError::Trap("this card came out of another event — its event has to be played".into()));
         }
         if let Some(grant) = card.ops_after_event
             && !grant.allows(kind)
@@ -736,6 +746,28 @@ impl Game {
             Some(op) => Err(GameError::WrongKind { open: op.verb() }),
             None => Err(GameError::NoOperation),
         }
+    }
+
+    /// The non-scoring cards in the discard pile, for a pick. With `playable`, only those whose
+    /// event can be played now (implemented, and not prevented).
+    fn pile_cards(&self, cards: &CardCatalog, playable: bool) -> Vec<PileCard> {
+        self.hands
+            .discards()
+            .iter()
+            .filter(|&&c| !cards.card(c).scoring)
+            .filter(|&&c| !playable || (events::is_implemented(c) && events::blocked_at(c, self.hands.removed(), self.status.turn).is_none()))
+            .map(|&c| PileCard { id: c, name: cards.card(c).name.clone(), ops: cards.card(c).ops, removed: cards.card(c).removed_after_event })
+            .collect()
+    }
+
+    /// Whether the card in play must have its event played (it came out of another card's event).
+    pub fn forced_event(&self) -> bool {
+        self.forced_by().is_some()
+    }
+
+    /// The card whose event put the card in play there (Five Year Plan, Star Wars), if it did.
+    pub fn forced_by(&self) -> Option<CardId> {
+        self.card.and_then(|c| c.forced_event)
     }
 
     /// Moves the highlight of an open discard-pile pick.
@@ -1085,6 +1117,9 @@ impl Game {
         if card.ops_after_event.is_some() {
             return Err(GameError::EventPlayed { card: card.id });
         }
+        if card.forced_event.is_some() {
+            return Err(GameError::Trap("this card came out of another event — its event has to be played".into()));
+        }
         let side = self.status.active;
         let ops = self.status.effects.card_ops(card.ops, side).0;
         Ok(space::check(&self.status, side, card.id == CHINA_CARD, card.scoring, ops)?)
@@ -1311,10 +1346,40 @@ impl Game {
             return Ok(EventOutcome::Pending { card: card.id, chooser: self.status.active });
         }
 
+        // Five Year Plan: the USSR discards a random card; a US event fires at once (the card
+        // then waits in play, its event to be played — see `PlayedCard::forced_event`).
+        if card.id == CardId(5) {
+            let hand = self.hands.hand(Superpower::Ussr).to_vec();
+            if !hand.is_empty() {
+                let pick = hand[dice.index(hand.len())];
+                let picked = cards.card(pick);
+                let fires = picked.side == CardSide::Us
+                    && !picked.scoring
+                    && events::is_implemented(pick)
+                    && events::blocked_at(pick, self.hands.removed(), self.status.turn).is_none();
+                let mut result = EffectResult::blank(card.id, self.status.active);
+                result.discards.push((Superpower::Ussr, pick));
+                if fires {
+                    result.plays = Some((pick, picked.ops, picked.removed_after_event));
+                }
+                let outcome = EventOutcome::Effect(result.clone());
+                self.finish_effect(result, None);
+                return Ok(outcome);
+            }
+        }
+
+        // Star Wars: with the US ahead in the space race, it picks a discarded card and plays its event.
+        if card.id == CardId(85) && self.status.space_race_us > self.status.space_race_ussr {
+            let pile = self.pile_cards(cards, true);
+            let choice = EventChoice::play_from_pile(map, &self.board, card.id, Superpower::Us, &pile);
+            self.op = Some(Operation::Event(Box::new(choice)));
+            return Ok(EventOutcome::Pending { card: card.id, chooser: Superpower::Us });
+        }
+
         // SALT Negotiations: DEFCON +2 and the coup penalty, then the player may take a
         // non-scoring card from the discard pile (an empty pile still opens the pick, to say so).
         if card.id == CardId(43) {
-            let pile: Vec<(CardId, String)> = self.hands.discards().iter().filter(|&&c| !cards.card(c).scoring).map(|&c| (c, cards.card(c).name.clone())).collect();
+            let pile = self.pile_cards(cards, false);
             let player = self.status.active;
             let defcon = Some((self.status.defcon + 2).min(5));
             // Even an empty pile opens the pick, so the player sees why nothing can be taken.
@@ -1448,6 +1513,32 @@ impl Game {
     /// [`Game::play_event`] (fixed effects) and [`Game::confirm`] (a
     /// finished choice) use.
     fn finish_effect(&mut self, result: EffectResult, grant: Option<OpsGrant>) {
+        let plays = result.plays;
+        let host = result.card;
+        self.apply_effect(result);
+        // Another card's event is played next (Star Wars, Five Year Plan): this card is spent and
+        // the one it names takes its place, to have its event played before the turn ends.
+        if let (None, Some((id, ops, removed))) = (self.winner, plays)
+            && self.hands.take(id)
+        {
+            self.discard_or_remove_event_card();
+            self.card = Some(PlayedCard { id, ops, hand_index: None, logged: false, scoring: false, removed_after_event: removed, ops_after_event: None, forced_event: Some(host) });
+            return;
+        }
+        // A card whose event allows an operation stays in play for it.
+        if let (None, Some(grant), Some(card)) = (self.winner, grant, self.card.as_mut()) {
+            card.ops_after_event = Some(grant);
+            return;
+        }
+        self.discard_or_remove_event_card();
+        if self.winner.is_none() {
+            self.advance();
+        }
+    }
+
+    /// Applies and logs a resolved event's changes — everything but spending the card and handing
+    /// the turn over.
+    fn apply_effect(&mut self, result: EffectResult) {
         self.log_card_selected();
         for &(side, card) in &result.discards {
             if self.hands.remove(side, card).is_some() {
@@ -1507,15 +1598,6 @@ impl Game {
             event: Event::EventResolved { result, vp_after },
         });
         self.log_game_over();
-        // A card whose event allows an operation stays in play for it.
-        if let (None, Some(grant), Some(card)) = (self.winner, grant, self.card.as_mut()) {
-            card.ops_after_event = Some(grant);
-            return;
-        }
-        self.discard_or_remove_event_card();
-        if self.winner.is_none() {
-            self.advance();
-        }
     }
 
     /// Applies the influence of an event nothing played (NORAD): no card to spend, no turn to hand over.
