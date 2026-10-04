@@ -470,7 +470,15 @@ uniformly random legal moves.
   (turn 4) or Late (turn 8) War cards shuffled into the deck
   (`Hands::shuffle_into_deck`; the China Card never), and both hands dealt up
   to `status::hand_size_for_turn` (8, then 9), USSR first, alternating,
-  reshuffling the discard pile when the deck runs out. **Events are the exception to "one operation
+  reshuffling the discard pile when the deck runs out. **Eagle/Bear has Landed** (`Perk::DiscardHeld`) is the one step of the
+  end of the turn that waits on a player: after the scoring check, if its
+  holder has any card, `Game::awaiting_discard` names them (and `status.active`
+  becomes them, so `decider`, the status bar and the hand strip all follow),
+  `Action::DiscardHeld(Option<CardId>)` / `Game::discard_held` answer it (a
+  card, or `None` to keep every card; `pass` keeps them, and the REPL's
+  `discard <card>` or Space in the map discards), logged as
+  `Event::HeldDiscard`; `settle` carries on once it's answered
+  (`TurnEndProgress` remembers what already ran, including the report). **Events are the exception to "one operation
   spends the card"**: a choice card's `play_event` opens `Operation::Event`
   instead of resolving, and `confirm` finishes it (refused with
   `GameError::EventIncomplete` until `EventChoice::is_complete`), applying

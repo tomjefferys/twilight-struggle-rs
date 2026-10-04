@@ -24,8 +24,8 @@ pub enum Perk {
     /// Box 4: the opponent must choose and show their headline card first.
     /// Tracked only — there is no headline phase yet.
     OpponentHeadlinesFirst,
-    /// Box 6: may discard one held card at the end of the turn. Tracked
-    /// only — there is no end-of-turn hand step yet.
+    /// Box 6: may discard one held card at the end of the turn
+    /// ([`crate::game::Game::discard_held`]).
     DiscardHeld,
     /// Box 8: may take eight action rounds in a turn.
     EightRounds,
@@ -55,7 +55,7 @@ impl Perk {
 
     /// Whether the crate acts on this perk, or only displays it.
     pub fn is_enforced(self) -> bool {
-        matches!(self, Perk::TwoAttempts | Perk::EightRounds)
+        matches!(self, Perk::TwoAttempts | Perk::EightRounds | Perk::DiscardHeld)
     }
 }
 

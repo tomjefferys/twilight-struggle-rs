@@ -68,8 +68,11 @@ pub enum Action {
     Confirm,
     /// A trapped side's action round: discard this card and roll to escape — [`Game::escape_trap`].
     Escape(CardId),
-    /// Settle what the last action round set off (NORAD) — [`Game::settle`].
+    /// Settle what the last action round set off (NORAD) or the end of the turn — [`Game::settle`].
     Settle,
+    /// The Eagle/Bear has Landed perk at the end of the turn: discard this held card, or `None`
+    /// to keep them all — [`Game::discard_held`].
+    DiscardHeld(Option<CardId>),
     /// Forfeit the turn with no card played — [`Game::pass`] — or, after a
     /// card's event, skip the operation it allowed.
     Pass,
@@ -103,6 +106,11 @@ impl Game {
         let mut actions = Vec::new();
         if self.settlement_due() {
             return vec![Action::Settle];
+        }
+        if let Some(side) = self.awaiting_discard() {
+            let mut actions = vec![Action::DiscardHeld(None)];
+            actions.extend(self.hand(side).iter().map(|&c| Action::DiscardHeld(Some(c))));
+            return actions;
         }
 
         match self.operation() {
@@ -244,6 +252,7 @@ impl Game {
                 self.settle(map, cards, dice);
                 Ok(())
             }
+            Action::DiscardHeld(card) => self.discard_held(card),
             Action::Pass => self.pass(),
         }
     }

@@ -122,6 +122,9 @@ pub enum Event {
     /// A free-text annotation — e.g. reloading the demo scenario — with no
     /// side and no board effect of its own.
     Note(String),
+    /// The Eagle/Bear has Landed perk's holder, at the end of the turn: the card discarded, or
+    /// `None` for keeping every card.
+    HeldDiscard { card: Option<CardId> },
     /// A turn ended (rule 4.5): Military Operations settled, then the next turn dealt.
     TurnEnd(TurnEndReport),
 }

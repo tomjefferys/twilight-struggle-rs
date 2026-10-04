@@ -143,6 +143,10 @@ fn action_and_detail(map: &WorldMap, cards: &CardCatalog, entry: &LogEntry) -> (
         Event::Defused { side, country } => ("defuse", format!("{side} removes 2 influence from {} — Cuban Missile Crisis ends", map.country(*country).name)),
         Event::GameOver(victory) => ("gameover", game_over_detail(*victory)),
         Event::TurnEnd(report) => ("turnend", turn_end_detail(report)),
+        Event::HeldDiscard { card } => match card {
+            Some(card) => ("discard", format!("Eagle/Bear has Landed: discards {}", cards.card(*card).name)),
+            None => ("discard", "Eagle/Bear has Landed: keeps every card".to_string()),
+        },
     }
 }
 

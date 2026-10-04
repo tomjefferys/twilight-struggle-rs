@@ -1040,6 +1040,14 @@ fn handle_hand_key(code: KeyCode, game: &mut Game, map: &WorldMap, cards: &CardC
             modal.push_back(Modal::TrapConfirm(id));
             None
         }
+        KeyCode::Char(' ') if game.awaiting_discard().is_some() => {
+            let id = selected_hand_card(game, hand_selected)?;
+            let side = game.active();
+            Some(match game.discard_held(Some(id)) {
+                Ok(()) => format!("{side} discards {} (Eagle/Bear has Landed)", cards.card(id).name),
+                Err(e) => e.to_string(),
+            })
+        }
         KeyCode::Char(' ') => {
             let id = selected_hand_card(game, hand_selected)?;
             let side = game.active();
@@ -1134,7 +1142,8 @@ fn draw(
         PlayAs::Either => format!("{} puts {} in play — play it now: e for its event, or i/a/o for its operations", cards.card(host).name, cards.card(card).name),
         PlayAs::Ops => format!("{} puts {} in play — an opponent's event, so use its operations (i/a/o)", cards.card(host).name, cards.card(card).name),
     });
-    let reminder = pending_choice_reminder(game, cards).or(forced).or_else(|| {
+    let held = game.awaiting_discard().map(|side| format!("Eagle/Bear has Landed — {side} may discard one card: Space discards the selected card · p keeps them all"));
+    let reminder = pending_choice_reminder(game, cards).or(held).or(forced).or_else(|| {
         (hand_selected.peek && peeking_allowed(game) && !discard_gate_open(game))
             .then(|| format!("showing the {} hand (revealed) — v to return to your own", game.active().opponent()))
     });

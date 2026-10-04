@@ -358,6 +358,18 @@ pub struct Game {
     /// NORAD may be owed at the end of the last action round; [`Game::settle`] decides.
     norad_due: bool,
     phase: Phase,
+    /// How far the end of the turn has got, for steps that wait on a player.
+    turn_end: TurnEndProgress,
+    /// The Eagle/Bear has Landed holder who has yet to decide whether to discard.
+    held_discard: Option<Superpower>,
+}
+
+/// What [`Game::end_turn`] has already done, kept while it waits for the perk holder's decision.
+#[derive(Debug, Clone, Copy, Default)]
+struct TurnEndProgress {
+    scored: bool,
+    perk_done: bool,
+    report: TurnEndReport,
 }
 
 /// Where in a turn the game is. Only `ActionRounds` lets a card be played; `TurnEnd` is the
@@ -384,6 +396,8 @@ impl Game {
             round_defcon: scenario.status.defcon,
             norad_due: false,
             phase: Phase::ActionRounds,
+            turn_end: TurnEndProgress::default(),
+            held_discard: None,
         }
     }
 
@@ -447,6 +461,8 @@ impl Game {
             round_defcon: self.round_defcon,
             norad_due: self.norad_due,
             phase: self.phase,
+            turn_end: self.turn_end,
+            held_discard: self.held_discard,
         }
     }
 
@@ -1267,6 +1283,9 @@ impl Game {
         if self.norad_due {
             return Err(GameError::Trap("NORAD's trigger has to be settled first".into()));
         }
+        if self.held_discard.is_some() {
+            return Err(GameError::Trap("Eagle/Bear has Landed: discard a card, or keep them all, first".into()));
+        }
         if self.phase == Phase::TurnEnd {
             return Err(GameError::Trap("the turn is over — settle its end first".into()));
         }
@@ -1276,7 +1295,29 @@ impl Game {
     /// Whether [`Game::settle`] has something to do: NORAD's trigger, or the end of the turn
     /// (unless an event it opened — NORAD's — is still waiting on its player).
     pub fn settlement_due(&self) -> bool {
-        self.norad_due || (self.phase == Phase::TurnEnd && self.op.is_none() && self.winner.is_none())
+        self.norad_due || (self.phase == Phase::TurnEnd && self.op.is_none() && self.winner.is_none() && self.held_discard.is_none())
+    }
+
+    /// The Eagle/Bear has Landed holder, while the end of the turn waits on whether they
+    /// discard a held card ([`Game::discard_held`]).
+    pub fn awaiting_discard(&self) -> Option<Superpower> {
+        self.held_discard.filter(|_| self.winner.is_none())
+    }
+
+    /// Answers the Eagle/Bear has Landed perk at the end of the turn: discard `card` from the
+    /// holder's hand, or `None` to keep every card. The turn's end then carries on at the next
+    /// [`Game::settle`].
+    pub fn discard_held(&mut self, card: Option<CardId>) -> Result<(), GameError> {
+        let side = self.awaiting_discard().ok_or(GameError::Trap("nothing is waiting for a discard".into()))?;
+        if let Some(card) = card {
+            if self.hands.remove(side, card).is_none() {
+                return Err(GameError::NotInHand);
+            }
+            self.hands.discard(card);
+        }
+        self.held_discard = None;
+        self.log.push(LogEntry { turn: self.status.turn, action_round: self.status.action_round, side: Some(side), event: Event::HeldDiscard { card } });
+        Ok(())
     }
 
     /// Settles what the last action round set off that needs the map: NORAD's +1 US influence
@@ -1293,7 +1334,7 @@ impl Game {
                 return;
             }
         }
-        if self.phase == Phase::TurnEnd {
+        if self.phase == Phase::TurnEnd && self.held_discard.is_none() {
             self.end_turn(cards, dice);
         }
     }
@@ -1304,21 +1345,36 @@ impl Game {
     /// when their turn comes, and both hands are dealt back up.
     fn end_turn(&mut self, cards: &CardCatalog, dice: &mut Dice) {
         let (turn, round) = (self.status.turn, self.status.action_round);
-        let mut report = TurnEndReport { mil_ops: (self.status.military_ops_us, self.status.military_ops_ussr), defcon: self.status.defcon, ..Default::default() };
-        // Each side short of DEFCON hands the opponent the shortfall; both short nets out.
-        let short = |ops: i8| (self.status.defcon as i8 - ops).max(0);
-        let swing = short(report.mil_ops.1) - short(report.mil_ops.0);
-        self.status.military_ops_us = 0;
-        self.status.military_ops_ussr = 0;
-        self.apply_vp(swing);
-        report.vp_delta = swing;
-        report.vp_after = self.status.vp;
-        // A scoring card still held loses the game (the USSR is checked first if both hold one).
-        for side in [Superpower::Ussr, Superpower::Us] {
-            if self.hands.hand(side).iter().any(|&c| cards.card(c).scoring) {
-                self.set_winner(side.opponent(), VictoryReason::HeldScoringCard);
+        if !self.turn_end.scored {
+            let mut report = TurnEndReport { mil_ops: (self.status.military_ops_us, self.status.military_ops_ussr), defcon: self.status.defcon, ..Default::default() };
+            // Each side short of DEFCON hands the opponent the shortfall; both short nets out.
+            let short = |ops: i8| (self.status.defcon as i8 - ops).max(0);
+            let swing = short(report.mil_ops.1) - short(report.mil_ops.0);
+            self.status.military_ops_us = 0;
+            self.status.military_ops_ussr = 0;
+            self.apply_vp(swing);
+            report.vp_delta = swing;
+            report.vp_after = self.status.vp;
+            // A scoring card still held loses the game (the USSR is checked first if both hold one).
+            for side in [Superpower::Ussr, Superpower::Us] {
+                if self.hands.hand(side).iter().any(|&c| cards.card(c).scoring) {
+                    self.set_winner(side.opponent(), VictoryReason::HeldScoringCard);
+                }
+            }
+            self.turn_end = TurnEndProgress { scored: true, perk_done: false, report };
+        }
+        // Eagle/Bear has Landed: its holder may discard a held card — a decision to wait for.
+        if self.winner.is_none() && !self.turn_end.perk_done {
+            self.turn_end.perk_done = true;
+            if let Some(holder) = space::perk_holder(&self.status, space::Perk::DiscardHeld)
+                && !self.hands.hand(holder).is_empty()
+            {
+                self.held_discard = Some(holder);
+                self.status.active = holder;
+                return;
             }
         }
+        let mut report = std::mem::take(&mut self.turn_end).report;
         self.status.china_card_face_up = true;
         self.status.space_attempts_us = 0;
         self.status.space_attempts_ussr = 0;
@@ -1410,6 +1466,10 @@ impl Game {
     pub fn pass(&mut self) -> Result<(), GameError> {
         if self.winner.is_some() {
             return Err(GameError::GameOver);
+        }
+        // While the Eagle/Bear has Landed holder is deciding, passing keeps every card.
+        if self.awaiting_discard().is_some() {
+            return self.discard_held(None);
         }
         if let Some(op) = &self.op {
             return Err(GameError::OperationOpen { verb: op.verb(), remaining: op.remaining(), total: op.ops_total() });

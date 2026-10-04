@@ -570,6 +570,14 @@ fn run_command(session: &mut Session, line: &str) {
                 return;
             };
             let Some(id) = find_card_or_report(session, &query) else { return };
+            // Eagle/Bear has Landed: the perk's holder answering at the end of the turn.
+            if session.game.awaiting_discard().is_some() {
+                match session.game.discard_held(Some(id)) {
+                    Ok(()) => println!("{} is discarded (Eagle/Bear has Landed)", session.cards.card(id).name),
+                    Err(e) => println!("{e}"),
+                }
+                return;
+            }
             if id == CHINA_CARD {
                 println!("the China Card isn't tracked in a hand — use `china us|ussr` instead");
                 return;
@@ -1816,7 +1824,9 @@ Commands:
   active us|ussr           set whose turn it is to act
   china us|ussr [up|down]  set who holds the China Card, and face up/down
   give us|ussr <card>      move a card into a hand, from wherever it is
-  discard <card>           move a card to the discard pile
+  discard <card>           move a card to the discard pile (or, at the end of
+                          a turn, the Eagle/Bear has Landed holder's one
+                          discard — `pass` keeps every card instead)
   exile <card>             move a card to the removed-from-game pile
   blank                    reset to an empty board, default status, and
                           empty hands — a base to build a state from

@@ -1889,6 +1889,10 @@ mod space {
         assert_eq!((game.status().active, game.status().action_round), (Superpower::Ussr, 8), "the US has no AR 7");
         game.pass().unwrap();
         end_turn(&mut game, &map, &cards);
+        // The Space Station holder is also past box 6: Eagle/Bear has Landed asks it about a discard.
+        assert_eq!(game.awaiting_discard(), Some(Superpower::Ussr));
+        game.pass().unwrap();
+        end_turn(&mut game, &map, &cards);
         assert_eq!((game.status().active, game.status().action_round, game.status().turn), (Superpower::Ussr, 1, 2));
     }
 
@@ -4280,6 +4284,82 @@ mod turn_end {
                 play_turn(&mut ai, &mut game, &map, &cards, &mut dice).unwrap();
             }
             assert!(game.status().turn >= 4 || game.winner().is_some(), "seed {seed}");
+        }
+    }
+}
+
+/// The Eagle/Bear has Landed space perk: its holder may discard one held card at the end of the turn.
+mod eagle_bear {
+    use super::*;
+    use twilight_struggle::game::Phase;
+    use twilight_struggle::{Action, Event, GameError};
+
+    fn load(name: &str) -> (WorldMap, CardCatalog, Game) {
+        let (map, cards, lib) = fixtures();
+        let (scenario, _) = lib.load(&map, &cards, &format!("turn-end/{name}")).unwrap_or_else(|e| panic!("{name}: {e}"));
+        (map, cards, Game::from_scenario(&scenario))
+    }
+
+    fn id(cards: &CardCatalog, name: &str) -> twilight_struggle::CardId {
+        cards.id_by_name(name).unwrap()
+    }
+
+    #[test]
+    fn the_holder_decides_before_the_deal_and_nothing_else_can_be_done_meanwhile() {
+        let (map, cards, mut game) = load("eagle-landed-discard");
+        game.pass().unwrap();
+        end_turn(&mut game, &map, &cards);
+        assert_eq!((game.awaiting_discard(), game.active(), game.decider(), game.status().turn), (Some(Superpower::Ussr), Superpower::Ussr, Superpower::Ussr, 2));
+        assert!(!game.settlement_due());
+        assert!(matches!(game.play_card(&cards, id(&cards, "Fidel")), Err(GameError::Trap(_))));
+        let legal = game.legal_actions(&map, &cards);
+        assert_eq!(legal, vec![Action::DiscardHeld(None), Action::DiscardHeld(Some(id(&cards, "Fidel"))), Action::DiscardHeld(Some(id(&cards, "Containment")))]);
+        // Settling again does nothing while the decision is open.
+        end_turn(&mut game, &map, &cards);
+        assert_eq!(game.status().turn, 2);
+
+        game.discard_held(Some(id(&cards, "Containment"))).unwrap();
+        assert!(game.discards().contains(&id(&cards, "Containment")), "the discarded card went to the discard pile");
+        assert!(game.settlement_due());
+        end_turn(&mut game, &map, &cards);
+        assert_eq!((game.status().turn, game.phase(), game.awaiting_discard()), (3, Phase::ActionRounds, None));
+        assert!(game.log().entries().iter().any(|e| matches!(e.event, Event::HeldDiscard { card: Some(c) } if c == id(&cards, "Containment"))));
+    }
+
+    #[test]
+    fn passing_keeps_every_card_and_a_card_not_held_is_refused() {
+        let (map, cards, mut game) = load("eagle-landed-discard");
+        game.pass().unwrap();
+        end_turn(&mut game, &map, &cards);
+        assert!(matches!(game.discard_held(Some(id(&cards, "Duck and Cover"))), Err(GameError::NotInHand)));
+        game.pass().unwrap();
+        assert!(game.log().entries().iter().any(|e| matches!(e.event, Event::HeldDiscard { card: None })));
+        end_turn(&mut game, &map, &cards);
+        assert_eq!(game.status().turn, 3);
+        assert!(game.hand(Superpower::Ussr).contains(&id(&cards, "Fidel")) && game.hand(Superpower::Ussr).contains(&id(&cards, "Containment")));
+    }
+
+    #[test]
+    fn once_both_sides_reach_box_six_there_is_nothing_to_decide() {
+        let (map, cards, mut game) = load("eagle-landed-cancelled");
+        game.pass().unwrap();
+        end_turn(&mut game, &map, &cards);
+        assert_eq!((game.awaiting_discard(), game.status().turn), (None, 3));
+    }
+
+    #[test]
+    fn the_ai_answers_the_decision() {
+        use twilight_struggle::{play_turn, Dice, RandomAi};
+        for seed in 0..10 {
+            let (map, cards, mut game) = load("eagle-landed-discard");
+            let mut ai = RandomAi::from_seed(seed);
+            let mut dice = Dice::from_seed(seed);
+            for _ in 0..4 {
+                if game.winner().is_none() {
+                    play_turn(&mut ai, &mut game, &map, &cards, &mut dice).unwrap();
+                }
+            }
+            assert!(game.status().turn >= 3 || game.winner().is_some(), "seed {seed}");
         }
     }
 }
