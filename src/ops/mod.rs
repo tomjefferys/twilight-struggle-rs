@@ -26,8 +26,35 @@ pub use realign::{modifiers, odds, resolve, Modifiers, Odds, RealignError, Reali
 
 use crate::board::Board;
 use crate::country::{CountryId, Superpower};
+use crate::events::choice::Where;
 use crate::events::choice::Sign;
 use crate::map::WorldMap;
+
+/// Where a coup or realignment funded by a card's event may land (Junta,
+/// Che, ...): a set of countries, minus one that already had its turn.
+/// `label` completes "isn't ..." in the refusal.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TargetScope {
+    pub place: Where,
+    pub exclude: Option<CountryId>,
+    pub label: &'static str,
+}
+
+impl TargetScope {
+    pub fn allows(self, map: &WorldMap, id: CountryId) -> bool {
+        self.exclude != Some(id) && self.place.contains(map, id)
+    }
+
+    /// Why `id` is out of scope, for a refusal.
+    pub fn refusal(self, map: &WorldMap, id: CountryId) -> String {
+        let name = &map.country(id).name;
+        if self.exclude == Some(id) {
+            format!("{name} was already the first target — pick a different country")
+        } else {
+            format!("{name} isn't {}", self.label)
+        }
+    }
+}
 
 /// Whichever ops-spending operation is currently open, if any — the
 /// shared handle every view and every REPL command reads through rather

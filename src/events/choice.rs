@@ -33,6 +33,7 @@
 use std::fmt;
 
 use super::effects::{ChinaTransfer, EffectResult, InfluenceChange};
+use super::OpsGrant;
 use crate::board::Board;
 use crate::cards::CardId;
 use crate::country::{CountryId, Region, SubRegion, Superpower};
@@ -51,7 +52,7 @@ pub enum Sign {
 }
 
 /// A set of countries, by where they are.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Where {
     Everywhere,
     Region(Region),
@@ -61,10 +62,12 @@ pub enum Where {
     AdjacentTo(&'static str),
     /// Any of these.
     Any(&'static [Where]),
+    /// Those of the inner set that aren't battlegrounds.
+    NonBattleground(&'static Where),
 }
 
 impl Where {
-    fn contains(self, map: &WorldMap, id: CountryId) -> bool {
+    pub fn contains(self, map: &WorldMap, id: CountryId) -> bool {
         let c = map.country(id);
         match self {
             Where::Everywhere => true,
@@ -73,6 +76,7 @@ impl Where {
             Where::Names(names) => names.iter().any(|n| map.id_by_name(n) == Some(id)),
             Where::AdjacentTo(name) => map.id_by_name(name).is_some_and(|n| c.adjacent.contains(&n)),
             Where::Any(parts) => parts.iter().any(|w| w.contains(map, id)),
+            Where::NonBattleground(inner) => !c.battleground && inner.contains(map, id),
         }
     }
 }
@@ -300,6 +304,8 @@ pub struct EventChoice {
     /// event is finished and what it did.
     complete: bool,
     changes: Vec<InfluenceChange>,
+    /// The operation this event allows once it's done (Junta), fixed when it opens.
+    grant: Option<OpsGrant>,
 }
 
 impl EventChoice {
@@ -319,6 +325,7 @@ impl EventChoice {
             history: Vec::new(),
             complete: false,
             changes: Vec::new(),
+            grant: None,
         };
         if choice.modes.len() == 1 {
             choice.select(map, 0);
@@ -328,6 +335,17 @@ impl EventChoice {
 
     pub fn card(&self) -> CardId {
         self.card
+    }
+
+    /// Records the operation this event allows once confirmed.
+    pub fn with_grant(mut self, grant: Option<OpsGrant>) -> Self {
+        self.grant = grant;
+        self
+    }
+
+    /// The operation this event allows once confirmed, if any.
+    pub fn grant(&self) -> Option<OpsGrant> {
+        self.grant
     }
 
     /// The side that makes this event's choices — the card's own side.
@@ -797,6 +815,7 @@ const CHOICES: &[(u8, SpecFn)] = &[
     (30, decolonization),
     (33, de_stalinization),
     (46, how_i_learned_to_stop_worrying),
+    (47, junta),
     (53, south_african_unrest),
     (56, muslim_revolution),
     (63, colonial_rear_guards),
@@ -1006,6 +1025,16 @@ fn oas_founded(_: &WorldMap, _: &Board, _: &GameStatus) -> Spec {
         Us,
         "add 2 US influence to countries in Central and/or South America",
         Rule::add(Us, Eligible::new(Where::Any(&[Where::Region(Region::CentralAmerica), Where::Region(Region::SouthAmerica)])), 2, ANY, ANY),
+    )
+}
+
+/// #47 Junta: the player adds 2 influence to a single country in Central or South America
+/// (a coup or realignment there follows — `events::ops_grant`).
+fn junta(_: &WorldMap, _: &Board, status: &GameStatus) -> Spec {
+    Spec::single(
+        status.active,
+        "add 2 influence to one country in Central or South America",
+        Rule::add(status.active, Eligible::new(Where::Any(&[Where::Region(Region::CentralAmerica), Where::Region(Region::SouthAmerica)])), 2, 2, 1),
     )
 }
 

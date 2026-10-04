@@ -168,7 +168,7 @@ pub enum GameError {
     /// an event again, returned to the hand, or spent on a space attempt.
     EventPlayed { card: CardId },
     /// [`Game::begin`] refused: the card's event only allows `allowed`.
-    OpsNotGranted { allowed: &'static str },
+    OpsNotGranted { allowed: String },
     /// [`Game::confirm`]/[`Game::cancel`] refused a war: it ends only by
     /// rolling on a target ([`Game::roll`]) or being abandoned.
     WarNotRolled,
@@ -624,6 +624,7 @@ impl Game {
         {
             return Err(GameError::OpsNotGranted { allowed: grant.describe() });
         }
+        let scope = card.ops_after_event.and_then(OpsGrant::target_scope);
         let side = self.status.active;
         let effects = self.status.effects;
         let (ops, _) = effects.card_ops(card.ops, side);
@@ -634,12 +635,14 @@ impl Game {
                     .with_banned_region(effects.placement_banned(side))
                     .with_bonuses(bonuses),
             ),
-            OperationKind::Realign => Operation::Realign(Realignment::new(side, ops, &self.board).with_effects(effects).with_bonuses(bonuses).with_lasting(self.status.lasting)),
+            OperationKind::Realign => Operation::Realign(
+                Realignment::new(side, ops, &self.board).with_effects(effects).with_bonuses(bonuses).with_lasting(self.status.lasting).with_scope(scope),
+            ),
             OperationKind::Coup => {
                 // The Reformer (#87), once played, bars the USSR from coups
                 // in Europe for the rest of the game.
                 let banned = if side == Superpower::Ussr && self.hands.removed().contains(&CardId(87)) { vec![Region::Europe] } else { Vec::new() };
-                Operation::Coup(Coup::new(side, ops, &self.board).with_banned_regions(banned).with_effects(effects).with_bonuses(bonuses).with_lasting(self.status.lasting))
+                Operation::Coup(Coup::new(side, ops, &self.board).with_banned_regions(banned).with_effects(effects).with_bonuses(bonuses).with_lasting(self.status.lasting).with_scope(scope))
             }
         });
         Ok(())
@@ -797,7 +800,7 @@ impl Game {
             let op = self.op.take().expect("checked Some above");
             let Operation::Event(e) = &op else { unreachable!() };
             let result = e.into_result(&self.status);
-            self.finish_effect(result, None);
+            self.finish_effect(result, e.grant());
             return Ok(op);
         }
         if matches!(self.op, Some(Operation::War(_))) {
@@ -808,9 +811,33 @@ impl Game {
             self.board = p.board().clone();
         }
         self.log_close(&op, true);
+        self.finish_operation(&op);
+        Ok(op)
+    }
+
+    /// What follows a closed operation: Che's second coup if the first
+    /// removed US influence, else the card is spent and the turn handed over.
+    fn finish_operation(&mut self, op: &Operation) {
+        if self.winner.is_none()
+            && let Some(next) = self.follow_up_grant(op)
+        {
+            if let Some(card) = self.card.as_mut() {
+                card.ops_after_event = Some(next);
+            }
+            return;
+        }
         self.discard_played_card();
         self.advance();
-        Ok(op)
+    }
+
+    /// The grant for a second coup, if the card's event allows one and the
+    /// coup just closed removed any of the opponent's influence — against a
+    /// different country than the first.
+    fn follow_up_grant(&self, op: &Operation) -> Option<OpsGrant> {
+        let grant = self.card?.ops_after_event.filter(|g| g.follow_up)?;
+        let Operation::Coup(coup) = op else { return None };
+        let result = coup.result().filter(|r| r.removed > 0)?;
+        Some(OpsGrant { follow_up: false, exclude: Some(result.target), ..grant })
     }
 
     /// Closes the open operation without committing a placement's pending
@@ -826,8 +853,7 @@ impl Game {
         }
         let op = self.op.take().ok_or(GameError::NoOperation)?;
         self.log_close(&op, false);
-        self.discard_played_card();
-        self.advance();
+        self.finish_operation(&op);
         Ok(op)
     }
 
@@ -1040,9 +1066,10 @@ impl Game {
         // `confirm` applies it — unless there is nothing it can do at
         // all, in which case it resolves on the spot.
         if let Some(choice) = EventChoice::new(map, &self.board, &self.status, card.id) {
+            let choice = choice.with_grant(events::ops_grant(map, &self.board, self.hands.removed(), card.id, self.status.active));
             if choice.resolves_immediately(map) {
                 let result = choice.into_result(&self.status);
-                self.finish_effect(result.clone(), None);
+                self.finish_effect(result.clone(), choice.grant());
                 return Ok(EventOutcome::Effect(result));
             }
             let chooser = choice.chooser();

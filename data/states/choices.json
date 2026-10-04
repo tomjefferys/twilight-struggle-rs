@@ -450,6 +450,7 @@
     {"name": "how-i-learned", "description": "DEFCON 4, USSR at 1 Military Op. How I Learned to Stop Worrying lets the player set DEFCON to any level and adds 5 Military Ops (capped at 5). USSR to act.", "status": {"active": "Ussr", "defcon": 4, "military_ops_ussr": 1}, "hands": {"us": ["NATO"], "ussr": ["How I Learned to Stop Worrying"]}},
     {"name": "wargames-defcon-2", "description": "DEFCON 2, USSR leads on VP by 8 (vp -8). Wargames may end the game: the US gets 6 VP first (vp -2), so the USSR still wins on VP. USSR to act.", "status": {"active": "Ussr", "defcon": 2, "vp": -8}, "hands": {"us": ["NATO"], "ussr": ["Wargames"]}},
     {"name": "wargames-defcon-2-loses-lead", "description": "DEFCON 2, USSR leads on VP by 3 (vp -3). Ending the game gives the US 6 VP (vp +3), so the US wins. USSR to act.", "status": {"active": "Ussr", "defcon": 2, "vp": -3}, "hands": {"us": ["NATO"], "ussr": ["Wargames"]}},
-    {"name": "wargames-defcon-3", "description": "DEFCON 3: Wargames does nothing. USSR to act.", "status": {"active": "Ussr", "defcon": 3}, "hands": {"us": ["NATO"], "ussr": ["Wargames"]}}
+    {"name": "wargames-defcon-3", "description": "DEFCON 3: Wargames does nothing. USSR to act.", "status": {"active": "Ussr", "defcon": 3}, "hands": {"us": ["NATO"], "ussr": ["Wargames"]}},
+    {"name": "junta", "description": "US to act holding Junta (2 ops). The event adds 2 US influence to one country in Central or South America, then allows a free coup or realignment (not placement) in those regions only. Brazil holds USSR 2; Egypt (outside the Americas) holds USSR 2.", "status": {"active": "Us"}, "influence": {"Brazil": [0, 2], "Egypt": [0, 2]}, "hands": {"us": ["Junta"], "ussr": ["Fidel"]}}
   ]
 }

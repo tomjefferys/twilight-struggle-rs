@@ -275,10 +275,13 @@ const EFFECTS: &[(u8, Effect)] = &[
     (86, north_sea_oil),
     (89, soviets_shoot_down_kal_007),
     (90, glasnost),
+    (91, ortega_elected_in_nicaragua),
     (93, iran_contra_scandal),
+    (96, tear_down_this_wall),
     (97, an_evil_empire),
     (101, solidarity),
     (103, defectors),
+    (107, che),
     (109, yuri_and_samantha),
     (110, awacs_sale_to_saudis),
 ];
@@ -540,9 +543,22 @@ fn glasnost(c: &mut Ctx) {
     c.award_vp(Superpower::Ussr, 2);
 }
 
+/// #91 Ortega Elected in Nicaragua: all US influence leaves Nicaragua; the USSR may then make a
+/// free coup in a country adjacent to it (`events::ops_grant`).
+fn ortega_elected_in_nicaragua(c: &mut Ctx) {
+    c.set("Nicaragua", Superpower::Us, 0);
+}
+
 /// #93 Iran-Contra Scandal: US realignment rolls get -1 for the rest of the turn.
 fn iran_contra_scandal(c: &mut Ctx) {
     c.start(OngoingEffect::IranContra);
+}
+
+/// #96 Tear Down this Wall: +3 US in East Germany, and Willy Brandt (#55) ends; the US may then
+/// make a free coup or realignment in Europe (`events::ops_grant`).
+fn tear_down_this_wall(c: &mut Ctx) {
+    c.add("East Germany", Superpower::Us, 3);
+    c.cancel(LastingEffect::WillyBrandt);
 }
 
 /// #97 “An Evil Empire”
@@ -550,6 +566,11 @@ fn an_evil_empire(c: &mut Ctx) {
     c.award_vp(Superpower::Us, 1);
     c.cancel(LastingEffect::FlowerPower);
 }
+
+/// #107 Che: no direct effect — the USSR may make a coup in a non-battleground country in Central
+/// America, South America or Africa, and a second if the first removes US influence
+/// (`events::ops_grant`).
+fn che(_: &mut Ctx) {}
 
 /// #109 Yuri and Samantha: the USSR gets 1 VP per US coup for the rest of the turn.
 fn yuri_and_samantha(c: &mut Ctx) {

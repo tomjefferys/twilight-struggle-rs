@@ -125,9 +125,12 @@ pub fn render_status_bar_with(
             }
             (Some(card), None) if after_event.is_some() => {
                 let grant = after_event.expect("guard checked");
-                let keys = if grant.coup { "i influence · a realign · o coup" } else { "i influence · a realign" };
+                let keys: Vec<&str> = [(grant.influence, "i influence"), (grant.realign, "a realign"), (grant.coup, "o coup")]
+                    .into_iter()
+                    .filter_map(|(on, k)| on.then_some(k))
+                    .collect();
                 (
-                    format!("{} event played ({}) — {keys} · p skip the ops", card.name, ops_text(status, card)),
+                    format!("{} event played ({}) — {} · p skip the ops", card.name, ops_text(status, card), keys.join(" · ")),
                     Style::color(Color::Selected),
                 )
             }

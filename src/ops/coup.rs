@@ -31,6 +31,7 @@ use crate::country::{CountryId, Region, Superpower};
 use crate::dice::Dice;
 use crate::map::WorldMap;
 use crate::cards::CardId;
+use super::TargetScope;
 use crate::ongoing::{bonus_membership, bonus_ops, LastingEffects, OpsBonus, TurnEffects};
 
 /// The number a coup's modified roll must strictly exceed to succeed:
@@ -140,6 +141,8 @@ pub enum CoupError {
     Banned { country: String, region: Region },
     /// A lasting event (NATO, the US/Japan pact) shields `country` from this side's coups.
     Protected { country: String, by: CardId },
+    /// The card's event allows a coup only in certain countries.
+    OutOfScope { reason: String },
 }
 
 impl fmt::Display for CoupError {
@@ -148,6 +151,7 @@ impl fmt::Display for CoupError {
             CoupError::NoOpponentInfluence { country, side } => {
                 write!(f, "{} has no influence in {country} for {side} to coup", side.opponent())
             }
+            CoupError::OutOfScope { reason } => write!(f, "{reason}"),
             CoupError::Protected { country, by } => write!(f, "card #{} protects {country} from coups", by.0),
             CoupError::Banned { country, region } => write!(f, "an event forbids coups in {region} ({country})"),
             CoupError::AlreadyResolved { country } => {
@@ -181,11 +185,23 @@ pub struct Coup {
     bonuses: Vec<OpsBonus>,
     /// Game-long events that shield countries (NATO, the US/Japan pact).
     lasting: LastingEffects,
+    /// Where a card's event confines this coup (Che, Ortega, Junta, ...).
+    scope: Option<TargetScope>,
 }
 
 impl Coup {
     pub fn new(side: Superpower, ops: u8, board: &Board) -> Self {
-        Coup { side, ops_total: ops, result: None, base: board.clone(), banned: Vec::new(), bonuses: Vec::new(), effects: TurnEffects::default(), lasting: LastingEffects::default() }
+        Coup { side, ops_total: ops, result: None, base: board.clone(), banned: Vec::new(), bonuses: Vec::new(), effects: TurnEffects::default(), lasting: LastingEffects::default(), scope: None }
+    }
+
+    /// Confines this coup to `scope` (a card event that allows it only there).
+    pub fn with_scope(mut self, scope: Option<TargetScope>) -> Self {
+        self.scope = scope;
+        self
+    }
+
+    fn in_scope(&self, map: &WorldMap, id: CountryId) -> bool {
+        self.scope.is_none_or(|s| s.allows(map, id))
     }
 
     /// Forbids this coup from targeting any country in `regions` — what an
@@ -273,7 +289,7 @@ impl Coup {
     /// that's `attempt`'s job, so a spent session doesn't dim every
     /// country in the region.
     pub fn is_legal_target(&self, map: &WorldMap, board: &Board, id: CountryId) -> bool {
-        !self.banned.contains(&map.country(id).region) && board.influence(id, self.side.opponent()) > 0 && self.protected_by(map, board, id).is_none()
+        self.in_scope(map, id) && !self.banned.contains(&map.country(id).region) && board.influence(id, self.side.opponent()) > 0 && self.protected_by(map, board, id).is_none()
     }
 
     /// Resolves this action's one attempt against `id`, spending every op
@@ -283,6 +299,9 @@ impl Coup {
     pub fn attempt(&mut self, map: &WorldMap, board: &mut Board, id: CountryId, dice: &mut Dice) -> Result<CoupResult, CoupError> {
         if self.result.is_some() {
             return Err(CoupError::AlreadyResolved { country: map.country(id).name.clone() });
+        }
+        if let Some(scope) = self.scope.filter(|s| !s.allows(map, id)) {
+            return Err(CoupError::OutOfScope { reason: scope.refusal(map, id) });
         }
         let region = map.country(id).region;
         if self.banned.contains(&region) {

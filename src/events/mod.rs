@@ -56,20 +56,40 @@ pub fn is_implemented(card: CardId) -> bool {
 
 /// The operations a card's event also lets its player conduct with the
 /// card's own ops value, once the event has resolved (ABM Treaty, KAL-007,
-/// Glasnost, CIA Created, "Lone Gunman"). The card stays in play until
-/// they're done — or skipped with `Game::pass`.
+/// Glasnost, CIA Created, "Lone Gunman", Junta, Che, ...). The card stays
+/// in play until they're done — or skipped with `Game::pass`. A grant may
+/// confine coups and realignments to a set of countries (`scope`), and
+/// Che's carries a follow-up: a second coup, in a different country, if
+/// the first removed any US influence.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct OpsGrant {
     pub influence: bool,
     pub realign: bool,
     pub coup: bool,
+    /// Where a coup or realignment may land.
+    pub scope: choice::Where,
+    /// Completes "isn't …" when a target is refused, and the description.
+    pub scope_label: &'static str,
+    /// A country already used, which can't be the target again.
+    pub exclude: Option<crate::country::CountryId>,
+    /// A second coup is allowed if this one removes US influence (Che).
+    pub follow_up: bool,
 }
 
 impl OpsGrant {
+    const fn kinds(influence: bool, realign: bool, coup: bool) -> OpsGrant {
+        OpsGrant { influence, realign, coup, scope: choice::Where::Everywhere, scope_label: "", exclude: None, follow_up: false }
+    }
+
     /// Any operation.
-    pub const ANY: OpsGrant = OpsGrant { influence: true, realign: true, coup: true };
+    pub const ANY: OpsGrant = OpsGrant::kinds(true, true, true);
     /// Influence or realignment only (KAL-007, Glasnost).
-    pub const NO_COUP: OpsGrant = OpsGrant { influence: true, realign: true, coup: false };
+    pub const NO_COUP: OpsGrant = OpsGrant::kinds(true, true, false);
+
+    /// Coups and realignments (not placement) within `scope`.
+    const fn coup_or_realign_in(scope: choice::Where, label: &'static str) -> OpsGrant {
+        OpsGrant { scope, scope_label: label, ..OpsGrant::kinds(false, true, true) }
+    }
 
     pub fn allows(self, kind: crate::game::OperationKind) -> bool {
         match kind {
@@ -79,24 +99,60 @@ impl OpsGrant {
         }
     }
 
+    /// The target restriction a coup or realignment opened under this
+    /// grant carries, if it has one.
+    pub fn target_scope(self) -> Option<crate::ops::TargetScope> {
+        (self.scope != choice::Where::Everywhere || self.exclude.is_some())
+            .then_some(crate::ops::TargetScope { place: self.scope, exclude: self.exclude, label: self.scope_label })
+    }
+
     /// What may be done, for a message.
-    pub fn describe(self) -> &'static str {
-        if self.coup { "any operation" } else { "placing influence or realigning" }
+    pub fn describe(self) -> String {
+        let kinds: Vec<&str> = [(self.influence, "placing influence"), (self.realign, "realigning"), (self.coup, "a coup")]
+            .into_iter()
+            .filter_map(|(on, name)| on.then_some(name))
+            .collect();
+        let mut text = if kinds.len() == 3 { "any operation".to_string() } else { kinds.join(" or ") };
+        if !self.scope_label.is_empty() {
+            text = format!("{text} {}", self.scope_label);
+        }
+        if self.follow_up {
+            text.push_str(" (and a second coup in a different country if it removes US influence)");
+        }
+        text
     }
 }
+
+const AMERICAS: choice::Where = choice::Where::Any(&[choice::Where::Region(crate::country::Region::CentralAmerica), choice::Where::Region(crate::country::Region::SouthAmerica)]);
+const CHE_REGIONS: choice::Where = choice::Where::Any(&[
+    choice::Where::Region(crate::country::Region::CentralAmerica),
+    choice::Where::Region(crate::country::Region::SouthAmerica),
+    choice::Where::Region(crate::country::Region::Africa),
+]);
 
 /// The operations `card`'s event grants `player` after it resolves, if any.
 /// Judged against the board as it stood when the event was played; only the
 /// card's own side gets them (the VP/DEFCON text applies whoever plays it,
 /// but "the US may place influence…" does not).
 pub fn ops_grant(map: &WorldMap, board: &Board, removed: &[CardId], card: CardId, player: crate::country::Superpower) -> Option<OpsGrant> {
+    use crate::country::Region;
     use crate::country::Superpower::{Us, Ussr};
     match card.0 {
-        57 => Some(OpsGrant::ANY),
         26 if player == Us => Some(OpsGrant::ANY),
+        47 => Some(OpsGrant::coup_or_realign_in(AMERICAS, "in Central or South America")),
+        57 => Some(OpsGrant::ANY),
         62 if player == Ussr => Some(OpsGrant::ANY),
         89 if player == Us && map.id_by_name("South Korea").is_some_and(|id| board.is_controlled_by(map, id, Us)) => Some(OpsGrant::NO_COUP),
         90 if player == Ussr && removed.contains(&CardId(87)) => Some(OpsGrant::NO_COUP),
+        91 if player == Ussr => Some(OpsGrant { realign: false, scope: choice::Where::AdjacentTo("Nicaragua"), scope_label: "adjacent to Nicaragua", ..OpsGrant::kinds(false, false, true) }),
+        96 if player == Us => Some(OpsGrant::coup_or_realign_in(choice::Where::Region(Region::Europe), "in Europe")),
+        107 if player == Ussr => Some(OpsGrant {
+            realign: false,
+            scope: choice::Where::NonBattleground(&CHE_REGIONS),
+            scope_label: "in a non-battleground country in Central America, South America or Africa",
+            follow_up: true,
+            ..OpsGrant::kinds(false, false, true)
+        }),
         _ => None,
     }
 }
@@ -112,7 +168,7 @@ pub enum Blocked {
 }
 
 /// Cards whose event is barred once another card's event has happened.
-const PREVENTED_BY: &[(u8, u8)] = &[(7, 83), (13, 65), (56, 110), (59, 97), (61, 86)];
+const PREVENTED_BY: &[(u8, u8)] = &[(7, 83), (13, 65), (55, 96), (56, 110), (59, 97), (61, 86)];
 
 /// Cards whose event may only be played after one of the listed cards'.
 const REQUIRES: &[(u8, &[CardId])] = &[(21, &[CardId(16), CardId(23)]), (101, &[CardId(68)])];

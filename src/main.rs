@@ -961,8 +961,8 @@ fn run_event_command(session: &mut Session) {
             let winner = session.game.winner();
             let canvas = render_event_result(&session.map, &session.cards, &result, vp_after, winner, None);
             println!("{}", canvas.render(session.color));
-            if let Some(grant) = session.game.ops_after_event() {
-                println!("{} may now conduct {} with this card's ops — or pass to skip them", session.game.active(), grant.describe());
+            if session.game.ops_after_event().is_some() {
+                print_turn_state(session);
             }
         }
         Ok(EventOutcome::Pending { .. }) => print_event_prompt(session),
@@ -1350,7 +1350,7 @@ fn run_confirm_command(session: &mut Session) {
             return;
         }
     }
-    println!("{} to act", session.game.active());
+    print_turn_state(session);
 }
 
 fn run_cancel_command(session: &mut Session) {
@@ -1383,7 +1383,20 @@ fn run_cancel_command(session: &mut Session) {
             return;
         }
     }
-    println!("{} to act", session.game.active());
+    print_turn_state(session);
+}
+
+/// What comes next after an operation or event closes: the operation the
+/// card's event still allows, if any, else whose turn it is.
+fn print_turn_state(session: &Session) {
+    match session.game.ops_after_event() {
+        Some(grant) => println!(
+            "{} may now conduct {} with this card's ops — or pass to skip them",
+            session.game.active(),
+            grant.describe()
+        ),
+        None => println!("{} to act", session.game.active()),
+    }
 }
 
 /// `abandon` steps back exactly one level, the same cascade Backspace

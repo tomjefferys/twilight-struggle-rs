@@ -2241,3 +2241,160 @@ mod event_then_ops {
         assert_eq!(game.status().defcon, 3, "no event");
     }
 }
+
+mod scoped_ops {
+    use super::*;
+    use twilight_struggle::game::GameError;
+    use twilight_struggle::ops::{CoupError, RealignError};
+    use twilight_struggle::{CountryId, Dice, OperationKind};
+
+    fn id(map: &WorldMap, name: &str) -> CountryId {
+        map.id_by_name(name).unwrap_or_else(|| panic!("no country {name}"))
+    }
+
+    /// A seed whose first roll is `die`.
+    fn seed_for(die: u8) -> u64 {
+        (0..1000).find(|&s| Dice::from_seed(s).roll() == die).unwrap()
+    }
+
+    fn start(state: &str, card: &str) -> (WorldMap, CardCatalog, Game) {
+        let (map, cards, lib) = fixtures();
+        let (scenario, _) = lib.load(&map, &cards, state).unwrap_or_else(|e| panic!("{state}: {e}"));
+        let mut game = Game::from_scenario(&scenario);
+        game.play_card(&cards, cards.id_by_name(card).unwrap()).unwrap();
+        (map, cards, game)
+    }
+
+    fn played(state: &str, card: &str) -> (WorldMap, CardCatalog, Game) {
+        let (map, cards, mut game) = start(state, card);
+        game.play_event(&map, &cards).unwrap_or_else(|e| panic!("{state}: play_event: {e}"));
+        (map, cards, game)
+    }
+
+    fn us(game: &Game, map: &WorldMap, name: &str) -> u8 {
+        game.board().influence(id(map, name), Superpower::Us)
+    }
+
+    #[test]
+    fn ortega_clears_nicaragua_then_allows_one_coup_next_door_only() {
+        let (map, cards, mut game) = played("events/ortega", "Ortega Elected in Nicaragua");
+        assert_eq!(us(&game, &map, "Nicaragua"), 0);
+        assert!(matches!(game.begin(OperationKind::Influence), Err(GameError::OpsNotGranted { .. })));
+        assert!(matches!(game.begin(OperationKind::Realign), Err(GameError::OpsNotGranted { .. })));
+        game.begin(OperationKind::Coup).unwrap();
+        let op = game.operation().unwrap();
+        assert!(op.is_legal_target(&map, game.board(), id(&map, "Honduras")), "adjacent to Nicaragua");
+        assert!(!op.is_legal_target(&map, game.board(), id(&map, "Mexico")), "not adjacent: dimmed");
+        let err = game.roll(&map, id(&map, "Mexico"), &mut Dice::from_seed(1)).unwrap_err();
+        assert!(matches!(err, GameError::Coup(CoupError::OutOfScope { .. })), "{err}");
+        game.roll(&map, id(&map, "Honduras"), &mut Dice::from_seed(seed_for(6))).unwrap();
+        assert_eq!(us(&game, &map, "Honduras"), 0, "6 + 2 ops beats Honduras's target of 4 by 4");
+        game.confirm().unwrap();
+        assert_eq!(game.active(), Superpower::Us, "no follow-up: the turn is over");
+        assert!(game.removed_from_game().contains(&cards.id_by_name("Ortega Elected in Nicaragua").unwrap()));
+    }
+
+    #[test]
+    fn tear_down_this_wall_adds_influence_ends_willy_brandt_and_confines_ops_to_europe() {
+        let (map, _, mut game) = played("events/tear-down-this-wall", "Tear Down this Wall");
+        assert_eq!(us(&game, &map, "East Germany"), 3);
+        assert!(!game.status().lasting.willy_brandt, "Tear Down this Wall cancels Willy Brandt");
+        assert!(matches!(game.begin(OperationKind::Influence), Err(GameError::OpsNotGranted { .. })));
+        game.begin(OperationKind::Realign).unwrap();
+        let err = game.roll(&map, id(&map, "Egypt"), &mut Dice::from_seed(1)).unwrap_err();
+        assert!(matches!(err, GameError::Realign(RealignError::OutOfScope { .. })), "{err}");
+        game.roll(&map, id(&map, "Poland"), &mut Dice::from_seed(1)).expect("Poland is in Europe");
+    }
+
+    #[test]
+    fn tear_down_this_wall_bars_a_later_willy_brandt() {
+        use twilight_struggle::events::{blocked, Blocked};
+        let (_, cards, _) = fixtures();
+        let (wb, wall) = (cards.id_by_name("Willy Brandt").unwrap(), cards.id_by_name("Tear Down this Wall").unwrap());
+        assert_eq!(blocked(wb, &[]), None);
+        assert_eq!(blocked(wb, &[wall]), Some(Blocked::Prevented { by: wall }));
+    }
+
+    #[test]
+    fn junta_adds_two_influence_to_one_american_country_then_allows_a_coup_or_realignment_there() {
+        let (map, cards, mut game) = start("choices/junta", "Junta");
+        game.play_event(&map, &cards).unwrap();
+        assert!(game.place(&map, id(&map, "Egypt")).is_err(), "not in Central or South America");
+        game.place(&map, id(&map, "Brazil")).unwrap();
+        game.place(&map, id(&map, "Brazil")).unwrap();
+        game.confirm().unwrap();
+        assert_eq!(us(&game, &map, "Brazil"), 2);
+        assert_eq!(game.active(), Superpower::Us, "the card stays in play for its operation");
+        assert!(game.ops_after_event().is_some());
+        assert!(matches!(game.begin(OperationKind::Influence), Err(GameError::OpsNotGranted { .. })));
+        game.begin(OperationKind::Realign).unwrap();
+        assert!(matches!(game.roll(&map, id(&map, "Egypt"), &mut Dice::from_seed(1)), Err(GameError::Realign(RealignError::OutOfScope { .. }))));
+        game.roll(&map, id(&map, "Brazil"), &mut Dice::from_seed(1)).unwrap();
+        game.confirm().unwrap();
+        assert_eq!(game.active(), Superpower::Ussr);
+        assert!(game.discards().contains(&cards.id_by_name("Junta").unwrap()), "Junta isn't removed after its event");
+    }
+
+    #[test]
+    fn che_allows_a_coup_in_a_non_battleground_only() {
+        let (map, _, mut game) = played("events/che", "Che");
+        game.begin(OperationKind::Coup).unwrap();
+        let op = game.operation().unwrap();
+        assert!(op.is_legal_target(&map, game.board(), id(&map, "Honduras")));
+        assert!(!op.is_legal_target(&map, game.board(), id(&map, "Chile")), "a battleground");
+        let err = game.roll(&map, id(&map, "Chile"), &mut Dice::from_seed(1)).unwrap_err();
+        assert!(matches!(err, GameError::Coup(CoupError::OutOfScope { .. })), "{err}");
+    }
+
+    #[test]
+    fn che_allows_a_second_coup_in_a_different_country_if_the_first_removed_us_influence() {
+        let (map, cards, mut game) = played("events/che", "Che");
+        game.begin(OperationKind::Coup).unwrap();
+        game.roll(&map, id(&map, "Honduras"), &mut Dice::from_seed(seed_for(6))).unwrap();
+        assert_eq!(us(&game, &map, "Honduras"), 0);
+        game.confirm().unwrap();
+        assert_eq!(game.active(), Superpower::Ussr, "the card isn't spent yet");
+        let grant = game.ops_after_event().expect("a second coup is allowed");
+        assert!(!grant.follow_up && grant.coup && !grant.influence && !grant.realign);
+        game.begin(OperationKind::Coup).unwrap();
+        let op = game.operation().unwrap();
+        assert!(!op.is_legal_target(&map, game.board(), id(&map, "Honduras")), "a different country");
+        assert!(op.is_legal_target(&map, game.board(), id(&map, "Guatemala")));
+        game.roll(&map, id(&map, "Guatemala"), &mut Dice::from_seed(seed_for(6))).unwrap();
+        game.confirm().unwrap();
+        assert_eq!(game.active(), Superpower::Us);
+        assert!(game.discards().contains(&cards.id_by_name("Che").unwrap()), "Che isn't removed after its event");
+    }
+
+    #[test]
+    fn che_gets_no_second_coup_when_the_first_removes_nothing() {
+        let (map, _, mut game) = played("events/che", "Che");
+        game.begin(OperationKind::Coup).unwrap();
+        game.roll(&map, id(&map, "Honduras"), &mut Dice::from_seed(seed_for(1))).unwrap();
+        assert_eq!(us(&game, &map, "Honduras"), 3, "1 + 3 ops doesn't beat 4");
+        game.confirm().unwrap();
+        assert_eq!(game.active(), Superpower::Us);
+        assert!(game.ops_after_event().is_none());
+    }
+
+    #[test]
+    fn che_second_coup_can_be_skipped_with_pass() {
+        let (map, _, mut game) = played("events/che", "Che");
+        game.begin(OperationKind::Coup).unwrap();
+        game.roll(&map, id(&map, "Honduras"), &mut Dice::from_seed(seed_for(6))).unwrap();
+        game.confirm().unwrap();
+        game.pass().unwrap();
+        assert_eq!(game.active(), Superpower::Us);
+    }
+
+    #[test]
+    fn the_scoped_cards_only_offer_their_targets_to_the_ai() {
+        use twilight_struggle::Action;
+        let (map, cards, game) = played("events/ortega", "Ortega Elected in Nicaragua");
+        let mut game = game;
+        game.begin(OperationKind::Coup).unwrap();
+        let rolls: Vec<CountryId> = game.legal_actions(&map, &cards).into_iter().filter_map(|a| if let Action::Roll(c) = a { Some(c) } else { None }).collect();
+        assert!(rolls.contains(&id(&map, "Honduras")) && rolls.contains(&id(&map, "Cuba")));
+        assert!(!rolls.contains(&id(&map, "Mexico")));
+    }
+}

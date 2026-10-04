@@ -35,6 +35,7 @@ use crate::country::{CountryId, Superpower};
 use crate::dice::Dice;
 use crate::map::WorldMap;
 use crate::cards::CardId;
+use super::TargetScope;
 use crate::ongoing::{bonus_membership, bonus_ops, LastingEffects, OpsBonus, TurnEffects};
 
 /// One side's die-roll modifiers for one country, itemised rather than
@@ -212,6 +213,8 @@ pub enum RealignError {
     InsufficientOps { country: String, remaining: u8 },
     /// A lasting event (NATO, the US/Japan pact) shields `country` from this side's rolls.
     Protected { country: String, by: CardId },
+    /// The card's event allows realignment rolls only in certain countries.
+    OutOfScope { reason: String },
 }
 
 impl fmt::Display for RealignError {
@@ -220,6 +223,7 @@ impl fmt::Display for RealignError {
             RealignError::NoOpponentInfluence { country, side } => {
                 write!(f, "{} has no influence in {country} for {side} to realign against", side.opponent())
             }
+            RealignError::OutOfScope { reason } => write!(f, "{reason}"),
             RealignError::Protected { country, by } => write!(f, "card #{} protects {country} from realignment", by.0),
             RealignError::InsufficientOps { country, remaining } => {
                 write!(f, "rolling in {country} costs 1 op, but only {remaining} remain")
@@ -245,6 +249,8 @@ pub struct Realignment {
     effects: TurnEffects,
     /// Game-long events that shield countries (NATO, the US/Japan pact).
     lasting: LastingEffects,
+    /// Where a card's event confines these rolls (Junta, Tear Down this Wall).
+    scope: Option<TargetScope>,
     /// Extra ops for rolls spent wholly in one area (China Card, Vietnam Revolts).
     bonuses: Vec<OpsBonus>,
     /// The bonuses every roll so far has stayed inside (bit per bonus) —
@@ -264,6 +270,7 @@ impl Realignment {
             history: Vec::new(),
             effects: TurnEffects::default(),
             lasting: LastingEffects::default(),
+            scope: None,
             bonuses: Vec::new(),
             bonus_mask: u8::MAX,
             base: board.clone(),
@@ -280,6 +287,16 @@ impl Realignment {
     pub fn with_lasting(mut self, lasting: LastingEffects) -> Self {
         self.lasting = lasting;
         self
+    }
+
+    /// Confines these rolls to `scope` (a card event that allows them only there).
+    pub fn with_scope(mut self, scope: Option<TargetScope>) -> Self {
+        self.scope = scope;
+        self
+    }
+
+    fn in_scope(&self, map: &WorldMap, id: CountryId) -> bool {
+        self.scope.is_none_or(|s| s.allows(map, id))
     }
 
     /// The card shielding `id` from this realignment right now, if any —
@@ -342,7 +359,7 @@ impl Realignment {
     /// the module doc. Judged against the live `board`, not `base`, so
     /// a country a roll has just emptied stops being legal mid-action.
     pub fn is_legal_target(&self, map: &WorldMap, board: &Board, id: CountryId) -> bool {
-        board.influence(id, self.side.opponent()) > 0 && self.protected_by(map, board, id).is_none()
+        self.in_scope(map, id) && board.influence(id, self.side.opponent()) > 0 && self.protected_by(map, board, id).is_none()
     }
 
     /// Resolves one roll against `id`, charging exactly 1 op and writing
@@ -358,6 +375,9 @@ impl Realignment {
     ) -> Result<RollResult, RealignError> {
         if !self.can_afford(map, id) {
             return Err(RealignError::InsufficientOps { country: map.country(id).name.clone(), remaining: self.remaining() });
+        }
+        if let Some(scope) = self.scope.filter(|s| !s.allows(map, id)) {
+            return Err(RealignError::OutOfScope { reason: scope.refusal(map, id) });
         }
         if let Some(by) = self.protected_by(map, board, id) {
             return Err(RealignError::Protected { country: map.country(id).name.clone(), by });

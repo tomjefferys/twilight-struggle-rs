@@ -4,7 +4,7 @@ Which of the 110 cards have their **event** implemented (`events::is_implemented
 Every card can already be played for its ops value; this tracks the event text only.
 `tests/cards_progress.rs` fails if a ✅ here disagrees with the code, so update both together.
 
-**Implemented: 86 / 110**
+**Implemented: 90 / 110**
 
 - `events::scoring` — the seven scoring cards.
 - `events::effects` — fixed influence / VP / DEFCON effects with no choices or die rolls.
@@ -61,7 +61,7 @@ Every card can already be played for its ops value; this tracks the event text o
 | 44 | Bear Trap | US |  |  |
 | 45 | Summit | Both |  |  |
 | 46 | How I Learned to Stop Worrying | Both | ✅ | Choice (mode = DEFCON level 1-5); +5 Military Ops (max 5) |
-| 47 | Junta | Both |  |  |
+| 47 | Junta | Both | ✅ | Choice (+2 influence in one Central/South America country), then a coup or realignment there with the card's ops |
 | 48 | Kitchen Debates | US | ✅ |  |
 | 49 | Missile Envy | Both |  |  |
 | 50 | “We Will Bury You” | USSR | ✅ | DEFCON −1; USSR +3 VP after the US's next round; UN Intervention escape pending #32 |
@@ -69,7 +69,7 @@ Every card can already be played for its ops value; this tracks the event text o
 | 52 | Portuguese Empire Crumbles | USSR | ✅ |  |
 | 53 | South African Unrest | USSR | ✅ | Choice (2 modes) |
 | 54 | Allende | USSR | ✅ |  |
-| 55 | Willy Brandt | USSR | ✅ | USSR +1 VP, +1 West Germany; NATO exempts West Germany; 'cancelled by #96' pending |
+| 55 | Willy Brandt | USSR | ✅ | USSR +1 VP, +1 West Germany; NATO exempts West Germany; cancelled by #96 (modelled) |
 | 56 | Muslim Revolution | USSR | ✅ | Choice; prevented by #110 (modelled) |
 | 57 | ABM Treaty | Both | ✅ | DEFCON +1, then the player may conduct any operation with the card |
 | 58 | Cultural Revolution | USSR | ✅ | US holds China Card → USSR gets it face up; else +1 VP (`EffectResult::china`) |
@@ -105,12 +105,12 @@ Every card can already be played for its ops value; this tracks the event text o
 | 88 | Marine Barracks Bombing | USSR | ✅ | Choice; Lebanon cleared up front |
 | 89 | Soviets Shoot Down KAL-007 | US | ✅ | DEFCON −1, US +2 VP; then, if South Korea is US-controlled, the US may place influence or realign |
 | 90 | Glasnost | USSR | ✅ | DEFCON +1, USSR +2 VP; then, if #87 has been played, the USSR may place influence or realign |
-| 91 | Ortega Elected in Nicaragua | USSR |  |  |
+| 91 | Ortega Elected in Nicaragua | USSR | ✅ | Clears Nicaragua's US influence, then a coup only in a neighbouring country |
 | 92 | Terrorism | Both |  |  |
 | 93 | Iran-Contra Scandal | USSR | ✅ | Turn-long: US realignment rolls -1 |
 | 94 | Chernobyl | US | ✅ | Choice (region, modes 1-6); turn-long: USSR can't add influence there with ops |
 | 95 | Latin American Debt Crisis | USSR |  |  |
-| 96 | Tear Down this Wall | US |  |  |
+| 96 | Tear Down this Wall | US | ✅ | +3 US East Germany; cancels #55 (and bars it later); then a coup or realignment in Europe |
 | 97 | “An Evil Empire” | US | ✅ | Cancels #59 (modelled) |
 | 98 | Aldrich Ames Remix | USSR |  |  |
 | 99 | Pershing II Deployed | USSR | ✅ | Choice; USSR +1 VP, 1 US influence from each of 3 Western European countries |
@@ -121,7 +121,7 @@ Every card can already be played for its ops value; this tracks the event text o
 | 104 | The Cambridge Five | USSR |  |  |
 | 105 | Special Relationship | US | ✅ | Choice; adjacent-to-UK branch, or with NATO in effect +2 influence in Western Europe and +2 VP |
 | 106 | NORAD | US |  |  |
-| 107 | Che | USSR |  |  |
+| 107 | Che | USSR | ✅ | No direct effect; a coup in a non-battleground in Central/South America or Africa, plus a second (different country) if the first removed US influence |
 | 108 | Our Man in Tehran | US |  |  |
 | 109 | Yuri and Samantha | USSR | ✅ | Turn-long: USSR +1 VP per US coup |
 | 110 | AWACS Sale to Saudis | US | ✅ | Prevents #56 (modelled) |
