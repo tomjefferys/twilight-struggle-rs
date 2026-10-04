@@ -141,28 +141,29 @@ pub fn render_forced_card(cards: &CardCatalog, card: CardId, host: CardId, how: 
 
 fn draw_slot(canvas: &mut Canvas, row: usize, col: usize, card: &Card, china: Option<bool>, role: SlotRole) {
     let is_china = card.id == CHINA_CARD;
-    let (border_style, thick) = match role {
-        SlotRole::Played => (Style::color(Color::Selected).bold(), true),
-        SlotRole::Selected => (Style::color(Color::Selected), true),
-        SlotRole::Dimmed => (Style::color(card_side_color(card.side)).dim(), false),
-        SlotRole::Normal => (Style::color(card_side_color(card.side)), false),
-    };
-    if thick {
-        canvas.draw_thick_box(row, col, SLOT_W, SLOT_H, border_style);
-    } else {
-        canvas.draw_box(row, col, SLOT_W, SLOT_H, border_style);
+    // Every role keeps the card's own side colour (red/blue); the role is shown
+    // by the border's glyphs and weight instead, so a highlighted card still
+    // reads as US/USSR/neutral at a glance and never resembles a neutral one.
+    let side_color = card_side_color(card.side);
+    match role {
+        SlotRole::Played => canvas.draw_thick_box(row, col, SLOT_W, SLOT_H, Style::color(side_color).bold()),
+        SlotRole::Selected => canvas.draw_double_box(row, col, SLOT_W, SLOT_H, Style::color(side_color).bold()),
+        SlotRole::Dimmed => canvas.draw_box(row, col, SLOT_W, SLOT_H, Style::color(side_color).dim()),
+        SlotRole::Normal => canvas.draw_box(row, col, SLOT_W, SLOT_H, Style::color(side_color)),
     }
 
     let content_style = match role {
-        SlotRole::Played => Style::default().bold(),
+        SlotRole::Played | SlotRole::Selected => Style::default().bold(),
         SlotRole::Dimmed => Style::default().dim(),
-        SlotRole::Selected | SlotRole::Normal => Style::default(),
+        SlotRole::Normal => Style::default(),
     };
 
     let content_w = SLOT_W - 2;
     let ops_label = card.ops_label();
-    let name = truncate(&card.name, content_w.saturating_sub(ops_label.chars().count() + 1));
-    canvas.put(row + 1, col + 1, &format!("{ops_label} {name}"), content_style);
+    // The selection also carries a `▶` pointer, so it reads without colour too.
+    let pointer = if role == SlotRole::Selected { "▶" } else { "" };
+    let name = truncate(&card.name, content_w.saturating_sub(ops_label.chars().count() + 1 + pointer.chars().count()));
+    canvas.put(row + 1, col + 1, &format!("{pointer}{ops_label} {name}"), content_style);
 
     let line2 = if role == SlotRole::Played {
         "IN PLAY".to_string()
@@ -225,11 +226,11 @@ mod tests {
     }
 
     #[test]
-    fn a_selected_slot_uses_thick_border_glyphs() {
+    fn a_selected_slot_uses_a_double_border_and_pointer() {
         let cards = catalog();
         let hand = hand_of(&cards, &["Duck and Cover", "Five Year Plan"]);
         let text = render_hand(&cards, &hand, None, Superpower::Us, Some(0), None).render(ColorMode::Never);
-        assert!(text.contains('┏'), "expected a thick border on the selected slot:\n{text}");
+        assert!(text.contains('╔') && text.contains('▶'), "expected a double border and pointer on the selected slot:\n{text}");
     }
 
     #[test]
@@ -252,7 +253,7 @@ mod tests {
         let hand = hand_of(&cards, &names);
         let text = render_hand(&cards, &hand, None, Superpower::Us, Some(11), None).render(ColorMode::Never);
         assert!(text.contains("of 12"), "expected pagination info:\n{text}");
-        assert!(text.contains("SALT Negotia"), "expected the selected card's page to be shown:\n{text}");
+        assert!(text.contains("SALT Negoti"), "expected the selected card's page to be shown:\n{text}");
     }
 
     #[test]
