@@ -81,6 +81,8 @@ pub enum OngoingEffect {
     /// #26 CIA Created / #62 "Lone Gunman" / #98 Aldrich Ames Remix: `side`'s hand is
     /// shown to its opponent for the rest of the turn. `card` is the card that revealed it.
     HandRevealed { side: Superpower, card: u8 },
+    /// #40: DEFCON 2; a coup by the opponent of `by` this turn loses them the game, unless the crisis is defused.
+    CubanMissileCrisis { by: Superpower },
 }
 
 impl OngoingEffect {
@@ -98,6 +100,7 @@ impl OngoingEffect {
             OngoingEffect::Chernobyl { .. } => 94,
             OngoingEffect::YuriSamantha => 109,
             OngoingEffect::HandRevealed { card, .. } => *card,
+            OngoingEffect::CubanMissileCrisis { .. } => 40,
         })
     }
 
@@ -112,6 +115,7 @@ impl OngoingEffect {
             OngoingEffect::DeathSquads { beneficiary } => *beneficiary,
             // The side that gets to look.
             OngoingEffect::HandRevealed { side, .. } => side.opponent(),
+            OngoingEffect::CubanMissileCrisis { by } => *by,
         }
     }
 }
@@ -135,6 +139,8 @@ pub struct TurnEffects {
     pub us_hand_revealed: Option<u8>,
     /// The card that has revealed the USSR hand to the US, if any.
     pub ussr_hand_revealed: Option<u8>,
+    /// Cuban Missile Crisis, and which side played it.
+    pub cuban_missile_crisis: Option<Superpower>,
 }
 
 impl TurnEffects {
@@ -155,6 +161,7 @@ impl TurnEffects {
             OngoingEffect::IranContra => self.iran_contra = true,
             OngoingEffect::Chernobyl { region } => self.chernobyl = Some(region),
             OngoingEffect::YuriSamantha => self.yuri_samantha = true,
+            OngoingEffect::CubanMissileCrisis { by } => self.cuban_missile_crisis = Some(by),
             OngoingEffect::HandRevealed { side: Superpower::Us, card } => self.us_hand_revealed = Some(card),
             OngoingEffect::HandRevealed { side: Superpower::Ussr, card } => self.ussr_hand_revealed = Some(card),
         }
@@ -192,6 +199,9 @@ impl TurnEffects {
         }
         if self.yuri_samantha {
             v.push(OngoingEffect::YuriSamantha);
+        }
+        if let Some(by) = self.cuban_missile_crisis {
+            v.push(OngoingEffect::CubanMissileCrisis { by });
         }
         if let Some(card) = self.us_hand_revealed {
             v.push(OngoingEffect::HandRevealed { side: Superpower::Us, card });
@@ -279,6 +289,11 @@ impl TurnEffects {
 
     /// How many extra action rounds `side` gets this turn: North Sea Oil's
     /// eighth round for the US.
+    /// The side a coup would cost the game, while Cuban Missile Crisis is in force.
+    pub fn coup_forbidden(&self, side: Superpower) -> bool {
+        self.cuban_missile_crisis == Some(side.opponent())
+    }
+
     pub fn extra_rounds(&self, side: Superpower) -> u8 {
         (self.north_sea_oil && side == Superpower::Us) as u8
     }
@@ -306,6 +321,12 @@ pub enum LastingEffect {
     FlowerPower,
     /// #73: the next Asia/Middle East scoring counts one fewer USSR battleground.
     ShuttleDiplomacy,
+    /// #42: the US's action rounds become escape attempts (see `Game::trap`).
+    Quagmire,
+    /// #44: the USSR's action rounds become escape attempts.
+    BearTrap,
+    /// #106: +1 US influence after an action round that moved DEFCON to 2, while the US holds Canada.
+    Norad,
 }
 
 impl LastingEffect {
@@ -319,14 +340,17 @@ impl LastingEffect {
             LastingEffect::WillyBrandt => 55,
             LastingEffect::FlowerPower => 59,
             LastingEffect::ShuttleDiplomacy => 73,
+            LastingEffect::Quagmire => 42,
+            LastingEffect::BearTrap => 44,
+            LastingEffect::Norad => 106,
         })
     }
 
     /// The side the effect favours — what a view colours it by.
     pub fn side(&self) -> Superpower {
         match self {
-            LastingEffect::Nato | LastingEffect::UsJapan | LastingEffect::Formosan | LastingEffect::ShuttleDiplomacy => Superpower::Us,
-            LastingEffect::DeGaulle | LastingEffect::WeWillBuryYou { .. } | LastingEffect::WillyBrandt | LastingEffect::FlowerPower => Superpower::Ussr,
+            LastingEffect::Nato | LastingEffect::UsJapan | LastingEffect::Formosan | LastingEffect::ShuttleDiplomacy | LastingEffect::BearTrap | LastingEffect::Norad => Superpower::Us,
+            LastingEffect::DeGaulle | LastingEffect::WeWillBuryYou { .. } | LastingEffect::WillyBrandt | LastingEffect::FlowerPower | LastingEffect::Quagmire => Superpower::Ussr,
         }
     }
 
@@ -341,6 +365,9 @@ impl LastingEffect {
             LastingEffect::WillyBrandt => "Willy Brandt",
             LastingEffect::FlowerPower => "Flower Power",
             LastingEffect::ShuttleDiplomacy => "Shuttle Diplomacy",
+            LastingEffect::Quagmire => "Quagmire",
+            LastingEffect::BearTrap => "Bear Trap",
+            LastingEffect::Norad => "NORAD",
         }
     }
 }
@@ -360,6 +387,9 @@ pub struct LastingEffects {
     pub willy_brandt: bool,
     pub flower_power: bool,
     pub shuttle_diplomacy: bool,
+    pub quagmire: bool,
+    pub bear_trap: bool,
+    pub norad: bool,
 }
 
 impl LastingEffects {
@@ -378,6 +408,9 @@ impl LastingEffects {
             LastingEffect::WillyBrandt => self.willy_brandt = true,
             LastingEffect::FlowerPower => self.flower_power = true,
             LastingEffect::ShuttleDiplomacy => self.shuttle_diplomacy = true,
+            LastingEffect::Quagmire => self.quagmire = true,
+            LastingEffect::BearTrap => self.bear_trap = true,
+            LastingEffect::Norad => self.norad = true,
         }
     }
 
@@ -392,6 +425,9 @@ impl LastingEffects {
             LastingEffect::WillyBrandt => self.willy_brandt = false,
             LastingEffect::FlowerPower => self.flower_power = false,
             LastingEffect::ShuttleDiplomacy => self.shuttle_diplomacy = false,
+            LastingEffect::Quagmire => self.quagmire = false,
+            LastingEffect::BearTrap => self.bear_trap = false,
+            LastingEffect::Norad => self.norad = false,
         }
     }
 
@@ -422,7 +458,26 @@ impl LastingEffects {
         if self.shuttle_diplomacy {
             v.push(LastingEffect::ShuttleDiplomacy);
         }
+        if self.quagmire {
+            v.push(LastingEffect::Quagmire);
+        }
+        if self.bear_trap {
+            v.push(LastingEffect::BearTrap);
+        }
+        if self.norad {
+            v.push(LastingEffect::Norad);
+        }
         v
+    }
+
+    /// Which side's action rounds are currently escape attempts (Quagmire: the US; Bear Trap: the USSR),
+    /// and the card responsible.
+    pub fn trap_on(&self, side: Superpower) -> Option<LastingEffect> {
+        match side {
+            Superpower::Us if self.quagmire => Some(LastingEffect::Quagmire),
+            Superpower::Ussr if self.bear_trap => Some(LastingEffect::BearTrap),
+            _ => None,
+        }
     }
 
     /// The card that bars `attacker` from coup/realign rolls (or Brush War)

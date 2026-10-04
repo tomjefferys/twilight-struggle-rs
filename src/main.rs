@@ -33,7 +33,7 @@ const COMMANDS: &[&str] = &[
     "map", "world", "worldmap", "wm", "region", "country", "set", "add", "remove", "clear", "blank", "load", "save", "states", "play",
     "influence", "realign", "coup", "event", "place", "roll", "undo", "confirm", "cancel", "abandon", "status", "pass", "ai", "hand",
     "card", "log", "history", "export", "seed", "width", "color", "debug", "vp", "defcon", "turn", "ar", "active", "china", "give",
-    "discard", "exile", "help", "+", "-", "take", "mode", "space", "spacerace", "track",
+    "discard", "exile", "help", "+", "-", "take", "mode", "space", "spacerace", "track", "escape", "defuse",
 ];
 
 struct Session {
@@ -227,6 +227,14 @@ fn main() {
 /// If `session.ai_side` names whoever's active right now, plays that turn
 /// — a no-op otherwise (no AI side set, or it's the human's turn).
 fn maybe_run_ai_turn(session: &mut Session) {
+    // What the last action round set off (NORAD) needs the map to settle.
+    if session.game.settlement_due() {
+        session.game.settle(&session.map);
+        if session.game.operation().is_some() {
+            println!("NORAD: the US adds 1 influence to a country where it has some");
+            print_event_prompt(session);
+        }
+    }
     // `decider`, not `active`: an event's chooser is the card's own side.
     // A few rounds, since one human move can hand the AI an event to
     // resolve *and* then its own turn straight after.
@@ -668,6 +676,8 @@ fn run_command(session: &mut Session, line: &str) {
         "abandon" => run_abandon_command(session),
         "status" => run_status_command(session),
         "pass" => run_pass_command(session),
+        "escape" => run_escape_command(session, &words),
+        "defuse" => run_defuse_command(session, &words),
         "ai" => run_ai_command(session, &words),
         "hand" => run_hand_command(session, &words),
         "card" => run_card_command(session, &words),
@@ -1472,6 +1482,52 @@ fn run_status_command(session: &Session) {
 
 /// `pass` forfeits the active side's turn without opening an operation.
 /// Refused while one is already open — cancel it first.
+/// `escape <card>`: a trapped side's (Bear Trap, Quagmire) whole action round — discard an
+/// Operations card worth 2+ and roll 1-4.
+fn run_escape_command(session: &mut Session, words: &[&str]) {
+    if session.game.trap().is_none() {
+        println!("no trap is holding this action round");
+        return;
+    }
+    let query = words[1..].join(" ");
+    let id = match session.cards.find(&query) {
+        CardFound::One(id) => id,
+        CardFound::None => {
+            println!("usage: escape <card to discard> (an Operations card worth 2+)");
+            return;
+        }
+        CardFound::Ambiguous(ids) => {
+            let names: Vec<&str> = ids.iter().map(|&id| session.cards.card(id).name.as_str()).collect();
+            println!("ambiguous: {}", names.join(", "));
+            return;
+        }
+    };
+    match session.game.escape_trap(&mut session.dice, id) {
+        Ok(r) => println!("{}", twilight_struggle::render::trap_result_line(&session.cards, &r)),
+        Err(e) => println!("{e}"),
+    }
+}
+
+/// `defuse <country>`: Cuban Missile Crisis's way out.
+fn run_defuse_command(session: &mut Session, words: &[&str]) {
+    let query = words[1..].join(" ");
+    let id = match session.map.find(&query) {
+        Found::One(id) => id,
+        Found::None => {
+            println!("usage: defuse <country> (Cuba for the USSR; West Germany or Turkey for the US)");
+            return;
+        }
+        Found::Ambiguous(ids) => {
+            print_ambiguous(session, &ids);
+            return;
+        }
+    };
+    match session.game.defuse_crisis(&session.map, id) {
+        Ok(()) => println!("Cuban Missile Crisis defused"),
+        Err(e) => println!("{e}"),
+    }
+}
+
 fn run_pass_command(session: &mut Session) {
     let passing = session.game.active();
     match session.game.pass() {
@@ -1613,6 +1669,15 @@ Commands:
                           moves the marker and pays the box's VP. The card
                           is discarded either way and the turn passes.
   spacerace               show the space race track, markers and perks
+
+  escape <card>           while Bear Trap (USSR) or Quagmire (US) holds your
+                          action round: discard that Operations card (worth
+                          2+) and roll — 1-4 ends the trap. The round is
+                          spent either way. With no such card, play your
+                          scoring cards, then pass.
+  defuse <country>        Cuban Missile Crisis: the threatened side removes
+                          2 of its own influence from Cuba (USSR) or West
+                          Germany/Turkey (US), any time between operations.
 
   event                   play the card in play for its text. Cards with a
                           choice (Comecon, Marshall Plan, Truman Doctrine…)

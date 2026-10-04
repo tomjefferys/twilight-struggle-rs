@@ -119,7 +119,7 @@ pub fn render_status_bar_with(
                 (line, side_style(e.chooser()).bold())
             }
             (_, Some(operation @ Operation::Event(e))) => {
-                let name = card.map(|c| c.name.as_str()).unwrap_or("?");
+                let name = card.map(|c| c.name.as_str()).unwrap_or(if e.is_triggered() { "NORAD" } else { "?" });
                 let n = e.modes().len();
                 let keys = match (e.mode(), e.is_designation()) {
                     _ if e.needs_roll() && e.is_participation() => format!("r roll the dice · 1-{n} change · ⌫ clear"),
@@ -172,7 +172,17 @@ pub fn render_status_bar_with(
                 format!("playing {} ({}) — i influence · a realign · o coup{} · ⌫ return card", card.name, ops_text(status, card), space_hint(card)),
                 Style::color(Color::Selected),
             ),
-            (None, None) => (PLAY_HINT.to_string(), Style::color(Color::Muted)),
+            (None, None) => match status.lasting.trap_on(status.active) {
+                Some(trap) => (
+                    format!(
+                        "{} traps {} · space discard a 2+ ops card and roll (1-4 escapes) · no such card: play scoring cards, then p",
+                        trap.label(),
+                        status.active
+                    ),
+                    side_style(status.active).bold(),
+                ),
+                None => (PLAY_HINT.to_string(), Style::color(Color::Muted)),
+            },
         }
     };
 

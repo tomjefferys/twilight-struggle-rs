@@ -307,7 +307,10 @@ const EFFECTS: &[(u8, Effect)] = &[
     (39, arms_race),
     (35, formosan_resolution),
     (80, one_small_step),
+    (40, cuban_missile_crisis),
     (41, nuclear_subs),
+    (42, quagmire),
+    (44, bear_trap),
     (45, summit),
     (48, kitchen_debates),
     (50, we_will_bury_you),
@@ -344,6 +347,7 @@ const EFFECTS: &[(u8, Effect)] = &[
     (101, solidarity),
     (103, defectors),
     (104, the_cambridge_five),
+    (106, norad),
     (107, che),
     (109, yuri_and_samantha),
     (110, awacs_sale_to_saudis),
@@ -664,6 +668,30 @@ fn olympic_games(_: &mut Ctx) {}
 /// #45 Summit on a tied roll: nothing happens. (A winner picks DEFCON through
 /// `EventChoice::summit`.)
 fn summit(_: &mut Ctx) {}
+
+/// #40 Cuban Missile Crisis: DEFCON 2; the opponent loses the game if it coups this turn, unless it
+/// defuses the crisis (`Game::defuse_crisis`).
+fn cuban_missile_crisis(c: &mut Ctx) {
+    c.set_defcon(2);
+    let by = c.player();
+    c.start(OngoingEffect::CubanMissileCrisis { by });
+}
+
+/// #42 Quagmire: the US's action rounds become escape attempts (`Game::escape_trap`); cancels NORAD.
+fn quagmire(c: &mut Ctx) {
+    c.persist(LastingEffect::Quagmire);
+    c.cancel(LastingEffect::Norad);
+}
+
+/// #44 Bear Trap: the USSR's action rounds become escape attempts.
+fn bear_trap(c: &mut Ctx) {
+    c.persist(LastingEffect::BearTrap);
+}
+
+/// #106 NORAD: +1 US influence after an action round that moves DEFCON to 2 (`Game::norad_check`).
+fn norad(c: &mut Ctx) {
+    c.persist(LastingEffect::Norad);
+}
 
 /// #21 NATO: the USSR can't coup or realign US-controlled Europe.
 fn nato(c: &mut Ctx) {

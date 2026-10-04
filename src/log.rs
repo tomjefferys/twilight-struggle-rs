@@ -67,6 +67,10 @@ pub enum Event {
     /// A card spent on a space race attempt, with the VP track's new value
     /// — logged the instant it resolves, which is also when the turn ends.
     Space { result: SpaceResult, vp_after: i8 },
+    /// A trapped side's action round (Bear Trap, Quagmire): the discard, the die, the outcome.
+    Trap(crate::game::TrapResult),
+    /// Cuban Missile Crisis ended by its threatened side removing 2 of its own influence.
+    Defused { side: crate::country::Superpower, country: CountryId },
     /// An operation closed — `confirm`'s or `cancel`'s own entry. A
     /// realignment's or coup's rolls are already in the log as their own
     /// entries by the time this is pushed; a placement's points arrive in

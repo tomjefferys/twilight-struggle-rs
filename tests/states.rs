@@ -3148,3 +3148,283 @@ mod contests {
         }
     }
 }
+
+/// Bear Trap / Quagmire (escape attempts), NORAD (an end-of-round trigger) and Cuban Missile Crisis.
+mod rounds {
+    use super::*;
+    use twilight_struggle::game::{GameError, Trap};
+    use twilight_struggle::ops::Operation;
+    use twilight_struggle::{Action, CountryId, Dice, OperationKind};
+
+    fn load(state: &str) -> (WorldMap, CardCatalog, Game) {
+        let (map, cards, lib) = fixtures();
+        let (scenario, _) = lib.load(&map, &cards, &format!("events/{state}")).unwrap_or_else(|e| panic!("{state}: {e}"));
+        (map, cards, Game::from_scenario(&scenario))
+    }
+
+    fn id(map: &WorldMap, name: &str) -> CountryId {
+        map.id_by_name(name).unwrap_or_else(|| panic!("no country {name}"))
+    }
+
+    /// A seed whose first roll satisfies `ok`.
+    fn seed_where(ok: impl Fn(u8) -> bool) -> u64 {
+        (0..10_000).find(|&s| ok(Dice::from_seed(s).roll())).unwrap()
+    }
+
+    fn card(cards: &CardCatalog, name: &str) -> twilight_struggle::CardId {
+        cards.id_by_name(name).unwrap()
+    }
+
+    #[test]
+    fn playing_bear_trap_sets_the_trap_and_removes_the_card() {
+        let (map, cards, mut game) = load("bear-trap");
+        game.play_card(&cards, card(&cards, "Bear Trap")).unwrap();
+        game.play_event(&map, &cards).unwrap();
+        assert!(game.status().lasting.bear_trap && !game.status().lasting.quagmire);
+        assert!(game.removed_from_game().contains(&card(&cards, "Bear Trap")));
+        assert_eq!(game.active(), Superpower::Ussr);
+        assert!(matches!(game.trap(), Some((_, Trap::Escape(c))) if c == vec![card(&cards, "Fidel"), card(&cards, "Socialist Governments")]));
+    }
+
+    #[test]
+    fn a_trapped_side_must_escape_instead_of_playing_or_passing() {
+        let (_, cards, mut game) = load("bear-trap-active");
+        assert!(matches!(game.play_card(&cards, card(&cards, "Fidel")), Err(GameError::Trap(_))));
+        assert!(matches!(game.play_card(&cards, card(&cards, "Asia Scoring")), Err(GameError::Trap(_))));
+        assert!(matches!(game.pass(), Err(GameError::Trap(_))));
+        // Only discards of 2+ ops cards are offered to an AI.
+        let (map, cards2, _) = load("bear-trap-active");
+        let legal = game.legal_actions(&map, &cards2);
+        assert_eq!(legal, vec![Action::Escape(card(&cards, "Fidel")), Action::Escape(card(&cards, "Socialist Governments"))]);
+    }
+
+    #[test]
+    fn rolling_one_to_four_escapes_and_spends_the_round() {
+        let (_, cards, mut game) = load("bear-trap-active");
+        let mut dice = Dice::from_seed(seed_where(|r| r <= 4));
+        let fidel = card(&cards, "Fidel");
+        assert!(matches!(game.escape_trap(&mut dice, card(&cards, "Asia Scoring")), Err(GameError::Trap(_))), "a scoring card can't be discarded");
+        let result = game.escape_trap(&mut dice, fidel).unwrap();
+        assert!(result.escaped && result.roll <= 4);
+        assert!(!game.status().lasting.bear_trap);
+        assert!(game.discards().contains(&fidel) && !game.hand(Superpower::Ussr).contains(&fidel));
+        assert_eq!(game.active(), Superpower::Us, "the escape attempt was the USSR's whole round");
+        assert!(game.trap().is_none());
+    }
+
+    #[test]
+    fn rolling_five_or_six_stays_trapped_until_the_next_round() {
+        let (_, cards, mut game) = load("bear-trap-active");
+        let mut dice = Dice::from_seed(seed_where(|r| r >= 5));
+        let result = game.escape_trap(&mut dice, card(&cards, "Fidel")).unwrap();
+        assert!(!result.escaped && result.roll >= 5);
+        assert!(game.status().lasting.bear_trap);
+        assert_eq!(game.active(), Superpower::Us);
+        // The US plays its card; the USSR is trapped again.
+        game.play_card(&cards, card(&cards, "Duck and Cover")).unwrap();
+        game.begin(OperationKind::Influence).unwrap();
+        game.confirm().unwrap();
+        assert_eq!(game.active(), Superpower::Ussr);
+        assert!(matches!(game.trap(), Some((_, Trap::Escape(c))) if c == vec![card(&cards, "Socialist Governments")]));
+    }
+
+    #[test]
+    fn with_no_card_to_discard_only_scoring_cards_can_be_played_then_the_round_is_skipped() {
+        let (map, cards, mut game) = load("bear-trap-no-ops-card");
+        assert!(matches!(game.trap(), Some((_, Trap::PlayScoring))));
+        assert!(matches!(game.play_card(&cards, card(&cards, "Nasser")), Err(GameError::Trap(_))));
+        assert!(matches!(game.pass(), Err(GameError::Trap(_))));
+        assert_eq!(game.legal_actions(&map, &cards), vec![Action::PlayCard(card(&cards, "Asia Scoring"))]);
+        game.play_card(&cards, card(&cards, "Asia Scoring")).unwrap();
+        game.play_event(&map, &cards).unwrap();
+        // Back round to the USSR: nothing to discard or score — skip.
+        game.play_card(&cards, card(&cards, "Duck and Cover")).unwrap();
+        game.begin(OperationKind::Influence).unwrap();
+        game.confirm().unwrap();
+        assert!(matches!(game.trap(), Some((_, Trap::Skip))));
+        assert_eq!(game.legal_actions(&map, &cards), vec![Action::Pass]);
+        game.pass().unwrap();
+        assert_eq!(game.active(), Superpower::Us);
+    }
+
+    #[test]
+    fn a_hand_with_nothing_playable_just_skips() {
+        let (map, cards, mut game) = load("bear-trap-nothing-to-play");
+        assert!(matches!(game.trap(), Some((_, Trap::Skip))));
+        assert_eq!(game.legal_actions(&map, &cards), vec![Action::Pass]);
+        game.pass().unwrap();
+        assert_eq!(game.active(), Superpower::Us);
+    }
+
+    #[test]
+    fn quagmire_traps_the_us_and_ends_norad() {
+        let (map, cards, mut game) = load("quagmire");
+        assert!(game.status().lasting.norad);
+        game.play_card(&cards, card(&cards, "Quagmire")).unwrap();
+        game.play_event(&map, &cards).unwrap();
+        assert!(game.status().lasting.quagmire && !game.status().lasting.norad);
+        assert_eq!(game.active(), Superpower::Us);
+        assert!(matches!(game.trap(), Some((_, Trap::Escape(c))) if c == vec![card(&cards, "Duck and Cover"), card(&cards, "Fidel")]));
+    }
+
+    #[test]
+    fn the_us_under_quagmire_discards_a_two_plus_ops_card() {
+        let (_, cards, mut game) = load("quagmire-active");
+        // Truman Doctrine is 1 op, so only Duck and Cover can go.
+        assert!(matches!(game.trap(), Some((_, Trap::Escape(c))) if c == vec![card(&cards, "Duck and Cover")]));
+        let mut dice = Dice::from_seed(seed_where(|r| r <= 4));
+        assert!(game.escape_trap(&mut dice, card(&cards, "Truman Doctrine")).is_err());
+        assert!(game.escape_trap(&mut dice, card(&cards, "Duck and Cover")).unwrap().escaped);
+        assert!(!game.status().lasting.quagmire);
+    }
+
+    #[test]
+    fn the_ai_gets_out_of_a_trap_without_stalling() {
+        use twilight_struggle::{play_turn, RandomAi};
+        for seed in 0..20 {
+            for state in ["bear-trap-active", "bear-trap-no-ops-card", "bear-trap-nothing-to-play"] {
+                let (map, cards, mut game) = load(state);
+                let mut ai = RandomAi::from_seed(seed);
+                let mut dice = Dice::from_seed(seed);
+                play_turn(&mut ai, &mut game, &map, &cards, &mut dice).unwrap();
+                assert_eq!(game.active(), Superpower::Us, "{state} seed {seed}");
+            }
+        }
+    }
+
+    #[test]
+    fn norad_adds_us_influence_after_a_round_that_moved_defcon_to_two() {
+        let (map, cards, mut game) = load("norad-active");
+        game.play_card(&cards, card(&cards, "Duck and Cover")).unwrap();
+        game.play_event(&map, &cards).unwrap();
+        assert_eq!(game.status().defcon, 2);
+        assert!(game.settlement_due());
+        assert!(matches!(game.legal_actions(&map, &cards).as_slice(), [Action::Settle]));
+        assert!(matches!(game.play_card(&cards, card(&cards, "Fidel")), Err(GameError::Trap(_))), "the trigger has to be settled first");
+        game.settle(&map);
+        let Some(Operation::Event(e)) = game.operation() else { panic!("NORAD opens an event") };
+        assert!(e.is_triggered() && e.chooser() == Superpower::Us);
+        assert_eq!(game.decider(), Superpower::Us);
+        let (canada, italy, france) = (id(&map, "Canada"), id(&map, "Italy"), id(&map, "France"));
+        assert!(game.place(&map, france).is_err(), "only countries already holding US influence");
+        game.place(&map, italy).unwrap();
+        assert!(game.place(&map, canada).is_err(), "a single country");
+        assert!(game.abandon().is_err(), "the trigger can't be backed out of");
+        let turn = (game.status().turn, game.status().action_round, game.active());
+        game.confirm().unwrap();
+        assert_eq!(game.board().influence(italy, Superpower::Us), 2);
+        assert_eq!((game.status().turn, game.status().action_round, game.active()), turn, "no card was spent and no turn handed over");
+        assert!(game.operation().is_none());
+    }
+
+    #[test]
+    fn norad_needs_canada() {
+        let (map, cards, mut game) = load("norad-no-canada");
+        game.play_card(&cards, card(&cards, "Duck and Cover")).unwrap();
+        game.play_event(&map, &cards).unwrap();
+        assert_eq!(game.status().defcon, 2);
+        game.settle(&map);
+        assert!(game.operation().is_none() && !game.settlement_due());
+    }
+
+    #[test]
+    fn norad_only_fires_when_the_round_moved_defcon_to_two() {
+        let (_, cards, mut game) = load("norad-active");
+        // An ordinary round that leaves DEFCON at 3.
+        game.play_card(&cards, card(&cards, "Socialist Governments")).unwrap();
+        game.begin(OperationKind::Influence).unwrap();
+        game.confirm().unwrap();
+        assert_eq!(game.status().defcon, 3);
+        assert!(!game.settlement_due());
+    }
+
+    #[test]
+    fn the_ai_settles_norad_and_plays_on() {
+        use twilight_struggle::{play_turn, RandomAi};
+        for seed in 0..20 {
+            let (map, cards, mut game) = load("norad-active");
+            game.play_card(&cards, card(&cards, "Duck and Cover")).unwrap();
+            game.play_event(&map, &cards).unwrap();
+            let mut ai = RandomAi::from_seed(seed);
+            let mut dice = Dice::from_seed(seed);
+            for _ in 0..4 {
+                if game.winner().is_none() {
+                    play_turn(&mut ai, &mut game, &map, &cards, &mut dice).unwrap();
+                }
+            }
+            assert!(!game.settlement_due(), "seed {seed}");
+        }
+    }
+
+    #[test]
+    fn cuban_missile_crisis_sets_defcon_two_and_forbids_the_opponents_coups() {
+        let (map, cards, mut game) = load("cuban-missile-crisis");
+        game.play_card(&cards, card(&cards, "Cuban Missile Crisis")).unwrap();
+        game.play_event(&map, &cards).unwrap();
+        assert_eq!(game.status().defcon, 2);
+        assert_eq!(game.status().effects.cuban_missile_crisis, Some(Superpower::Us));
+        assert!(game.status().effects.coup_forbidden(Superpower::Ussr) && !game.status().effects.coup_forbidden(Superpower::Us));
+        assert!(game.removed_from_game().contains(&card(&cards, "Cuban Missile Crisis")));
+    }
+
+    #[test]
+    fn a_coup_during_the_crisis_loses_the_game() {
+        let (map, cards, mut game) = load("cuban-missile-crisis-active");
+        game.play_card(&cards, card(&cards, "Socialist Governments")).unwrap();
+        // The AI is never offered the coup.
+        game.begin(OperationKind::Coup).unwrap();
+        game.roll(&map, id(&map, "Honduras"), &mut Dice::from_seed(1)).unwrap();
+        assert_eq!(game.winner(), Some(Victory { side: Superpower::Us, reason: VictoryReason::CubanMissileCrisis }));
+    }
+
+    #[test]
+    fn legal_actions_never_offer_the_losing_coup() {
+        let (map, cards, mut game) = load("cuban-missile-crisis-active");
+        game.play_card(&cards, card(&cards, "Socialist Governments")).unwrap();
+        let legal = game.legal_actions(&map, &cards);
+        assert!(!legal.contains(&Action::Begin(OperationKind::Coup)));
+        assert!(legal.contains(&Action::Begin(OperationKind::Realign)));
+    }
+
+    #[test]
+    fn the_threatened_side_can_defuse_the_crisis() {
+        let (map, cards, mut game) = load("cuban-missile-crisis-active");
+        let cuba = id(&map, "Cuba");
+        assert!(matches!(game.defuse_crisis(&map, id(&map, "Honduras")), Err(GameError::Trap(_))), "only Cuba for the USSR");
+        game.defuse_crisis(&map, cuba).unwrap();
+        assert_eq!(game.board().influence(cuba, Superpower::Ussr), 1);
+        assert_eq!(game.status().effects.cuban_missile_crisis, None);
+        // The USSR may coup freely now.
+        game.play_card(&cards, card(&cards, "Socialist Governments")).unwrap();
+        game.begin(OperationKind::Coup).unwrap();
+        game.roll(&map, id(&map, "Honduras"), &mut Dice::from_seed(1)).unwrap();
+        assert!(game.winner().is_none());
+        // A second defuse has nothing to defuse.
+        assert!(game.defuse_crisis(&map, cuba).is_err());
+    }
+
+    #[test]
+    fn defusing_needs_two_influence_to_remove() {
+        let (map, _, mut game) = load("cuban-missile-crisis-active");
+        let cuba = id(&map, "Cuba");
+        game.board_mut().set_influence(cuba, Superpower::Ussr, 1);
+        assert!(matches!(game.defuse_crisis(&map, cuba), Err(GameError::Trap(_))));
+        assert_eq!(game.status().effects.cuban_missile_crisis, Some(Superpower::Us));
+    }
+
+    #[test]
+    fn the_us_defuses_its_own_crisis_through_west_germany_or_turkey() {
+        let (map, cards, mut game) = load("cuban-missile-crisis");
+        // The USSR plays the crisis against the US.
+        game.status_mut().active = Superpower::Ussr;
+        game.play_card(&cards, card(&cards, "Fidel")).unwrap();
+        game.return_card().unwrap();
+        game.status_mut().effects.cuban_missile_crisis = Some(Superpower::Ussr);
+        let (wg, turkey, cuba) = (id(&map, "West Germany"), id(&map, "Turkey"), id(&map, "Cuba"));
+        assert!(game.defuse_crisis(&map, cuba).is_err());
+        game.defuse_crisis(&map, turkey).unwrap();
+        assert_eq!(game.board().influence(turkey, Superpower::Us), 0);
+        assert_eq!(game.board().influence(wg, Superpower::Us), 3);
+        assert_eq!(game.status().effects.cuban_missile_crisis, None);
+    }
+}

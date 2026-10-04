@@ -76,6 +76,37 @@ pub enum VictoryReason {
     Defcon,
     /// Wargames: the player ended the game, the VP leader winning.
     Wargames,
+    /// A coup while Cuban Missile Crisis was in force: the coup-maker's opponent wins.
+    CubanMissileCrisis,
+}
+
+/// What a side whose action rounds are escape attempts (Bear Trap, Quagmire) has to do with this one.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Trap {
+    /// Discard one of these (Operations cards worth 2+) and roll 1-4 to escape.
+    Escape(Vec<CardId>),
+    /// No such card: play the scoring cards held, one per round.
+    PlayScoring,
+    /// Nothing to discard and nothing to play: the round is skipped (`pass`).
+    Skip,
+}
+
+/// One escape attempt: the card discarded, the die, and whether it sprang the trap.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TrapResult {
+    /// Bear Trap or Quagmire.
+    pub trap: CardId,
+    pub side: Superpower,
+    pub discarded: CardId,
+    pub roll: u8,
+    pub escaped: bool,
+}
+
+/// The standard deck, parsed once — for rules (the trap's "2+ Operations card") that only have a
+/// card id to go on.
+fn standard_cards() -> &'static CardCatalog {
+    static CARDS: std::sync::OnceLock<CardCatalog> = std::sync::OnceLock::new();
+    CARDS.get_or_init(|| CardCatalog::standard().expect("the standard deck loads"))
 }
 
 /// The game is over: who won, and why.
@@ -170,6 +201,8 @@ pub enum GameError {
     /// [`Game::play_event`] refused: the card's event draws on chance, so it needs
     /// [`Game::play_event_with`]'s dice.
     NeedsDice { card: CardId },
+    /// A trap, a pending trigger or a crisis rule refused this: the message says what to do instead.
+    Trap(String),
     /// [`Game::play_event`] refused: this card's event can't be played in the Late War.
     EventTooLate { card: CardId },
     /// [`Game::begin`] refused: the card's event only allows `allowed`.
@@ -215,6 +248,7 @@ impl fmt::Display for GameError {
             }
             GameError::EventPlayed { card } => write!(f, "card #{card}'s event has already been played — conduct its operation, or pass to skip it"),
             GameError::NeedsDice { card } => write!(f, "card #{card}'s event draws on chance — play it with dice"),
+            GameError::Trap(text) => write!(f, "{text}"),
             GameError::EventTooLate { card } => write!(f, "card #{card}'s event can't be played in the Late War"),
             GameError::OpsNotGranted { allowed } => write!(f, "this card's event only allows {allowed}"),
             GameError::WarNotRolled => write!(f, "a war ends when it's rolled on a target (roll <country>), or abandoned"),
@@ -311,6 +345,10 @@ pub struct Game {
     log: GameLog,
     hands: Hands,
     winner: Option<Victory>,
+    /// DEFCON when the current action round began, for NORAD's "moved to 2 during that round".
+    round_defcon: u8,
+    /// NORAD may be owed at the end of the last action round; [`Game::settle`] decides.
+    norad_due: bool,
 }
 
 impl Game {
@@ -325,6 +363,8 @@ impl Game {
             log: GameLog::new(),
             hands: scenario.hands.clone(),
             winner: None,
+            round_defcon: scenario.status.defcon,
+            norad_due: false,
         }
     }
 
@@ -385,6 +425,8 @@ impl Game {
             log: GameLog::new(),
             hands: self.hands.clone(),
             winner: self.winner,
+            round_defcon: self.round_defcon,
+            norad_due: self.norad_due,
         }
     }
 
@@ -576,6 +618,16 @@ impl Game {
         }
         if let Some(op) = &self.op {
             return Err(GameError::OperationOpen { verb: op.verb(), remaining: op.remaining(), total: op.ops_total() });
+        }
+        self.trigger_guard()?;
+        if let Some((fx, trap)) = self.trap() {
+            match trap {
+                Trap::Escape(_) => return Err(GameError::Trap(format!("{} has {} trapped — discard an Operations card worth 2+ and roll to escape", fx.label(), self.status.active))),
+                Trap::PlayScoring if !events::scoring::is_scoring_card(id) => {
+                    return Err(GameError::Trap(format!("{} has {} trapped with no card to discard — only scoring cards can be played", fx.label(), self.status.active)))
+                }
+                Trap::PlayScoring | Trap::Skip => {}
+            }
         }
         let side = self.status.active;
         let card = cards.card(id);
@@ -769,6 +821,9 @@ impl Game {
             self.apply_vp(delta);
             aftermath.vp = Some((delta, self.status.vp));
         }
+        if self.status.effects.coup_forbidden(side) {
+            self.set_winner(side.opponent(), VictoryReason::CubanMissileCrisis);
+        }
         if !aftermath.is_empty() {
             self.log.push(LogEntry {
                 turn: self.status.turn,
@@ -829,6 +884,10 @@ impl Game {
                 return Ok(op);
             }
             let result = e.into_result(&self.status);
+            if e.is_triggered() {
+                self.finish_triggered(result);
+                return Ok(op);
+            }
             self.finish_effect(result, e.grant());
             return Ok(op);
         }
@@ -1012,6 +1071,113 @@ impl Game {
         Ok(space::check(&self.status, side, card.id == CHINA_CARD, card.scoring, ops)?)
     }
 
+    /// What the active side's trap (Bear Trap for the USSR, Quagmire for the US) asks of this action
+    /// round, if one is in force and nothing has been played yet.
+    pub fn trap(&self) -> Option<(LastingEffect, Trap)> {
+        if self.winner.is_some() || self.card.is_some() || self.op.is_some() {
+            return None;
+        }
+        let side = self.status.active;
+        let effect = self.status.lasting.trap_on(side)?;
+        let cards = standard_cards();
+        let hand = self.hands.hand(side);
+        let discardable: Vec<CardId> = hand.iter().copied().filter(|&c| !cards.card(c).scoring && cards.card(c).ops >= 2).collect();
+        Some((
+            effect,
+            if !discardable.is_empty() {
+                Trap::Escape(discardable)
+            } else if hand.iter().any(|&c| cards.card(c).scoring) {
+                Trap::PlayScoring
+            } else {
+                Trap::Skip
+            },
+        ))
+    }
+
+    /// The trapped side's whole action round: discards `discard`, rolls a die, and escapes (the
+    /// trap card ends) on 1-4. Either way the round is spent.
+    pub fn escape_trap(&mut self, dice: &mut Dice, discard: CardId) -> Result<TrapResult, GameError> {
+        self.trigger_guard()?;
+        let Some((effect, trap)) = self.trap() else {
+            return Err(GameError::Trap("no trap is holding this action round".into()));
+        };
+        let Trap::Escape(candidates) = trap else {
+            return Err(GameError::Trap(format!("{} has nothing to discard — play your scoring cards or pass", self.status.active)));
+        };
+        if !candidates.contains(&discard) {
+            return Err(GameError::Trap("discard an Operations card worth 2 or more".into()));
+        }
+        let side = self.status.active;
+        self.hands.remove(side, discard);
+        self.hands.discard(discard);
+        let roll = dice.roll();
+        let escaped = roll <= 4;
+        if escaped {
+            self.status.lasting.cancel(effect);
+        }
+        let result = TrapResult { trap: effect.card(), side, discarded: discard, roll, escaped };
+        self.log.push(LogEntry { turn: self.status.turn, action_round: self.status.action_round, side: Some(side), event: Event::Trap(result) });
+        self.advance();
+        Ok(result)
+    }
+
+    /// Cuban Missile Crisis's way out, any time between operations: the threatened side removes 2
+    /// of its own influence from Cuba (USSR) or West Germany/Turkey (US) and the event ends.
+    pub fn defuse_crisis(&mut self, map: &WorldMap, country: CountryId) -> Result<(), GameError> {
+        if let Some(op) = &self.op {
+            return Err(GameError::OperationOpen { verb: op.verb(), remaining: op.remaining(), total: op.ops_total() });
+        }
+        let Some(by) = self.status.effects.cuban_missile_crisis else {
+            return Err(GameError::Trap("Cuban Missile Crisis isn't in force".into()));
+        };
+        let side = by.opponent();
+        let name = map.country(country).name.as_str();
+        let (ok, wanted) = match side {
+            Superpower::Ussr => (name == "Cuba", "Cuba"),
+            Superpower::Us => (name == "West Germany" || name == "Turkey", "West Germany or Turkey"),
+        };
+        if !ok {
+            return Err(GameError::Trap(format!("{side} can defuse the crisis only by removing 2 influence from {wanted}")));
+        }
+        let have = self.board.influence(country, side);
+        if have < 2 {
+            return Err(GameError::Trap(format!("{side} needs 2 influence in {name} to defuse the crisis (has {have})")));
+        }
+        self.board.set_influence(country, side, have - 2);
+        self.status.effects.cuban_missile_crisis = None;
+        self.log.push(LogEntry { turn: self.status.turn, action_round: self.status.action_round, side: Some(side), event: Event::Defused { side, country } });
+        Ok(())
+    }
+
+    /// Refuses a move while NORAD's trigger is waiting for [`Game::settle`].
+    fn trigger_guard(&self) -> Result<(), GameError> {
+        if self.norad_due {
+            return Err(GameError::Trap("NORAD's trigger has to be settled first".into()));
+        }
+        Ok(())
+    }
+
+    /// Whether [`Game::settle`] has something to do.
+    pub fn settlement_due(&self) -> bool {
+        self.norad_due
+    }
+
+    /// Settles what the last action round set off that needs the map: NORAD's +1 US influence
+    /// (opened as an event for the US, if it holds Canada and has influence to add to). Callers
+    /// run it after anything that can end an action round.
+    pub fn settle(&mut self, map: &WorldMap) {
+        if !std::mem::take(&mut self.norad_due) || self.winner.is_some() || self.op.is_some() {
+            return;
+        }
+        let Some(canada) = map.id_by_name("Canada") else { return };
+        if !self.board.is_controlled_by(map, canada, Superpower::Us) {
+            return;
+        }
+        if let Some(e) = EventChoice::norad(map, &self.board, &self.status) {
+            self.op = Some(Operation::Event(Box::new(e)));
+        }
+    }
+
     /// Forfeits the active side's turn without opening an operation.
     /// Refused if one is already open — cancel it first — if a card is
     /// in play (once a card's been taken from the hand, there's nothing
@@ -1023,6 +1189,12 @@ impl Game {
         }
         if let Some(op) = &self.op {
             return Err(GameError::OperationOpen { verb: op.verb(), remaining: op.remaining(), total: op.ops_total() });
+        }
+        self.trigger_guard()?;
+        if let Some((fx, trap)) = self.trap()
+            && trap != Trap::Skip
+        {
+            return Err(GameError::Trap(format!("{} has {} trapped — escape it, or play your scoring cards, before passing", fx.label(), self.status.active)));
         }
         if let Some(card) = self.card {
             // After its event, a card that allowed an operation can be
@@ -1309,6 +1481,15 @@ impl Game {
         }
     }
 
+    /// Applies the influence of an event nothing played (NORAD): no card to spend, no turn to hand over.
+    fn finish_triggered(&mut self, result: EffectResult) {
+        for change in &result.influence {
+            self.board.set_influence(change.country, change.side, change.after);
+        }
+        let vp_after = self.status.vp;
+        self.log.push(LogEntry { turn: self.status.turn, action_round: self.status.action_round, side: Some(result.player), event: Event::EventResolved { result, vp_after } });
+    }
+
     /// Applies a resolved war — influence, VP, then the beneficiary's
     /// Military Operations — logs it, discards (or removes) the card, and
     /// hands the turn over unless that ended the game.
@@ -1530,6 +1711,15 @@ impl Game {
     /// `action_round`, called from `confirm`, `cancel`, `pass` and
     /// `space` — nowhere else.
     fn advance(&mut self) {
+        // NORAD: the round that just ended moved DEFCON to 2.
+        if self.status.lasting.norad && self.status.defcon == 2 && self.round_defcon != 2 {
+            self.norad_due = true;
+        }
+        self.advance_round();
+        self.round_defcon = self.status.defcon;
+    }
+
+    fn advance_round(&mut self) {
         let round = self.status.action_round;
         match self.status.active {
             Superpower::Ussr => {
@@ -2337,8 +2527,8 @@ mod tests {
     fn play_event_refuses_a_card_whose_event_is_not_implemented_yet() {
         let map = map();
         let cards = cards();
-        let mut game = Game::from_scenario(&scenario_with_extra_card(&map, &cards, Ussr, "Quagmire"));
-        let sg = play(&mut game, &cards, "Quagmire");
+        let mut game = Game::from_scenario(&scenario_with_extra_card(&map, &cards, Ussr, "Missile Envy"));
+        let sg = play(&mut game, &cards, "Missile Envy");
         assert!(matches!(
             game.play_event(&map, &cards),
             Err(GameError::EventNotImplemented { card }) if card == sg

@@ -120,11 +120,13 @@ pub struct Eligible {
     control: Control,
     /// Neither side has any influence there.
     empty: bool,
+    /// This side must already have influence there.
+    has: Option<Superpower>,
 }
 
 impl Eligible {
     fn new(place: Where) -> Self {
-        Eligible { place, control: Control::Any, empty: false }
+        Eligible { place, control: Control::Any, empty: false, has: None }
     }
 
     fn control(mut self, control: Control) -> Self {
@@ -134,6 +136,11 @@ impl Eligible {
 
     fn empty(mut self) -> Self {
         self.empty = true;
+        self
+    }
+
+    fn with_influence_of(mut self, side: Superpower) -> Self {
+        self.has = Some(side);
         self
     }
 
@@ -147,7 +154,7 @@ impl Eligible {
             Control::NotBy(side) => controller != Some(side),
             Control::Neither => controller.is_none(),
         };
-        control_ok && (!self.empty || (base.influence(id, Superpower::Us) == 0 && base.influence(id, Superpower::Ussr) == 0))
+        control_ok && self.has.is_none_or(|side| base.influence(id, side) > 0) && (!self.empty || (base.influence(id, Superpower::Us) == 0 && base.influence(id, Superpower::Ussr) == 0))
     }
 }
 
@@ -385,6 +392,9 @@ pub struct EventChoice {
     /// Whether this is such a follow-up: the card has gone irrevocably, so
     /// its player can't back out of it.
     second_stage: bool,
+    /// Whether the event was set off by a trigger rather than a played card (NORAD): there is no
+    /// card to spend and no turn to hand over when it ends.
+    triggered: bool,
 }
 
 impl EventChoice {
@@ -421,6 +431,7 @@ impl EventChoice {
             roll_mode: None,
             follow_up: None,
             second_stage: false,
+            triggered: false,
         };
         if choice.modes.len() == 1 {
             choice.select(map, 0);
@@ -545,6 +556,24 @@ impl EventChoice {
 
     /// Whether this session is the follow-up to a declined gate, which its
     /// player can no longer back out of.
+    /// NORAD (#106): the US adds 1 influence to a country where it already has some — `None` when
+    /// it has none anywhere.
+    pub fn norad(map: &WorldMap, board: &Board, _status: &GameStatus) -> Option<Self> {
+        if !map.iter().any(|(id, _)| board.influence(id, Us) > 0) {
+            return None;
+        }
+        let spec = Spec::single(Us, "NORAD: add 1 US influence to a country containing US influence", Rule::add(Us, Eligible::new(Where::Everywhere).with_influence_of(Us), 1, 1, 1));
+        let mut choice = Self::from_spec(map, board, CardId(106), spec);
+        choice.triggered = true;
+        choice.second_stage = true;
+        Some(choice)
+    }
+
+    /// Whether a trigger, not a played card, opened this event.
+    pub fn is_triggered(&self) -> bool {
+        self.triggered
+    }
+
     pub fn is_second_stage(&self) -> bool {
         self.second_stage
     }

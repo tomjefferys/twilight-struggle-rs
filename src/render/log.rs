@@ -139,6 +139,8 @@ fn action_and_detail(map: &WorldMap, cards: &CardCatalog, entry: &LogEntry) -> (
         Event::EventResolved { result, vp_after } => ("event", event_detail(map, cards, result, *vp_after)),
         Event::War { result, vp_after } => ("war", war_detail(map, cards, result, *vp_after)),
         Event::Space { result, vp_after } => ("space", space_detail(cards, result, *vp_after)),
+        Event::Trap(r) => ("trap", format!("{}: {} discards {}, d6:{} need:≤4 — {}", cards.card(r.trap).name, r.side, cards.card(r.discarded).name, r.roll, if r.escaped { "escapes" } else { "still trapped" })),
+        Event::Defused { side, country } => ("defuse", format!("{side} removes 2 influence from {} — Cuban Missile Crisis ends", map.country(*country).name)),
         Event::GameOver(victory) => ("gameover", game_over_detail(*victory)),
     }
 }
@@ -369,6 +371,7 @@ fn game_over_detail(victory: Victory) -> String {
         VictoryReason::EuropeControl => "Europe control",
         VictoryReason::Defcon => "DEFCON 1",
         VictoryReason::Wargames => "Wargames",
+        VictoryReason::CubanMissileCrisis => "Cuban Missile Crisis",
     };
     format!("{} wins ({reason})", victory.side)
 }

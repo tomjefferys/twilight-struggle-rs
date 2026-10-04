@@ -14,10 +14,10 @@ use crossterm::{execute, queue};
 
 use twilight_struggle::render::{
     log_entry_line, operation_abandoned_line, operation_closed_line, operation_header, render_card, render_country, render_hand,
-    render_event_result, render_event_session, render_space_confirm, render_space_result, render_space_track_with_hint, render_war_result, render_region, render_roll_result, render_scoring_result, render_status_bar_with, render_world_map, Canvas, RollReport, HAND_ROWS,
+    render_event_result, render_event_session, render_space_confirm, render_space_result, render_trap_confirm, render_trap_result, render_space_track_with_hint, render_war_result, render_region, render_roll_result, render_scoring_result, render_status_bar_with, render_world_map, Canvas, RollReport, HAND_ROWS,
 };
 use twilight_struggle::events::{EffectResult, ScoringResult, WarResult};
-use twilight_struggle::game::Victory;
+use twilight_struggle::game::{Trap, TrapResult, Victory};
 use twilight_struggle::space::SpaceResult;
 use twilight_struggle::ops::Operation;
 use twilight_struggle::{
@@ -53,6 +53,10 @@ enum Modal {
     /// it's drawn live from the card in play and the status, and Enter
     /// rolls only if [`Game::can_space`].
     SpaceConfirm,
+    /// The confirmation before a trapped side discards this card and rolls to escape.
+    TrapConfirm(CardId),
+    /// A resolved escape attempt.
+    Trap(TrapResult),
     /// An open event that runs in a modal of its own (Summit's roll-off): drawn live from the
     /// event, keyed by `r` (roll), digits (choose), `c` (confirm and close), ⌫ (back).
     Session,
@@ -283,6 +287,25 @@ pub fn run(
                         draw(&screen, map, layout, cards, game, message.as_deref(), &hand_selected, zoomed, &modal, color)?;
                         continue;
                     }
+                    if let Some(&Modal::TrapConfirm(card)) = modal.front() {
+                        match key.code {
+                            KeyCode::Enter | KeyCode::Char('r') => {
+                                modal.pop_front();
+                                match game.escape_trap(dice, card) {
+                                    Ok(result) => modal.push_back(Modal::Trap(result)),
+                                    Err(e) => message = Some(e.to_string()),
+                                }
+                            }
+                            KeyCode::Esc | KeyCode::Backspace => {
+                                modal.pop_front();
+                            }
+                            KeyCode::Char('q') => return Ok(()),
+                            _ => {}
+                        }
+                        maybe_run_ai_turn(ai_side, ai, game, map, cards, dice, &mut message, &mut sticky, &mut zoomed, &mut modal);
+                        draw(&screen, map, layout, cards, game, message.as_deref(), &hand_selected, zoomed, &modal, color)?;
+                        continue;
+                    }
                     if matches!(modal.front(), Some(Modal::SpaceConfirm)) {
                         // A confirmation, not a result: Enter rolls (only
                         // when allowed — otherwise it does nothing and the
@@ -333,7 +356,7 @@ pub fn run(
                         KeyCode::Char('q') => return Ok(()),
                         KeyCode::Char('z') => zoomed = false,
                         KeyCode::Char('[') | KeyCode::BackTab | KeyCode::Char(']') | KeyCode::Tab | KeyCode::Char(' ') => {
-                            if let Some(m) = handle_hand_key(key.code, game, map, cards, &mut hand_selected, &mut zoomed) {
+                            if let Some(m) = handle_hand_key(key.code, game, map, cards, &mut hand_selected, &mut zoomed, &mut modal) {
                                 message = Some(m);
                             }
                         }
@@ -361,7 +384,7 @@ pub fn run(
                         }
                     }
                     KeyCode::Char('[') | KeyCode::BackTab | KeyCode::Char(']') | KeyCode::Tab | KeyCode::Char(' ') => {
-                        if let Some(m) = handle_hand_key(key.code, game, map, cards, &mut hand_selected, &mut zoomed) {
+                        if let Some(m) = handle_hand_key(key.code, game, map, cards, &mut hand_selected, &mut zoomed, &mut modal) {
                             message = Some(m);
                         }
                     }
@@ -372,6 +395,16 @@ pub fn run(
                         zoomed = false;
                         modal.push_back(Modal::SpaceTrack);
                     }
+                    // Cuban Missile Crisis: the threatened side removes 2 of its own influence from the selected country.
+                    KeyCode::Char('d') => match &screen {
+                        Screen::Region { selected, .. } | Screen::Country { selected, .. } => {
+                            message = Some(match game.defuse_crisis(map, *selected) {
+                                Ok(()) => "Cuban Missile Crisis defused".to_string(),
+                                Err(e) => e.to_string(),
+                            });
+                        }
+                        Screen::World { .. } => message = Some("select the country first (Cuba, West Germany or Turkey)".to_string()),
+                    },
                     // A space-race refusal (too few ops, attempt used, …) still
                     // opens the confirmation, which explains it; only having
                     // no card in play, an open operation, or a finished game
@@ -634,6 +667,8 @@ fn maybe_run_ai_turn(
     zoomed: &mut bool,
     modal: &mut VecDeque<Modal>,
 ) {
+    // What the last action round set off (NORAD) needs the map to settle.
+    game.settle(map);
     // `decider`, not `active`: an event's chooser is the card's own side. A
     // few rounds, since one human move can hand the AI an event to resolve
     // and then its own turn straight after.
@@ -759,6 +794,7 @@ fn queue_turn_modals(modal: &mut VecDeque<Modal>, board: &Board, entries: &[LogE
                 };
                 modal.push_back(Modal::War(result.clone(), *vp_after, winner));
             }
+            Event::Trap(result) => modal.push_back(Modal::Trap(*result)),
             Event::Space { result, vp_after } => {
                 let winner = match entries.get(i + 1).map(|e| &e.event) {
                     Some(Event::GameOver(victory)) => Some(*victory),
@@ -906,7 +942,7 @@ fn peeking_allowed(game: &Game) -> bool {
 /// closes an open zoom, same as selecting it) and returning the status
 /// message either way. A no-op (returning `None`, `*zoomed` untouched) on
 /// an empty hand.
-fn handle_hand_key(code: KeyCode, game: &mut Game, map: &WorldMap, cards: &CardCatalog, hand_selected: &mut HandUi, zoomed: &mut bool) -> Option<String> {
+fn handle_hand_key(code: KeyCode, game: &mut Game, map: &WorldMap, cards: &CardCatalog, hand_selected: &mut HandUi, zoomed: &mut bool, modal: &mut VecDeque<Modal>) -> Option<String> {
     match code {
         KeyCode::Char('[') | KeyCode::BackTab => {
             cycle_hand(game, hand_selected, -1);
@@ -933,6 +969,18 @@ fn handle_hand_key(code: KeyCode, game: &mut Game, map: &WorldMap, cards: &CardC
         }
         KeyCode::Char(' ') if hand_selected.peek && peeking_allowed(game) => {
             Some(format!("that's the {} hand — v to go back to your own", game.active().opponent()))
+        }
+        KeyCode::Char(' ') if matches!(game.trap(), Some((_, Trap::Escape(_)))) => {
+            // A trapped action round: the selected card is the one to discard, after a confirmation.
+            let id = selected_hand_card(game, hand_selected)?;
+            let name = &cards.card(id).name;
+            let Some((_, Trap::Escape(candidates))) = game.trap() else { return None };
+            if !candidates.contains(&id) {
+                return Some(format!("{name} can't be discarded to escape — pick an Operations card worth 2 or more"));
+            }
+            *zoomed = false;
+            modal.push_back(Modal::TrapConfirm(id));
+            None
         }
         KeyCode::Char(' ') => {
             let id = selected_hand_card(game, hand_selected)?;
@@ -1065,6 +1113,11 @@ fn draw(
                 Some(Operation::Event(e)) => render_event_session(cards, e, game.status()),
                 _ => Canvas::new(0, 0),
             },
+            Modal::TrapConfirm(card) => match game.trap() {
+                Some((effect, _)) => render_trap_confirm(effect, game.active(), cards.card(*card)),
+                None => Canvas::new(0, 0),
+            },
+            Modal::Trap(result) => render_trap_result(cards, result, queue_pos),
             Modal::SpaceConfirm => match game.card_in_play() {
                 Some(id) => render_space_confirm(game.status(), cards.card(id)),
                 None => Canvas::new(0, 0),

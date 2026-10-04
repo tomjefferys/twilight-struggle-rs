@@ -28,7 +28,7 @@ use crate::country::CountryId;
 use crate::dice::Dice;
 use crate::events;
 use crate::events::choice::Sign;
-use crate::game::{Game, GameError, OperationKind};
+use crate::game::{Game, GameError, OperationKind, Trap};
 use crate::map::WorldMap;
 use crate::ops::Operation;
 
@@ -66,6 +66,10 @@ pub enum Action {
     /// Close the open operation, committing whatever it did, and hand the
     /// turn to the other side — [`Game::confirm`].
     Confirm,
+    /// A trapped side's action round: discard this card and roll to escape — [`Game::escape_trap`].
+    Escape(CardId),
+    /// Settle what the last action round set off (NORAD) — [`Game::settle`].
+    Settle,
     /// Forfeit the turn with no card played — [`Game::pass`] — or, after a
     /// card's event, skip the operation it allowed.
     Pass,
@@ -97,6 +101,9 @@ impl Game {
         }
 
         let mut actions = Vec::new();
+        if self.settlement_due() {
+            return vec![Action::Settle];
+        }
 
         match self.operation() {
             Some(Operation::Influence(p)) => {
@@ -175,7 +182,16 @@ impl Game {
                     if !cards.card(id).scoring {
                         actions.push(Action::Begin(OperationKind::Influence));
                         actions.push(Action::Begin(OperationKind::Realign));
-                        actions.push(Action::Begin(OperationKind::Coup));
+                        // Cuban Missile Crisis would lose the game for a coup.
+                        if !self.status().effects.coup_forbidden(self.active()) {
+                            actions.push(Action::Begin(OperationKind::Coup));
+                        }
+                    }
+                } else if let Some((_, trap)) = self.trap() {
+                    match trap {
+                        Trap::Escape(candidates) => actions.extend(candidates.into_iter().map(Action::Escape)),
+                        Trap::PlayScoring => actions.extend(self.hand(self.active()).iter().filter(|&&c| events::scoring::is_scoring_card(c)).map(|&c| Action::PlayCard(c))),
+                        Trap::Skip => actions.push(Action::Pass),
                     }
                 } else {
                     let side = self.active();
@@ -211,6 +227,11 @@ impl Game {
             Action::RollContest => self.roll_contest(map, dice).map(|_| ()),
             Action::Confirm => self.confirm().map(|_| ()),
             Action::Space => self.space(dice).map(|_| ()),
+            Action::Escape(card) => self.escape_trap(dice, card).map(|_| ()),
+            Action::Settle => {
+                self.settle(map);
+                Ok(())
+            }
             Action::Pass => self.pass(),
         }
     }

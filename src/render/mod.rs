@@ -18,6 +18,7 @@ pub mod roll;
 pub mod score;
 pub mod space;
 pub mod statusbar;
+pub mod trap;
 pub mod war;
 pub mod world;
 pub mod worldmap;
@@ -30,6 +31,7 @@ pub use log::{log_entry_line, log_text, render_log};
 pub use region::render_region;
 pub use roll::{render_roll_result, RollReport};
 pub use score::render_scoring_result;
+pub use trap::{render_trap_confirm, render_trap_result};
 pub use space::{render_space_confirm, render_space_result, render_space_track, render_space_track_with_hint};
 pub use statusbar::{render_status_bar, render_status_bar_with, STATUS_BAR_ROWS};
 pub use war::render_war_result;
@@ -506,6 +508,7 @@ pub fn game_over_line(victory: crate::game::Victory) -> String {
         crate::game::VictoryReason::EuropeControl => "Europe control",
         crate::game::VictoryReason::Defcon => "DEFCON 1",
         crate::game::VictoryReason::Wargames => "Wargames",
+        crate::game::VictoryReason::CubanMissileCrisis => "Cuban Missile Crisis",
     };
     format!("GAME OVER — {} wins ({reason})", victory.side)
 }
@@ -548,6 +551,7 @@ pub fn ongoing_effect_line(effect: &crate::ongoing::OngoingEffect) -> String {
         E::IranContra => "Iran-Contra: US realignment rolls -1".to_string(),
         E::Chernobyl { region } => format!("Chernobyl: USSR can't add influence in {region} with ops"),
         E::YuriSamantha => "Yuri and Samantha: USSR +1 VP per US coup".to_string(),
+        E::CubanMissileCrisis { by } => format!("Cuban Missile Crisis: a {} coup loses the game (d to defuse)", by.opponent()),
         E::HandRevealed { side, .. } => format!("{side} hand revealed to {} (v to view it)", side.opponent()),
     }
 }
@@ -566,6 +570,9 @@ pub fn lasting_effect_line(effect: &crate::ongoing::LastingEffect) -> String {
         E::WillyBrandt => "Willy Brandt: West Germany is outside NATO".to_string(),
         E::FlowerPower => "Flower Power: USSR +2 VP per US war card".to_string(),
         E::ShuttleDiplomacy => "Shuttle Diplomacy: -1 USSR battleground at next Asia/Middle East scoring".to_string(),
+        E::Quagmire => "Quagmire: US action rounds are escape attempts (discard 2+ ops, roll 1-4)".to_string(),
+        E::BearTrap => "Bear Trap: USSR action rounds are escape attempts (discard 2+ ops, roll 1-4)".to_string(),
+        E::Norad => "NORAD: +1 US influence when a round moves DEFCON to 2 (US holds Canada)".to_string(),
     }
 }
 
@@ -798,3 +805,15 @@ pub(crate) fn vp_line(vp: i8) -> String {
 /// between. The status bar (which does know) uses its own three-state
 /// wording instead — see `statusbar.rs`.
 pub(crate) const BEGIN_HINT: &str = "space play card · i/a/o influence/realign/coup · s space race · t space track · e event · p pass";
+
+/// One escape attempt, worded for the REPL: `Bear Trap: USSR discards Fidel, rolls 3 — escapes`.
+pub fn trap_result_line(cards: &crate::cards::CardCatalog, r: &crate::game::TrapResult) -> String {
+    format!(
+        "{}: {} discards {}, rolls {} — {}",
+        cards.card(r.trap).name,
+        r.side,
+        cards.card(r.discarded).name,
+        r.roll,
+        if r.escaped { "escapes" } else { "still trapped (1-4 escapes)" }
+    )
+}

@@ -4,14 +4,15 @@ Which of the 110 cards have their **event** implemented (`events::is_implemented
 Every card can already be played for its ops value; this tracks the event text only.
 `tests/cards_progress.rs` fails if a ✅ here disagrees with the code, so update both together.
 
-**Implemented: 97 / 110**
+**Implemented: 101 / 110**
 
 - `events::scoring` — the seven scoring cards.
 - `events::effects` — fixed influence / VP / DEFCON effects with no choices or die rolls.
 - `events::ongoing` effects (in `events::effects`, plus #94 in `events::choice`) — cards whose event lasts for the rest of the turn; see `src/ongoing.rs`.
 - `events::war` — the five war cards (die roll against a target; Military Ops tracked in `GameStatus`; see `src/events/war.rs`).
 - Game-long effects (`LastingEffects` in `src/ongoing.rs`, a field of `GameStatus`) — #21 NATO, #27, #35, #50, #55, #59, #73 (plus #17's De Gaulle exemption); never cleared by a turn rolling over.
-- `events::choice` — cards where a player picks the countries (the card's own side chooses, whoever is phasing). #106 NORAD is an ongoing end-of-AR trigger, not a choice, and is still pending.
+- Action-round triggers (`Game::trap`, `Game::settle`, `Game::defuse_crisis`) — #42 Quagmire / #44 Bear Trap (the trapped side's rounds become escape attempts), #106 NORAD (an end-of-round trigger) and #40 Cuban Missile Crisis (a turn-long coup ban with an anytime cancel).
+- `events::choice` — cards where a player picks the countries (the card's own side chooses, whoever is phasing).
 
 | # | Card | Side | Event | Notes |
 |---|---|---|---|---|
@@ -54,11 +55,11 @@ Every card can already be played for its ops value; this tracks the event text o
 | 37 | Central America Scoring | Both | ✅ |  |
 | 38 | Southeast Asia Scoring | Both | ✅ |  |
 | 39 | Arms Race | Both | ✅ | Player ahead on Military Ops: 1 VP, or 3 if they also meet the required amount (= DEFCON) |
-| 40 | Cuban Missile Crisis | Both |  |  |
+| 40 | Cuban Missile Crisis | Both | ✅ | DEFCON 2; the opponent's coup this turn loses them the game (`VictoryReason::CubanMissileCrisis`), unless it defuses: `d` / `defuse <country>` removes 2 of its own influence from Cuba (USSR) or West Germany/Turkey (US) |
 | 41 | Nuclear Subs | US | ✅ | Turn-long: US battleground coups keep DEFCON (the coup DEFCON drop itself is new) |
-| 42 | Quagmire | USSR |  |  |
+| 42 | Quagmire | USSR | ✅ | The US's action rounds become escape attempts until it rolls 1-4; cancels #106. Each scoring card played while it has no 2+ ops card to discard takes one round |
 | 43 | SALT Negotiations | Both |  |  |
-| 44 | Bear Trap | US |  |  |
+| 44 | Bear Trap | US | ✅ | As Quagmire, against the USSR: discard a 2+ ops card (`space`/`escape <card>`) and roll 1-4; with none, play scoring cards, then skip rounds |
 | 45 | Summit | Both | ✅ | Roll-off (+1 per region dominated/controlled); the winner gets 2 VP and picks DEFCON ±1 or no change; a tie does nothing; played in a modal: odds, `r` roll, then choose (`Game::roll_contest`) |
 | 46 | How I Learned to Stop Worrying | Both | ✅ | Choice (mode = DEFCON level 1-5); +5 Military Ops (max 5) |
 | 47 | Junta | Both | ✅ | Choice (+2 influence in one Central/South America country), then a coup or realignment there with the card's ops |
@@ -120,7 +121,7 @@ Every card can already be played for its ops value; this tracks the event text o
 | 103 | Defectors | US | ✅ | USSR playing it gives the US 1 VP; the headline half pending a headline phase |
 | 104 | The Cambridge Five | USSR | ✅ | Reveals the US scoring cards; the USSR may add 1 influence to one country in a region they name (Southeast Asia isn't a region); not in the Late War |
 | 105 | Special Relationship | US | ✅ | Choice; adjacent-to-UK branch, or with NATO in effect +2 influence in Western Europe and +2 VP |
-| 106 | NORAD | US |  |  |
+| 106 | NORAD | US | ✅ | After an action round that moved DEFCON to 2, with Canada US-controlled: +1 US influence where it has some (`Game::settle` opens it as a triggered `EventChoice`) |
 | 107 | Che | USSR | ✅ | No direct effect; a coup in a non-battleground in Central/South America or Africa, plus a second (different country) if the first removed US influence |
 | 108 | Our Man in Tehran | US |  |  |
 | 109 | Yuri and Samantha | USSR | ✅ | Turn-long: USSR +1 VP per US coup |

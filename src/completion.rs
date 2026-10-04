@@ -77,7 +77,7 @@ pub fn candidates(line: &str, pos: usize, commands: &[String], cards: &[String],
             let options = demo.into_iter().chain(state_refs.iter().map(String::as_str));
             (current_start, filter_prefix(options, current))
         }
-        "play" | "card" | "discard" | "exile" => {
+        "play" | "card" | "discard" | "exile" | "escape" => {
             let arg_start = tokens.get(1).map_or(current_start, |t| t.0);
             (arg_start, filter_prefix(cards.iter().map(String::as_str), &prefix[arg_start..pos]))
         }
@@ -90,7 +90,7 @@ pub fn candidates(line: &str, pos: usize, commands: &[String], cards: &[String],
                 (arg_start, filter_prefix(cards.iter().map(String::as_str), &prefix[arg_start..pos]))
             }
         }
-        "country" | "place" | "roll" | "take" | "+" | "-" => {
+        "country" | "place" | "roll" | "take" | "+" | "-" | "defuse" => {
             let arg_start = tokens.get(1).map_or(current_start, |t| t.0);
             (arg_start, filter_prefix(countries.iter().map(String::as_str), &prefix[arg_start..pos]))
         }
