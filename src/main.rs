@@ -1045,6 +1045,13 @@ fn print_event_prompt(session: &Session) {
         println!("throw the dice with: roll");
         return;
     }
+    if e.is_multi() {
+        for (i, &card) in e.pile().iter().enumerate() {
+            println!("  {}) [{}] {}", i + 1, if e.is_marked(i) { "x" } else { " " }, session.cards.card(card).name);
+        }
+        println!("mark or unmark a card with: mode <n> — {} marked; confirm to finish", e.marked_count());
+        return;
+    }
     if e.mode().is_none() {
         println!("pick a {} with: mode <n|name>", if e.is_designation() { "region" } else { "mode" });
         return;

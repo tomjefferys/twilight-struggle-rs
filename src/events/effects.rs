@@ -142,6 +142,14 @@ pub struct EffectResult {
     pub plays: Option<PlayCard>,
     /// What to call the event when it isn't a card's (the opening setup): shown instead of `card`'s name.
     pub title: Option<&'static str>,
+    /// This side then draws this many cards from the draw pile (Ask Not What Your Country…); dealt by
+    /// `Game::settle`, which has the dice a reshuffle needs.
+    pub redraw: Option<(Superpower, u8)>,
+    /// Cards that were drawn into the event and are now discarded (Our Man in Tehran).
+    pub pile_discards: Vec<CardId>,
+    /// Cards that were drawn into the event and go back into the draw pile, which is reshuffled
+    /// (Our Man in Tehran).
+    pub returns: Vec<CardId>,
 }
 
 /// How a card that another event has put into play has to be played.
@@ -190,6 +198,9 @@ impl EffectResult {
             plays: None,
             contest: None,
             title: None,
+            redraw: None,
+            pile_discards: Vec::new(),
+            returns: Vec::new(),
         }
     }
 
@@ -382,6 +393,7 @@ const EFFECTS: &[(u8, Effect)] = &[
     (44, bear_trap),
     (45, summit),
     (48, kitchen_debates),
+    (32, un_intervention),
     (50, we_will_bury_you),
     (51, brezhnev_doctrine),
     (52, portuguese_empire_crumbles),
@@ -399,6 +411,7 @@ const EFFECTS: &[(u8, Effect)] = &[
     (69, latin_american_death_squads),
     (71, nixon_plays_the_china_card),
     (72, sadat_expels_soviets),
+    (77, ask_not),
     (78, alliance_for_progress),
     (82, iranian_hostage_crisis),
     (83, the_iron_lady),
@@ -419,6 +432,7 @@ const EFFECTS: &[(u8, Effect)] = &[
     (104, the_cambridge_five),
     (106, norad),
     (107, che),
+    (108, our_man_in_tehran),
     (109, yuri_and_samantha),
     (110, awacs_sale_to_saudis),
 ];
@@ -438,7 +452,7 @@ pub fn resolve(map: &WorldMap, board: &Board, status: &GameStatus, card: CardId)
     let effect = effect_for(card)?;
     let mut ctx = Ctx { map, before: board, working: board.clone(), status, changes: Vec::new(), vp_delta: 0, defcon: None, ongoing: None, lasting: None, cancels: None, china: None, space: None, reveals: None };
     effect(&mut ctx);
-    Some(EffectResult { card, player: status.active, influence: ctx.changes, vp_delta: ctx.vp_delta, defcon: ctx.defcon, ongoing: ctx.ongoing, lasting: ctx.lasting, cancels: ctx.cancels, china: ctx.china, space: ctx.space, mil_ops: 0, ends_game: false, reveals: ctx.reveals, discards: Vec::new(), takes: Vec::new(), plays: None, contest: None, title: None })
+    Some(EffectResult { card, player: status.active, influence: ctx.changes, vp_delta: ctx.vp_delta, defcon: ctx.defcon, ongoing: ctx.ongoing, lasting: ctx.lasting, cancels: ctx.cancels, china: ctx.china, space: ctx.space, mil_ops: 0, ends_game: false, reveals: ctx.reveals, discards: Vec::new(), takes: Vec::new(), plays: None, contest: None, title: None, redraw: None, pile_discards: Vec::new(), returns: Vec::new() })
 }
 
 // ---- the cards, in printed-number order ----
@@ -567,10 +581,27 @@ fn allende(c: &mut Ctx) {
     c.add("Chile", Superpower::Ussr, 2);
 }
 
-/// #60 U2 Incident: USSR +1 VP (the extra VP if #32 follows this turn waits for UN Intervention).
+/// #60 U2 Incident: USSR +1 VP, and 1 more if UN Intervention is played as an event later this
+/// turn (`EventChoice::un_intervention` pays it).
 fn u2_incident(c: &mut Ctx) {
     c.award_vp(Superpower::Ussr, 1);
+    c.start(OngoingEffect::U2Incident);
 }
+
+/// #32 UN Intervention: played with a card holding an opponent's event, which is cancelled while
+/// its operations are used — a pick from the hand, so `Game::play_event_with` opens
+/// `EventChoice::un_intervention`; this fixed effect is only what `is_effect_card` registers it by.
+fn un_intervention(_: &mut Ctx) {}
+
+/// #77 "Ask Not What Your Country…": the US discards any cards from its hand and draws as many
+/// replacements — a pick from the hand, so `Game::play_event_with` opens `EventChoice::ask_not`;
+/// with an empty hand nothing happens.
+fn ask_not(_: &mut Ctx) {}
+
+/// #108 Our Man in Tehran: with a US-controlled Middle East country the US draws 5 cards and may
+/// discard any of them, the rest going back into a reshuffled draw pile — `Game::play_event_with`
+/// opens `EventChoice::tehran`; otherwise nothing happens.
+fn our_man_in_tehran(_: &mut Ctx) {}
 
 /// #61 OPEC: the USSR gets 1 VP per controlled country among seven oil producers
 /// (barred once #86 has been played — see `events::blocked`).
@@ -893,7 +924,8 @@ mod tests {
     fn an_unrecognised_card_resolves_to_none() {
         let (map, _) = fixtures();
         let board = Board::new(&map);
-        assert!(resolve(&map, &board, &GameStatus::default(), CardId(32)).is_none());
-        assert!(!is_effect_card(CardId(32)));
+        // The China Card has no event: the one card with nothing to resolve.
+        assert!(resolve(&map, &board, &GameStatus::default(), CardId(6)).is_none());
+        assert!(!is_effect_card(CardId(6)));
     }
 }

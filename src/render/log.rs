@@ -377,6 +377,15 @@ fn event_detail(map: &WorldMap, cards: &CardCatalog, result: &EffectResult, vp_a
         };
         parts.push(format!("{} {how}", cards.card(play.id).name));
     }
+    for &card in &result.pile_discards {
+        parts.push(format!("{} discards {} (drawn)", Superpower::Us, cards.card(card).name));
+    }
+    if !result.returns.is_empty() {
+        parts.push(format!("{} cards back into the draw pile", result.returns.len()));
+    }
+    if let Some((side, n)) = result.redraw {
+        parts.push(format!("{side} draws {n}"));
+    }
     for &(side, card) in &result.takes {
         parts.push(format!("{side} takes {} from the discard pile", cards.card(card).name));
     }

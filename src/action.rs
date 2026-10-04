@@ -128,6 +128,15 @@ impl Game {
                 actions.push(Action::Confirm);
             }
             Some(Operation::Event(e)) if e.needs_roll() => actions.push(Action::RollContest),
+            // Marking cards (Ask Not, Tehran): each unmarked card is a forward step; confirming is always allowed.
+            Some(Operation::Event(e)) if e.is_multi() => {
+                for i in 0..e.pile().len() {
+                    if !e.is_marked(i) {
+                        actions.push(Action::ChooseMode(i as u8));
+                    }
+                }
+                actions.push(Action::Confirm);
+            }
             Some(Operation::Event(e)) => {
                 // Whoever `Game::decider` names — the event's chooser — is
                 // the one these are offered to. Every forward step spends a
@@ -185,10 +194,7 @@ impl Game {
                     // A card another event put into play: its event is all that can happen.
                     actions.push(Action::Event);
                 } else if let Some(id) = self.card_in_play() {
-                    if events::is_implemented(id)
-                        && events::blocked_at(id, self.removed_from_game(), self.status().turn).is_none()
-                        && self.forced_how() != Some(crate::events::PlayAs::Ops)
-                    {
+                    if self.event_playable(cards, id) && self.forced_how() != Some(crate::events::PlayAs::Ops) {
                         actions.push(Action::Event);
                     }
                     // A scoring card has no ops for `Begin` to spend —

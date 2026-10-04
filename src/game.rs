@@ -371,6 +371,17 @@ pub struct Game {
     headline: HeadlineState,
     /// Who still has to place their opening influence ([`Phase::Setup`]).
     setup_next: Superpower,
+    /// Draws and reshuffles an event has asked for, done at the next [`Game::settle`].
+    deferred: Vec<Deferred>,
+}
+
+/// A change to the draw pile that needs dice for a reshuffle, which only `Game::settle` has.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Deferred {
+    /// This side draws this many cards (Ask Not What Your Country…).
+    Draw(Superpower, u8),
+    /// These cards go back into the draw pile, which is reshuffled (Our Man in Tehran).
+    Return(Vec<CardId>),
 }
 
 /// What [`Game::end_turn`] has already done, kept while it waits for the perk holder's decision.
@@ -462,6 +473,7 @@ impl Game {
             held_discard: None,
             headline: HeadlineState::default(),
             setup_next: Superpower::Ussr,
+            deferred: Vec::new(),
         }
     }
 
@@ -570,6 +582,7 @@ impl Game {
             held_discard: self.held_discard,
             headline: self.headline,
             setup_next: self.setup_next,
+            deferred: self.deferred.clone(),
         }
     }
 
@@ -1283,6 +1296,8 @@ impl Game {
     pub fn clear_event_mode(&mut self, map: &WorldMap) -> bool {
         let active = self.status.active;
         match &mut self.op {
+            // Marking cards: ⌫ unmarks them all.
+            Some(Operation::Event(e)) if e.is_multi() => e.clear_picks(),
             // The victim of a discard-or-suffer card may change their mind too, though they aren't the phasing side.
             Some(Operation::Event(e))
                 if e.modes().len() > 1 && e.mode().is_some() && e.is_pristine() && (e.chooser() == active || !e.gate_cards().is_empty() || e.has_session_modal()) =>
@@ -1458,6 +1473,9 @@ impl Game {
         if self.phase == Phase::Setup {
             return Err(GameError::Trap("the opening placement comes first".into()));
         }
+        if !self.deferred.is_empty() {
+            return Err(GameError::Trap("cards are still being drawn — settle first".into()));
+        }
         Ok(())
     }
 
@@ -1465,6 +1483,7 @@ impl Game {
     /// (unless an event it opened — NORAD's — is still waiting on its player).
     pub fn settlement_due(&self) -> bool {
         self.norad_due
+            || (!self.deferred.is_empty() && self.op.is_none() && self.winner.is_none())
             || (self.phase == Phase::TurnEnd && self.op.is_none() && self.winner.is_none() && self.held_discard.is_none())
             || (self.phase == Phase::Setup && self.op.is_none() && self.winner.is_none())
             || (self.phase == Phase::Headline
@@ -1511,6 +1530,21 @@ impl Game {
                     self.op = Some(Operation::Event(Box::new(e)));
                     return;
                 }
+            } else if !self.deferred.is_empty() {
+                for change in std::mem::take(&mut self.deferred) {
+                    match change {
+                        Deferred::Draw(side, n) => {
+                            for _ in 0..n {
+                                if self.hands.hand(side).len() < crate::cards::MAX_HAND_SIZE
+                                    && let Some(card) = self.hands.draw(dice)
+                                {
+                                    self.hands.push_to_hand(side, card);
+                                }
+                            }
+                        }
+                        Deferred::Return(returned) => self.hands.shuffle_into_deck(returned, dice),
+                    }
+                }
             } else if self.phase == Phase::TurnEnd {
                 self.end_turn(map, cards, dice);
             } else if self.phase == Phase::Setup {
@@ -1531,6 +1565,27 @@ impl Game {
             Phase::Setup => Err(GameError::Trap("the opening placement comes first".into())),
             _ => Ok(()),
         }
+    }
+
+    /// The cards the player of UN Intervention could play it with: non-scoring cards in their
+    /// hand that hold an opponent's event (cancelled; their Operations are used instead).
+    fn un_intervention_candidates(&self, cards: &CardCatalog) -> Vec<(PlayCard, String)> {
+        let side = self.status.active;
+        self.hands
+            .hand(side)
+            .iter()
+            .map(|&c| cards.card(c))
+            .filter(|c| !c.scoring && c.side != CardSide::Neutral && c.side != crate::cards::side_of(side))
+            .map(|c| (PlayCard { id: c.id, ops: c.ops, removed: c.removed_after_event, scoring: false, how: PlayAs::Ops, exchange: false }, c.name.clone()))
+            .collect()
+    }
+
+    /// Whether `id`'s event can be played right now beyond the checks every card gets
+    /// (implemented, not prevented): UN Intervention needs a card to play it with.
+    pub fn event_playable(&self, cards: &CardCatalog, id: CardId) -> bool {
+        events::is_implemented(id)
+            && events::blocked_at(id, self.hands.removed(), self.status.turn).is_none()
+            && (id != UN_INTERVENTION || !self.un_intervention_candidates(cards).is_empty())
     }
 
     /// Whether the side to act is choosing its headline card right now.
@@ -2000,6 +2055,42 @@ impl Game {
             }
         }
 
+        // Ask Not What Your Country…: the US marks any cards in its hand to discard and draws as
+        // many; with an empty hand nothing happens, through the ordinary event.
+        if card.id == CardId(77) {
+            let hand: Vec<PileCard> = self.hands.hand(Superpower::Us).iter().map(|&c| PileCard { id: c, name: cards.card(c).name.clone(), ops: cards.card(c).ops, removed: cards.card(c).removed_after_event }).collect();
+            if let Some(pick) = EventChoice::ask_not(map, &self.board, card.id, &hand) {
+                self.op = Some(Operation::Event(Box::new(pick)));
+                return Ok(EventOutcome::Pending { card: card.id, chooser: Superpower::Us });
+            }
+        }
+
+        // Our Man in Tehran: with a US-controlled Middle East country the US draws the top 5
+        // cards into the event and marks which to discard; the rest return to a reshuffled deck.
+        if card.id == CardId(108) && map.iter().any(|(id, c)| c.region == Region::MiddleEast && self.board.is_controlled_by(map, id, Superpower::Us)) {
+            let drawn: Vec<PileCard> = (0..5)
+                .filter_map(|_| self.hands.draw(dice))
+                .map(|c| PileCard { id: c, name: cards.card(c).name.clone(), ops: cards.card(c).ops, removed: cards.card(c).removed_after_event })
+                .collect();
+            if let Some(pick) = EventChoice::tehran(map, &self.board, card.id, &drawn) {
+                self.op = Some(Operation::Event(Box::new(pick)));
+                return Ok(EventOutcome::Pending { card: card.id, chooser: Superpower::Us });
+            }
+        }
+
+        // UN Intervention: the player picks a card holding an opponent's event from their hand;
+        // that card goes into play for its Operations, its event cancelled.
+        if card.id == UN_INTERVENTION {
+            let candidates = self.un_intervention_candidates(cards);
+            return match EventChoice::un_intervention(map, &self.board, &self.status, card.id, self.status.active, &candidates) {
+                Some(pick) => {
+                    self.op = Some(Operation::Event(Box::new(pick)));
+                    Ok(EventOutcome::Pending { card: card.id, chooser: self.status.active })
+                }
+                None => Err(GameError::Trap("UN Intervention is played with a card in your hand that holds an opponent's event — you have none".into())),
+            };
+        }
+
         // Aldrich Ames Remix: the USSR picks a card out of the (revealed) US hand to
         // discard. With nothing there, only the reveal happens, through the ordinary event.
         if card.id == CardId(98) {
@@ -2176,6 +2267,15 @@ impl Game {
             if self.hands.take(card) {
                 self.hands.push_to_hand(side, card);
             }
+        }
+        for &card in &result.pile_discards {
+            self.hands.discard(card);
+        }
+        if !result.returns.is_empty() {
+            self.deferred.push(Deferred::Return(result.returns.clone()));
+        }
+        if let Some((side, n)) = result.redraw {
+            self.deferred.push(Deferred::Draw(side, n));
         }
         for change in &result.influence {
             self.board.set_influence(change.country, change.side, change.after);
@@ -3307,11 +3407,12 @@ mod tests {
     fn play_event_refuses_a_card_whose_event_is_not_implemented_yet() {
         let map = map();
         let cards = cards();
-        let mut game = Game::from_scenario(&scenario_with_extra_card(&map, &cards, Ussr, "UN Intervention"));
-        let sg = play(&mut game, &cards, "UN Intervention");
+        // The China Card is the one card with no event.
+        let mut game = Game::from_scenario(&scenario(&map, &cards));
+        game.play_card(&cards, CHINA_CARD).unwrap();
         assert!(matches!(
             game.play_event(&map, &cards),
-            Err(GameError::EventNotImplemented { card }) if card == sg
+            Err(GameError::EventNotImplemented { card }) if card == CHINA_CARD
         ));
         // Refusing to resolve the event shouldn't have consumed it —
         // it's still exactly as playable for ops as before.

@@ -39,7 +39,7 @@ use crate::board::Board;
 use crate::cards::CardId;
 use crate::country::{CountryId, Region, SubRegion, Superpower};
 use crate::map::WorldMap;
-use crate::ongoing::OngoingEffect;
+use crate::ongoing::{LastingEffect, OngoingEffect};
 use crate::status::GameStatus;
 
 /// "No limit" for a budget field.
@@ -198,6 +198,12 @@ pub enum PileUse {
     Take,
     /// Star Wars: played as an event.
     Play,
+    /// Ask Not What Your Country…: the US marks any number of cards in its hand to discard (the
+    /// "pile" is the hand), then draws as many.
+    AskNot,
+    /// Our Man in Tehran: the US marks any of the 5 cards it drew to discard (the "pile" is those
+    /// cards); the rest go back into the draw pile.
+    Tehran,
 }
 
 /// One card mode's budgeted add/remove.
@@ -288,10 +294,12 @@ struct Extra {
     take: Option<(Superpower, CardId)>,
     /// The card is played as an event straight away (Star Wars): id, printed ops, removed after its event.
     play: Option<PlayCard>,
+    /// A game-long effect this mode ends (UN Intervention ends We Will Bury You's penalty).
+    cancels: Option<LastingEffect>,
 }
 
 impl Extra {
-    const NONE: Extra = Extra { defcon: None, mil_ops: 0, ends_game: false, discard: None, then: false, contest: false, grant: None, take: None, play: None };
+    const NONE: Extra = Extra { defcon: None, mil_ops: 0, ends_game: false, discard: None, then: false, contest: false, grant: None, take: None, play: None, cancels: None };
 }
 
 /// One side's bonus to a roll-off and where it comes from.
@@ -398,6 +406,8 @@ pub struct EventChoice {
     gate_offset: usize,
     /// What the decision asks, for the status bar.
     gate_prompt: String,
+    /// What choosing one of the `gate` cards does with it ("discard", or "play").
+    gate_verb: &'static str,
     /// A hand the event shows (Aldrich Ames, Cambridge Five), reported in the result.
     reveal: Option<Reveal>,
     /// The roll-off the event has already held (Summit, Olympic Games), reported by the modes marked `contest`.
@@ -426,6 +436,10 @@ pub struct EventChoice {
     pile_offset: usize,
     /// Which mode the picker's highlight is on.
     cursor: usize,
+    /// Whether the pile pick marks any number of its cards (Ask Not, Tehran) instead of choosing one.
+    multi: bool,
+    /// Which pile cards are marked (`multi` only).
+    picks: Vec<bool>,
     /// What the event is called when no card is (the opening setup).
     title: Option<&'static str>,
 }
@@ -456,6 +470,7 @@ impl EventChoice {
             gate_side: Superpower::Us,
             gate_offset: 0,
             gate_prompt: String::new(),
+            gate_verb: "discard",
             reveal: None,
             contest: None,
             context: String::new(),
@@ -470,6 +485,8 @@ impl EventChoice {
             pile_use: PileUse::Take,
             pile_offset: 0,
             cursor: 0,
+            multi: false,
+            picks: Vec::new(),
             title: None,
         };
         if choice.modes.len() == 1 {
@@ -654,10 +671,71 @@ impl EventChoice {
         self.cursor
     }
 
-    /// Moves the picker's highlight by `delta` modes, wrapping.
+    /// Moves the picker's highlight by `delta` modes (or, marking cards, cards), wrapping.
     pub fn move_cursor(&mut self, delta: i32) {
-        let n = self.modes.len().max(1) as i32;
+        let n = if self.multi { self.pile.len() } else { self.modes.len() }.max(1) as i32;
         self.cursor = (self.cursor as i32 + delta).rem_euclid(n) as usize;
+    }
+
+    /// Whether this pick marks any number of cards (Ask Not, Tehran).
+    pub fn is_multi(&self) -> bool {
+        self.multi
+    }
+
+    /// Whether pile card `i` is marked.
+    pub fn is_marked(&self, i: usize) -> bool {
+        self.picks.get(i).copied().unwrap_or(false)
+    }
+
+    /// How many cards are marked.
+    pub fn marked_count(&self) -> usize {
+        self.picks.iter().filter(|&&p| p).count()
+    }
+
+    /// Marks pile card `i`, or unmarks it.
+    pub fn toggle_pick(&mut self, i: usize) -> Result<(), EventChoiceError> {
+        match self.picks.get_mut(i) {
+            Some(mark) => {
+                *mark = !*mark;
+                Ok(())
+            }
+            None => Err(EventChoiceError::BadMode { modes: self.picks.len() }),
+        }
+    }
+
+    /// Unmarks every card; whether any was marked.
+    pub fn clear_picks(&mut self) -> bool {
+        let any = self.picks.iter().any(|&p| p);
+        self.picks.iter_mut().for_each(|p| *p = false);
+        any
+    }
+
+    /// Ask Not What Your Country… (#77): the US marks any of the `hand` cards to discard and draws
+    /// as many replacements. `None` for an empty hand — nothing to discard.
+    pub fn ask_not(map: &WorldMap, board: &Board, card: CardId, hand: &[PileCard]) -> Option<Self> {
+        if hand.is_empty() {
+            return None;
+        }
+        Some(Self::multi_pick(map, board, card, hand, PileUse::AskNot, "discard the marked cards, then draw as many"))
+    }
+
+    /// Our Man in Tehran (#108): the US has drawn `drawn` and marks any to discard; the rest return
+    /// to the draw pile. Past the point of drawing it can't be backed out of.
+    pub fn tehran(map: &WorldMap, board: &Board, card: CardId, drawn: &[PileCard]) -> Option<Self> {
+        if drawn.is_empty() {
+            return None;
+        }
+        let mut choice = Self::multi_pick(map, board, card, drawn, PileUse::Tehran, "discard the marked cards, return the rest to the draw pile");
+        choice.second_stage = true;
+        Some(choice)
+    }
+
+    fn multi_pick(map: &WorldMap, board: &Board, card: CardId, pile: &[PileCard], usage: PileUse, label: &str) -> Self {
+        let mode = Mode { label: label.to_string(), fixed: Vec::new(), rule: None, ongoing: None, vp: 0, china: None, extra: Extra::NONE };
+        let mut choice = Self::pile_choice(map, board, card, Us, pile, vec![mode], (0, usage));
+        choice.multi = true;
+        choice.picks = vec![false; pile.len()];
+        choice
     }
 
     /// The Cambridge Five (#104): the USSR may add 1 influence to a single country in one of
@@ -698,6 +776,45 @@ impl EventChoice {
     /// What the decision asks of its chooser.
     pub fn gate_prompt(&self) -> &str {
         &self.gate_prompt
+    }
+
+    /// What choosing one of the gate's cards does with it: "discard" (Blockade, Aldrich Ames) or
+    /// "play" (UN Intervention).
+    pub fn gate_verb(&self) -> &'static str {
+        self.gate_verb
+    }
+
+    /// UN Intervention (#32): `player` plays it with one of `candidates` — cards in their hand
+    /// holding an opponent's event, `(card as put in play, name)` — whose event is cancelled while
+    /// its Operations are used. With U2 Incident played this turn it pays the USSR 1 more VP, and
+    /// played by the US in the round We Will Bury You's penalty is due it cancels that penalty.
+    /// `None` with no candidate: the event can't be played.
+    pub fn un_intervention(map: &WorldMap, board: &Board, status: &GameStatus, card: CardId, player: Superpower, candidates: &[(PlayCard, String)]) -> Option<Self> {
+        if candidates.is_empty() {
+            return None;
+        }
+        // VP counts for the chooser: the USSR's +1 is `-1` when the US chooses.
+        let vp = if status.effects.u2_incident { if player == Us { -1 } else { 1 } } else { 0 };
+        let cancels = (player == Us && status.lasting.we_will_bury_you == Some(0)).then_some(LastingEffect::WeWillBuryYou { skip: 0 });
+        let modes = candidates
+            .iter()
+            .map(|(pc, name)| Mode {
+                label: format!("play {name} for its {} operations, cancelling its event", pc.ops),
+                fixed: Vec::new(),
+                rule: None,
+                ongoing: None,
+                vp,
+                china: None,
+                extra: Extra { play: Some(*pc), cancels, ..Extra::NONE },
+            })
+            .collect();
+        let mut choice = Self::from_spec(map, board, card, Spec { chooser: player, optional: false, modes });
+        choice.gate = candidates.iter().map(|(pc, _)| pc.id).collect();
+        choice.gate_side = player;
+        choice.gate_offset = 0;
+        choice.gate_verb = "play";
+        choice.gate_prompt = "plays a card holding an opponent's event, cancelling that event, and uses its operations".to_string();
+        Some(choice)
     }
 
     /// The card the chosen mode discards, if it does.
@@ -951,7 +1068,7 @@ impl EventChoice {
 
     /// Whether nothing has been picked yet (fixed changes don't count).
     pub fn is_pristine(&self) -> bool {
-        self.history.is_empty()
+        self.history.is_empty() && !self.picks.iter().any(|&p| p)
     }
 
     fn rule(&self) -> Option<&Rule> {
@@ -990,6 +1107,9 @@ impl EventChoice {
     /// Picks which way to play a multi-mode card (0-based). Re-picking is
     /// fine until the first country has been chosen.
     pub fn choose_mode(&mut self, map: &WorldMap, i: usize) -> Result<(), EventChoiceError> {
+        if self.multi {
+            return self.toggle_pick(i);
+        }
         if self.pending_roll.is_some() && self.roll_mode.is_none() {
             return Err(EventChoiceError::RollFirst);
         }
@@ -1365,7 +1485,7 @@ impl EventChoice {
         let china = self.mode.and_then(|i| self.modes[i].china);
         let extra = self.mode.map_or(Extra::NONE, |i| self.modes[i].extra);
         let defcon = extra.defcon.map(|d| (status.defcon, d));
-        EffectResult {
+        let mut result = EffectResult {
             card: self.card,
             player: status.active,
             influence: self.changes.clone(),
@@ -1373,7 +1493,7 @@ impl EventChoice {
             defcon,
             ongoing,
             lasting: None,
-            cancels: None,
+            cancels: extra.cancels,
             china,
             space: None,
             mil_ops: extra.mil_ops,
@@ -1384,7 +1504,27 @@ impl EventChoice {
             plays: extra.play,
             contest: if extra.contest { self.contest.clone() } else { None },
             title: self.title,
+            redraw: None,
+            pile_discards: Vec::new(),
+            returns: Vec::new(),
+        };
+        if self.multi {
+            let marked: Vec<CardId> = self.pile.iter().zip(&self.picks).filter(|&(_, &p)| p).map(|(&c, _)| c).collect();
+            match self.pile_use {
+                // The marked cards leave the US hand, and as many are drawn once the dice are to hand.
+                PileUse::AskNot => {
+                    result.redraw = (!marked.is_empty()).then_some((Us, marked.len() as u8));
+                    result.discards = marked.into_iter().map(|c| (Us, c)).collect();
+                }
+                // The drawn cards: the marked are discarded, the rest returned to the draw pile.
+                PileUse::Tehran => {
+                    result.returns = self.pile.iter().zip(&self.picks).filter(|&(_, &p)| !p).map(|(&c, _)| c).collect();
+                    result.pile_discards = marked;
+                }
+                PileUse::Take | PileUse::Play => {}
+            }
         }
+        result
     }
 
     /// The region a region-designating event (Chernobyl) has been set to

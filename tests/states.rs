@@ -388,7 +388,9 @@ fn every_implemented_event_plays_through_game() {
     let mut played = 0;
     for card in cards.iter() {
         let id = cards.id_by_name(&card.name).unwrap();
-        if !events::is_implemented(id) {
+        // UN Intervention is only played with a partner card, then that card's operations follow:
+        // `last_cards` exercises it.
+        if !events::is_implemented(id) || card.name == "UN Intervention" {
             continue;
         }
         for side in [Superpower::Us, Superpower::Ussr] {
@@ -4750,12 +4752,7 @@ mod dual_use {
     }
 
     #[test]
-    fn an_unimplemented_or_prevented_event_just_doesnt_happen() {
-        let (map, cards, mut game) = load("ussr-plays-us-cards");
-        play(&mut game, &cards, "Our Man in Tehran");
-        spend_ops(&mut game, &map);
-        assert_eq!((game.active(), game.card_in_play()), (Superpower::Us, None), "no event owed: it isn't implemented");
-
+    fn a_prevented_event_just_doesnt_happen() {
         let (map, cards, mut game) = load("us-plays-blocked-ussr-card");
         play(&mut game, &cards, "Arab-Israeli War");
         assert!(!game.legal_actions(&map, &cards).contains(&Action::Event));
@@ -4794,6 +4791,264 @@ mod dual_use {
     #[test]
     fn the_ai_plays_opponents_cards_both_ways_without_stalling() {
         for state in ["ussr-plays-us-cards", "us-plays-blocked-ussr-card", "ussr-plays-us-card-at-defcon-2"] {
+            for seed in 0..25 {
+                let (map, cards, mut game) = load(state);
+                let mut ai = RandomAi::from_seed(seed);
+                let mut dice = Dice::from_seed(seed);
+                for _ in 0..4 {
+                    if game.winner().is_none() {
+                        play_turn(&mut ai, &mut game, &map, &cards, &mut dice).unwrap_or_else(|e| panic!("{state} seed {seed}: {e}"));
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// UN Intervention, Ask Not What Your Country…, Our Man in Tehran (`data/states/last-cards.json`).
+mod last_cards {
+    use super::*;
+    use twilight_struggle::events::PlayAs;
+    use twilight_struggle::{play_turn, Action, Dice, GameError, OperationKind, RandomAi};
+
+    fn load(name: &str) -> (WorldMap, CardCatalog, Game) {
+        let (map, cards, lib) = fixtures();
+        let (scenario, _) = lib.load(&map, &cards, &format!("last-cards/{name}")).unwrap_or_else(|e| panic!("{name}: {e}"));
+        (map, cards, Game::from_scenario(&scenario))
+    }
+
+    fn card(cards: &CardCatalog, name: &str) -> twilight_struggle::CardId {
+        cards.id_by_name(name).unwrap_or_else(|| panic!("no card {name}"))
+    }
+
+    fn play(game: &mut Game, cards: &CardCatalog, name: &str) {
+        game.play_card(cards, card(cards, name)).unwrap();
+    }
+
+    /// Plays UN Intervention with `partner` and spends the partner's operations on an influence placement.
+    fn un_with(game: &mut Game, map: &WorldMap, cards: &CardCatalog, partner: &str, place_in: &str) {
+        play(game, cards, "UN Intervention");
+        game.play_event_with(map, cards, &mut Dice::from_seed(1)).unwrap();
+        let slot = game.operation().and_then(|op| match op {
+            twilight_struggle::ops::Operation::Event(e) => e.gate_cards().iter().position(|&c| c == card(cards, partner)),
+            _ => None,
+        });
+        game.choose_mode(map, slot.unwrap_or_else(|| panic!("{partner} isn't on offer"))).unwrap();
+        game.confirm().unwrap();
+        game.begin(OperationKind::Influence).unwrap();
+        game.place(map, map.id_by_name(place_in).unwrap()).unwrap();
+        game.confirm().unwrap();
+    }
+
+    #[test]
+    fn un_intervention_cancels_the_partners_event_and_uses_its_operations() {
+        let (map, cards, mut game) = load("un-intervention");
+        play(&mut game, &cards, "UN Intervention");
+        game.play_event_with(&map, &cards, &mut Dice::from_seed(1)).unwrap();
+        let Some(twilight_struggle::ops::Operation::Event(e)) = game.operation() else { panic!("a pick opens") };
+        assert_eq!(e.gate_cards(), &[card(&cards, "Fidel")], "only a card with the USSR's event: not Containment (its own) or a scoring card");
+        assert_eq!(e.gate_verb(), "play");
+        game.choose_mode(&map, 0).unwrap();
+        game.confirm().unwrap();
+        // Fidel is now in play for its operations only.
+        assert_eq!((game.card_in_play(), game.forced_how()), (Some(card(&cards, "Fidel")), Some(PlayAs::Ops)));
+        assert!(matches!(game.play_event_with(&map, &cards, &mut Dice::from_seed(1)), Err(GameError::Trap(_))), "its event is cancelled");
+        game.begin(OperationKind::Coup).unwrap();
+        assert_eq!(game.operation().unwrap().ops_total(), 2, "Fidel's own 2 operations");
+        game.confirm().unwrap();
+        assert_eq!(game.board().influence(map.id_by_name("Cuba").unwrap(), Superpower::Us), 2, "Fidel never took Cuba");
+        assert!(game.discards().contains(&card(&cards, "UN Intervention")) && game.discards().contains(&card(&cards, "Fidel")));
+        assert_eq!((game.active(), game.card_in_play()), (Superpower::Ussr, None));
+    }
+
+    #[test]
+    fn un_intervention_can_only_be_played_with_a_partner() {
+        let (map, cards, mut game) = load("un-intervention-no-partner");
+        play(&mut game, &cards, "UN Intervention");
+        assert!(!game.legal_actions(&map, &cards).contains(&Action::Event));
+        assert!(matches!(game.play_event_with(&map, &cards, &mut Dice::from_seed(1)), Err(GameError::Trap(_))));
+        // It can still be spent for its own 1 operation.
+        game.begin(OperationKind::Influence).unwrap();
+        assert_eq!(game.operation().unwrap().ops_total(), 1);
+    }
+
+    #[test]
+    fn the_ussr_plays_it_with_a_us_card_the_same_way() {
+        let (map, cards, mut game) = load("ussr-un-intervention");
+        un_with(&mut game, &map, &cards, "Duck and Cover", "Poland");
+        assert_eq!(game.status().defcon, 4, "Duck and Cover's event was cancelled");
+        assert_eq!(game.board().influence(map.id_by_name("Poland").unwrap(), Superpower::Ussr), 4);
+        assert_eq!(game.active(), Superpower::Us);
+    }
+
+    #[test]
+    fn un_intervention_cancels_we_will_bury_you_when_the_us_plays_it_in_time() {
+        // With it: no penalty.
+        let (map, cards, mut game) = load("un-cancels-we-will-bury-you");
+        un_with(&mut game, &map, &cards, "Fidel", "Canada");
+        assert_eq!(game.status().vp, 0);
+        assert_eq!(game.status().lasting.we_will_bury_you, None);
+
+        // Without it: the USSR collects 3 VP at the end of the US's round.
+        let (map, cards, mut game) = load("un-cancels-we-will-bury-you");
+        play(&mut game, &cards, "Containment");
+        game.begin(OperationKind::Influence).unwrap();
+        game.place(&map, map.id_by_name("Canada").unwrap()).unwrap();
+        game.confirm().unwrap();
+        assert_eq!(game.status().vp, -3);
+    }
+
+    #[test]
+    fn u2_incident_pays_the_ussr_a_point_now_and_another_when_un_intervention_follows() {
+        let (map, cards, mut game) = load("u2-incident");
+        let _ = &map;
+        game.status_mut().active = Superpower::Ussr;
+        play(&mut game, &cards, "U2 Incident");
+        game.play_event_with(&map, &cards, &mut Dice::from_seed(1)).unwrap();
+        assert_eq!(game.status().vp, -1);
+        assert!(game.status().effects.u2_incident);
+
+        let (map, cards, mut game) = load("un-after-u2");
+        un_with(&mut game, &map, &cards, "Fidel", "Canada");
+        assert_eq!(game.status().vp, -1, "UN Intervention, played by the US, pays the USSR 1 VP");
+    }
+
+    /// Opens the event of the card in play and returns the open pick.
+    fn open_pick(game: &mut Game, map: &WorldMap, cards: &CardCatalog, name: &str) {
+        play(game, cards, name);
+        game.play_event_with(map, cards, &mut Dice::from_seed(1)).unwrap();
+        assert!(matches!(game.operation(), Some(twilight_struggle::ops::Operation::Event(_))), "{name} opens a pick");
+    }
+
+    fn names(cards: &CardCatalog, ids: &[twilight_struggle::CardId]) -> Vec<String> {
+        ids.iter().map(|&c| cards.card(c).name.clone()).collect()
+    }
+
+    #[test]
+    fn ask_not_discards_the_marked_cards_and_draws_as_many_from_the_deck() {
+        let (map, cards, mut game) = load("ask-not");
+        open_pick(&mut game, &map, &cards, "\u{201c}Ask Not What Your Country\u{2026}\u{201d}");
+        let Some(twilight_struggle::ops::Operation::Event(e)) = game.operation() else { unreachable!() };
+        assert!(e.is_multi());
+        assert_eq!(names(&cards, e.pile()), ["Containment", "Truman Doctrine", "Asia Scoring", "Marshall Plan"], "the whole hand, scoring cards too");
+        assert_eq!(game.decider(), Superpower::Us);
+        game.choose_mode(&map, 2).unwrap(); // Asia Scoring
+        game.choose_mode(&map, 0).unwrap(); // Containment
+        let Some(twilight_struggle::ops::Operation::Event(e)) = game.operation() else { unreachable!() };
+        assert_eq!(e.marked_count(), 2);
+        // A forward step is offered only for the unmarked cards.
+        let legal = game.legal_actions(&map, &cards);
+        assert_eq!(legal, vec![Action::ChooseMode(1), Action::ChooseMode(3), Action::Confirm]);
+        game.confirm().unwrap();
+        assert!(game.discards().contains(&card(&cards, "Containment")) && game.discards().contains(&card(&cards, "Asia Scoring")));
+        assert!(game.settlement_due(), "the replacements are drawn at the next settle");
+        assert!(matches!(game.pass(), Err(GameError::Trap(_))));
+        game.settle(&map, &cards, &mut Dice::from_seed(1));
+        let hand = names(&cards, game.hand(Superpower::Us));
+        assert_eq!(hand.len(), 4, "two kept, two drawn");
+        assert!(hand.contains(&"NATO".to_string()) && hand.contains(&"Romanian Abdication".to_string()), "the top of the deck: {hand:?}");
+        assert_eq!(game.hands().deck().len(), 3);
+        assert_eq!(game.active(), Superpower::Ussr, "the US's action round is over");
+    }
+
+    #[test]
+    fn ask_not_may_discard_nothing_and_unmark() {
+        let (map, cards, mut game) = load("ask-not");
+        open_pick(&mut game, &map, &cards, "\u{201c}Ask Not What Your Country\u{2026}\u{201d}");
+        game.choose_mode(&map, 1).unwrap();
+        game.choose_mode(&map, 1).unwrap();
+        assert!(!game.clear_event_mode(&map), "nothing marked to clear");
+        game.confirm().unwrap();
+        game.settle(&map, &cards, &mut Dice::from_seed(1));
+        assert_eq!((game.hand(Superpower::Us).len(), game.hands().deck().len()), (4, 5), "nothing discarded, nothing drawn");
+    }
+
+    #[test]
+    fn backspace_unmarks_every_card() {
+        let (map, cards, mut game) = load("ask-not");
+        open_pick(&mut game, &map, &cards, "\u{201c}Ask Not What Your Country\u{2026}\u{201d}");
+        game.choose_mode(&map, 1).unwrap();
+        game.choose_mode(&map, 3).unwrap();
+        assert!(game.clear_event_mode(&map));
+        let Some(twilight_struggle::ops::Operation::Event(e)) = game.operation() else { unreachable!() };
+        assert_eq!(e.marked_count(), 0);
+    }
+
+    #[test]
+    fn ask_not_with_an_empty_hand_does_nothing() {
+        let (map, cards, mut game) = load("ask-not-empty-hand");
+        play(&mut game, &cards, "\u{201c}Ask Not What Your Country\u{2026}\u{201d}");
+        game.play_event_with(&map, &cards, &mut Dice::from_seed(1)).unwrap();
+        assert!(game.operation().is_none());
+        assert_eq!((game.active(), game.hands().deck().len()), (Superpower::Ussr, 2));
+    }
+
+    #[test]
+    fn ask_not_draws_from_a_reshuffled_discard_pile_when_the_deck_is_empty() {
+        let (map, cards, mut game) = load("ask-not-reshuffle");
+        open_pick(&mut game, &map, &cards, "\u{201c}Ask Not What Your Country\u{2026}\u{201d}");
+        game.choose_mode(&map, 0).unwrap();
+        game.choose_mode(&map, 1).unwrap();
+        game.confirm().unwrap();
+        game.settle(&map, &cards, &mut Dice::from_seed(4));
+        assert_eq!(game.hand(Superpower::Us).len(), 2, "both discarded cards replaced");
+        // 3 + 2 discarded = 5 in the reshuffled pile; 2 were drawn.
+        assert_eq!(game.hands().deck().len(), 3);
+        assert!(game.discards().is_empty());
+    }
+
+    #[test]
+    fn our_man_in_tehran_draws_five_discards_the_marked_and_reshuffles_the_rest_back() {
+        let (map, cards, mut game) = load("tehran");
+        play(&mut game, &cards, "Our Man in Tehran");
+        assert!(matches!(game.play_event(&map, &cards), Err(GameError::NeedsDice { .. })), "it draws cards, so it needs dice");
+        game.play_event_with(&map, &cards, &mut Dice::from_seed(1)).unwrap();
+        let Some(twilight_struggle::ops::Operation::Event(e)) = game.operation() else { panic!("a pick opens") };
+        assert_eq!(names(&cards, e.pile()), ["Nasser", "Marshall Plan", "Truman Doctrine", "NATO", "Romanian Abdication"].map(String::from), "the top five of the deck, top first");
+        assert_eq!(game.hands().deck().len(), 3);
+        assert!(game.abandon().is_err(), "the cards have been seen: it can't be backed out of");
+        game.choose_mode(&map, 0).unwrap(); // Nasser
+        game.choose_mode(&map, 3).unwrap(); // NATO
+        game.confirm().unwrap();
+        assert!(game.discards().contains(&card(&cards, "Nasser")) && game.discards().contains(&card(&cards, "NATO")));
+        game.settle(&map, &cards, &mut Dice::from_seed(2));
+        assert_eq!(game.hands().deck().len(), 6, "3 left in the deck + the 3 unmarked cards returned");
+        for name in ["Marshall Plan", "Truman Doctrine", "Romanian Abdication"] {
+            assert!(game.hands().deck().contains(&card(&cards, name)), "{name} went back");
+        }
+        assert_eq!(game.hand(Superpower::Us).len(), 1, "its hand is untouched (Containment)");
+        assert_eq!(game.active(), Superpower::Ussr);
+    }
+
+    #[test]
+    fn our_man_in_tehran_needs_a_us_controlled_middle_east_country() {
+        let (map, cards, mut game) = load("tehran-no-control");
+        play(&mut game, &cards, "Our Man in Tehran");
+        game.play_event_with(&map, &cards, &mut Dice::from_seed(1)).unwrap();
+        assert!(game.operation().is_none());
+        assert_eq!(game.hands().deck().len(), 8, "no card was drawn");
+        assert_eq!(game.active(), Superpower::Ussr);
+    }
+
+    #[test]
+    fn the_ai_plays_ask_not_and_tehran_to_the_end() {
+        for state in ["ask-not", "ask-not-reshuffle", "tehran", "tehran-no-control", "ask-not-empty-hand"] {
+            for seed in 0..25 {
+                let (map, cards, mut game) = load(state);
+                let mut ai = RandomAi::from_seed(seed);
+                let mut dice = Dice::from_seed(seed);
+                for _ in 0..6 {
+                    if game.winner().is_none() {
+                        play_turn(&mut ai, &mut game, &map, &cards, &mut dice).unwrap_or_else(|e| panic!("{state} seed {seed}: {e}"));
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn the_ai_plays_un_intervention_through_to_the_end() {
+        for state in ["un-intervention", "un-cancels-we-will-bury-you", "ussr-un-intervention"] {
             for seed in 0..25 {
                 let (map, cards, mut game) = load(state);
                 let mut ai = RandomAi::from_seed(seed);

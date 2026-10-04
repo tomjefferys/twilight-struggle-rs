@@ -287,11 +287,13 @@ pub fn run(
                                         modal.pop_front();
                                         message = Some(operation_closed_line(&op, true, game.decider()));
                                         let entries = game.log().entries();
-                                        if let Some(at) = entries[logged..].iter().rposition(|e| matches!(&e.event, Event::EventResolved { result, .. } if !result.takes.is_empty() || result.plays.is_some())) {
+                                        if let Some(at) = entries[logged..].iter().rposition(|e| matches!(&e.event, Event::EventResolved { result, .. } if !result.takes.is_empty() || result.plays.is_some() || !result.discards.is_empty() || !result.pile_discards.is_empty())) {
                                             if let Event::EventResolved { result, .. } = &entries[logged + at].event {
                                                 let mut names: Vec<String> = result.takes.iter().map(|&(side, c)| format!("{side} takes {} from the discard pile", cards.card(c).name)).collect();
                                                 names.extend(result.plays.map(|p| format!("{} is now in play — {}", cards.card(p.id).name, match p.how { PlayAs::Event => "e to play its event", PlayAs::Either => "e event, or i/a/o", PlayAs::Ops => "i/a/o" })));
-                                                message = Some(names.join(" · "));
+                                                if !names.is_empty() {
+                                                    message = Some(names.join(" · "));
+                                                }
                                             }
                                             queue_turn_modals(&mut modal, game.board(), &entries[logged + at..]);
                                         }
@@ -1031,12 +1033,13 @@ fn handle_hand_key(code: KeyCode, game: &mut Game, map: &WorldMap, cards: &CardC
             let name = &cards.card(id).name;
             let Some(Operation::Event(e)) = game.operation() else { return None };
             let Some(slot) = e.gate_cards().iter().position(|&c| c == id) else {
-                return Some(format!("{name} can't be discarded for this — pick another card"));
+                return Some(format!("{name} can't be chosen for this — pick another card"));
             };
             let side = e.chooser();
+            let e_verb = e.gate_verb();
             let mode = slot + e.gate_offset();
             Some(match game.choose_mode(map, mode) {
-                Ok(()) => format!("{side} will discard {name} — c to confirm"),
+                Ok(()) => format!("{side} will {} {name} — c to confirm", e_verb),
                 Err(e) => e.to_string(),
             })
         }

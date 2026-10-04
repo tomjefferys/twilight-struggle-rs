@@ -4,7 +4,7 @@ Which of the 110 cards have their **event** implemented (`events::is_implemented
 Every card can already be played for its ops value; this tracks the event text only.
 `tests/cards_progress.rs` fails if a ✅ here disagrees with the code, so update both together.
 
-**Implemented: 106 / 110**
+**Implemented: 109 / 110** — the other, the China Card (#6), has no event: it is fully played as an operations card (below).
 
 - `events::scoring` — the seven scoring cards.
 - `events::effects` — fixed influence / VP / DEFCON effects with no choices or die rolls.
@@ -21,7 +21,7 @@ Every card can already be played for its ops value; this tracks the event text o
 | 3 | Middle East Scoring | Both | ✅ |  |
 | 4 | Duck and Cover | US | ✅ |  |
 | 5 | Five Year Plan | US | ✅ | The USSR discards a random card (needs dice); a US-side non-scoring event it names is then played (`PlayedCard::forced_event`) before the turn ends; USSR/neutral cards are just discarded |
-| 6 | The China Card | Both |  | Ops only; +1 op if all spent in Asia (`OpsBonus`); passes face down; the holder scores 1 VP in final scoring after turn 10 (`Game::finish_game`) |
+| 6 | The China Card | Both | n/a | No event, so nothing for `events::is_implemented` to recognise — fully implemented as an ops card: ops only; +1 op if all spent in Asia (`OpsBonus`); passes face down; the holder scores 1 VP in final scoring after turn 10 (`Game::finish_game`) |
 | 7 | Socialist Governments | USSR | ✅ | Choice; prevented by #83 (modelled) |
 | 8 | Fidel | USSR | ✅ |  |
 | 9 | Vietnam Revolts | USSR | ✅ | Turn-long: +1 ops for a card spent wholly in Southeast Asia |
@@ -47,7 +47,7 @@ Every card can already be played for its ops value; this tracks the event text o
 | 29 | East European Unrest | US | ✅ | Choice; 2 per country from turn 8 (Late War) |
 | 30 | Decolonization | USSR | ✅ | Choice |
 | 31 | Red Scare/Purge | Both | ✅ | Turn-long: opponent's ops -1 (min 1) |
-| 32 | UN Intervention | Both |  |  |
+| 32 | UN Intervention | Both | ✅ | Played with a card in your hand holding an opponent's event (`EventChoice::un_intervention`, a pick from the hand): that event is cancelled and the card goes into play for its operations only (`PlayAs::Ops`); not in the headline; cancels #50's penalty when the US plays it in time; pays U2 Incident's extra VP |
 | 33 | De-Stalinization | USSR | ✅ | Choice ('may'); balanced reallocation |
 | 34 | Nuclear Test Ban | Both | ✅ |  |
 | 35 | Formosan Resolution | US | ✅ | Lasting: US-controlled Taiwan scores as an Asia battleground until the US plays the China Card |
@@ -65,7 +65,7 @@ Every card can already be played for its ops value; this tracks the event text o
 | 47 | Junta | Both | ✅ | Choice (+2 influence in one Central/South America country), then a coup or realignment there with the card's ops |
 | 48 | Kitchen Debates | US | ✅ |  |
 | 49 | Missile Envy | Both | ✅ | Swap for the opponent's highest-ops non-scoring card (they choose among ties); its event occurs at once if it is the player's own or neutral, else only its ops are used (`PlayAs`); the opponent must play Missile Envy for ops next round (`GameStatus::forced_play`) |
-| 50 | “We Will Bury You” | USSR | ✅ | DEFCON −1; USSR +3 VP after the US's next round; UN Intervention escape pending #32 |
+| 50 | “We Will Bury You” | USSR | ✅ | DEFCON −1; USSR +3 VP after the US's next round, unless the US plays UN Intervention (#32) as an event in it |
 | 51 | Brezhnev Doctrine | USSR | ✅ | Turn-long: USSR ops +1 (max 4) |
 | 52 | Portuguese Empire Crumbles | USSR | ✅ |  |
 | 53 | South African Unrest | USSR | ✅ | Choice (2 modes) |
@@ -75,7 +75,7 @@ Every card can already be played for its ops value; this tracks the event text o
 | 57 | ABM Treaty | Both | ✅ | DEFCON +1, then the player may conduct any operation with the card |
 | 58 | Cultural Revolution | USSR | ✅ | US holds China Card → USSR gets it face up; else +1 VP (`EffectResult::china`) |
 | 59 | Flower Power | USSR | ✅ | Lasting: USSR +2 VP per US war card (ops or event); cancelled by #97 |
-| 60 | U2 Incident | USSR | ✅ | USSR +1 VP; the extra VP if #32 follows pending #32 |
+| 60 | U2 Incident | USSR | ✅ | USSR +1 VP, and 1 more if UN Intervention (#32) is played later this turn (`TurnEffects::u2_incident`) |
 | 61 | OPEC | USSR | ✅ | USSR +1 VP per controlled oil producer; barred after #86 (modelled) |
 | 62 | “Lone Gunman” | USSR | ✅ | Reveals the US hand for the turn (`v` in the map), then the USSR may use the card's ops for any operation |
 | 63 | Colonial Rear Guards | US | ✅ | Choice |
@@ -92,7 +92,7 @@ Every card can already be played for its ops value; this tracks the event text o
 | 74 | The Voice of America | US | ✅ | Choice; 4 USSR influence outside Europe, max 2 per country |
 | 75 | Liberation Theology | USSR | ✅ | Choice |
 | 76 | Ussuri River Skirmish | US | ✅ | Choice: USSR holds China Card → US gets it face up; else +4 US in Asia (max 2 each) |
-| 77 | “Ask Not What Your Country…” | US |  |  |
+| 77 | “Ask Not What Your Country…” | US | ✅ | The US marks any cards in its hand (scoring too) to discard (`EventChoice::ask_not`, a marking pick in the session modal) and draws as many; the draws wait for the next `Game::settle` (they may reshuffle) |
 | 78 | Alliance for Progress | US | ✅ |  |
 | 79 | Africa Scoring | Both | ✅ |  |
 | 80 | “One Small Step…” | Both | ✅ | If behind on the space race: 2 boxes, VP only from the last |
@@ -123,6 +123,6 @@ Every card can already be played for its ops value; this tracks the event text o
 | 105 | Special Relationship | US | ✅ | Choice; adjacent-to-UK branch, or with NATO in effect +2 influence in Western Europe and +2 VP |
 | 106 | NORAD | US | ✅ | After an action round that moved DEFCON to 2, with Canada US-controlled: +1 US influence where it has some (`Game::settle` opens it as a triggered `EventChoice`) |
 | 107 | Che | USSR | ✅ | No direct effect; a coup in a non-battleground in Central/South America or Africa, plus a second (different country) if the first removed US influence |
-| 108 | Our Man in Tehran | US |  |  |
+| 108 | Our Man in Tehran | US | ✅ | With a US-controlled Middle East country the US draws the top 5 cards (needs dice), marks any to discard, and the rest go back into a reshuffled deck (`EventChoice::tehran`, `Game::settle`); otherwise nothing |
 | 109 | Yuri and Samantha | USSR | ✅ | Turn-long: USSR +1 VP per US coup |
 | 110 | AWACS Sale to Saudis | US | ✅ | Prevents #56 (modelled) |

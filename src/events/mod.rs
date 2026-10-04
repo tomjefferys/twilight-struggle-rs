@@ -38,6 +38,9 @@ use crate::status::GameStatus;
 
 /// What resolving a card's event actually produced.
 #[derive(Debug, Clone, PartialEq, Eq)]
+// One of these is built per event played, so the size gap is irrelevant; boxing `EffectResult`
+// would only add noise to every pattern that destructures it.
+#[allow(clippy::large_enum_variant)]
 pub enum EventOutcome {
     Scoring(ScoringResult),
     Effect(EffectResult),
@@ -204,7 +207,7 @@ pub fn blocked_at(card: CardId, removed: &[CardId], turn: u8) -> Option<Blocked>
 /// Whether resolving `card`'s event draws on chance (Terrorism's random discard, , and so
 /// needs `Game::play_event_with`'s dice.
 pub fn needs_dice(card: CardId) -> bool {
-    matches!(card.0, 5 | 67 | 92)
+    matches!(card.0, 5 | 67 | 92 | 108)
 }
 
 /// Cards whose event is barred once another card's event has happened.

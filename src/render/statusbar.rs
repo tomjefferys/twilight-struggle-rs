@@ -116,9 +116,9 @@ pub fn render_status_bar_with(
                 let name = card.map(|c| c.name.as_str()).unwrap_or("?");
                 let line = match e.mode() {
                     None if e.gate_offset() == 0 => {
-                        format!("{name} · {} {} · [ ] pick a card · space discard it · then c", e.chooser(), e.gate_prompt())
+                        format!("{name} · {} {} · [ ] pick a card · space {} it · then c", e.chooser(), e.gate_prompt(), e.gate_verb())
                     }
-                    None => format!("{name} · {} {} · [ ] pick a card · space discard it · 1 keep your cards · then c", e.chooser(), e.gate_prompt()),
+                    None => format!("{name} · {} {} · [ ] pick a card · space {} it · 1 keep your cards · then c", e.chooser(), e.gate_prompt(), e.gate_verb()),
                     Some(i) => format!("{name} · {} · c confirm · ⌫ undo · [ ] space change → {}", e.chooser(), e.modes()[i].label),
                 };
                 (line, side_style(e.chooser()).bold())
@@ -127,6 +127,7 @@ pub fn render_status_bar_with(
                 let name = card.map(|c| c.name.as_str()).unwrap_or(e.title().unwrap_or(if e.is_triggered() { "NORAD" } else { "?" }));
                 let n = e.modes().len();
                 let keys = match (e.mode(), e.is_designation()) {
+                    _ if e.is_multi() => "↑↓ move · Enter mark/unmark · c confirm · ⌫ clear marks".to_string(),
                     _ if e.is_pile_pick() && e.pile().is_empty() => "c confirm · ⌫ take the card back".to_string(),
                     _ if e.is_pile_pick() => "↑↓ move · Enter choose · c done · ⌫ clear".to_string(),
                     _ if e.needs_roll() && e.is_participation() => format!("r roll the dice · 1-{n} change · ⌫ clear"),

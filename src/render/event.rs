@@ -57,6 +57,15 @@ pub fn render_event_result(
     for &(side, card) in &result.discards {
         lines.push((format!("{side} discards {}", cards.card(card).name), Style::color(side_color(side))));
     }
+    for &card in &result.pile_discards {
+        lines.push((format!("{} discards {} (revealed)", Superpower::Us, cards.card(card).name), Style::color(side_color(Superpower::Us))));
+    }
+    if !result.returns.is_empty() {
+        lines.push((format!("{} cards go back into the draw pile, which is reshuffled", result.returns.len()), Style::color(Color::Muted)));
+    }
+    if let Some((side, n)) = result.redraw {
+        lines.push((format!("{side} draws {n} replacement{}", if n == 1 { "" } else { "s" }), Style::color(side_color(side))));
+    }
     for &(side, card) in &result.takes {
         lines.push((format!("{side} takes {} from the discard pile (revealed)", cards.card(card).name), Style::color(side_color(side))));
     }
@@ -211,12 +220,46 @@ pub fn render_event_session(cards: &CardCatalog, e: &crate::events::EventChoice,
         let why = match e.pile_use() {
             crate::events::choice::PileUse::Take => "The discard pile is empty, so there is no card to take.",
             crate::events::choice::PileUse::Play => "No card in the discard pile has an event that can be played, so nothing happens.",
+            crate::events::choice::PileUse::AskNot | crate::events::choice::PileUse::Tehran => "There are no cards to choose from, so nothing happens.",
         };
         for part in wrap(why, text_width) {
             lines.push((part, Style::default().bold()));
         }
         push_result(cards, &mut lines, e, status, text_width);
         hint = "c confirm · ⌫ take the card back".to_string();
+    } else if e.is_pile_pick() && e.is_multi() {
+        // Marking any number of cards (Ask Not What Your Country…, Our Man in Tehran).
+        const WINDOW: usize = 9;
+        let side = side_color(e.chooser());
+        border = side;
+        let intro = match e.pile_use() {
+            crate::events::choice::PileUse::Tehran => format!("{} drew {} cards. Mark any to discard — the rest go back into the draw pile, which is reshuffled:", e.chooser(), e.pile().len()),
+            _ => format!("{} may discard any of these {} cards (scoring cards too) and draws as many replacements:", e.chooser(), e.pile().len()),
+        };
+        for part in wrap(&intro, text_width) {
+            lines.push((part, Style::default().bold()));
+        }
+        lines.push((String::new(), Style::default()));
+        let total = e.pile().len();
+        let start = e.cursor().saturating_sub(WINDOW / 2).min(total.saturating_sub(WINDOW));
+        let end = (start + WINDOW).min(total);
+        lines.push((if start > 0 { format!("   ↑ {start} more") } else { String::new() }, muted));
+        for i in start..end {
+            let (marked, here) = (e.is_marked(i), e.cursor() == i);
+            let style = if marked { Style::color(side).bold() } else if here { Style::default().bold() } else { Style::default() };
+            let card = cards.card(e.pile()[i]);
+            let ops = if card.scoring { "S".to_string() } else { card.ops.to_string() };
+            let text: String = format!("{ops} {}", card.name).chars().take(text_width.saturating_sub(6)).collect();
+            lines.push((format!("{} {} {text}", if here { "›" } else { " " }, if marked { "☑" } else { "☐" }), style));
+        }
+        lines.push((if end < total { format!("   ↓ {} more", total - end) } else { String::new() }, muted));
+        lines.push((String::new(), Style::default()));
+        let summary = match e.pile_use() {
+            crate::events::choice::PileUse::Tehran => format!("{} to discard, {} to return", e.marked_count(), total - e.marked_count()),
+            _ => format!("{} to discard, {} to draw", e.marked_count(), e.marked_count()),
+        };
+        lines.push((summary, Style::color(side).bold()));
+        hint = "↑↓ move · Enter mark/unmark · c confirm · ⌫ clear marks".to_string();
     } else if e.is_pile_pick() {
         // A discard-pile pick: a scrolling list, the highlight on `cursor`, the choice marked ▶.
         const WINDOW: usize = 9;
@@ -225,6 +268,7 @@ pub fn render_event_session(cards: &CardCatalog, e: &crate::events::EventChoice,
         let intro = match e.pile_use() {
             crate::events::choice::PileUse::Take => format!("{} may take one non-scoring card from the discard pile ({} there):", e.chooser(), e.pile().len()),
             crate::events::choice::PileUse::Play => format!("{} picks a non-scoring card from the discard pile ({} playable) and plays it as an event:", e.chooser(), e.pile().len()),
+            crate::events::choice::PileUse::AskNot | crate::events::choice::PileUse::Tehran => unreachable!("marking picks have their own branch"),
         };
         for part in wrap(&intro, text_width) {
             lines.push((part, Style::default().bold()));
@@ -346,7 +390,7 @@ mod tests {
     use crate::render::ColorMode;
 
     fn result(ongoing: Option<OngoingEffect>, vp_delta: i8) -> EffectResult {
-        EffectResult { card: CardId(25), player: Superpower::Us, influence: Vec::new(), vp_delta, defcon: None, ongoing, lasting: None, cancels: None, china: None, space: None, mil_ops: 0, ends_game: false, reveals: None, discards: Vec::new(), takes: Vec::new(), plays: None, contest: None, title: None }
+        EffectResult { card: CardId(25), player: Superpower::Us, influence: Vec::new(), vp_delta, defcon: None, ongoing, lasting: None, cancels: None, china: None, space: None, mil_ops: 0, ends_game: false, reveals: None, discards: Vec::new(), takes: Vec::new(), plays: None, contest: None, title: None, redraw: None, pile_discards: Vec::new(), returns: Vec::new() }
     }
 
     #[test]

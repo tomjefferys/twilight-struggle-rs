@@ -85,6 +85,8 @@ pub enum OngoingEffect {
     CubanMissileCrisis { by: Superpower },
     /// #43: both sides' coup rolls get -1.
     Salt,
+    /// #60: if UN Intervention is played as an event later this turn, the USSR gets 1 more VP.
+    U2Incident,
 }
 
 impl OngoingEffect {
@@ -104,6 +106,7 @@ impl OngoingEffect {
             OngoingEffect::HandRevealed { card, .. } => *card,
             OngoingEffect::CubanMissileCrisis { .. } => 40,
             OngoingEffect::Salt => 43,
+            OngoingEffect::U2Incident => 60,
         })
     }
 
@@ -111,7 +114,7 @@ impl OngoingEffect {
     /// played it) — what a view colours it by.
     pub fn side(&self) -> Superpower {
         match self {
-            OngoingEffect::VietnamRevolts | OngoingEffect::Brezhnev | OngoingEffect::YuriSamantha => Superpower::Ussr,
+            OngoingEffect::VietnamRevolts | OngoingEffect::Brezhnev | OngoingEffect::YuriSamantha | OngoingEffect::U2Incident => Superpower::Ussr,
             OngoingEffect::Containment | OngoingEffect::NuclearSubs | OngoingEffect::NorthSeaOil | OngoingEffect::IranContra => Superpower::Us,
             OngoingEffect::Chernobyl { .. } => Superpower::Us,
             OngoingEffect::RedScare { penalised } => penalised.opponent(),
@@ -146,6 +149,8 @@ pub struct TurnEffects {
     /// Cuban Missile Crisis, and which side played it.
     pub cuban_missile_crisis: Option<Superpower>,
     pub salt: bool,
+    /// U2 Incident: UN Intervention played this turn pays the USSR 1 more VP.
+    pub u2_incident: bool,
 }
 
 impl TurnEffects {
@@ -168,6 +173,7 @@ impl TurnEffects {
             OngoingEffect::YuriSamantha => self.yuri_samantha = true,
             OngoingEffect::CubanMissileCrisis { by } => self.cuban_missile_crisis = Some(by),
             OngoingEffect::Salt => self.salt = true,
+            OngoingEffect::U2Incident => self.u2_incident = true,
             OngoingEffect::HandRevealed { side: Superpower::Us, card } => self.us_hand_revealed = Some(card),
             OngoingEffect::HandRevealed { side: Superpower::Ussr, card } => self.ussr_hand_revealed = Some(card),
         }
@@ -208,6 +214,9 @@ impl TurnEffects {
         }
         if self.salt {
             v.push(OngoingEffect::Salt);
+        }
+        if self.u2_incident {
+            v.push(OngoingEffect::U2Incident);
         }
         if let Some(by) = self.cuban_missile_crisis {
             v.push(OngoingEffect::CubanMissileCrisis { by });
