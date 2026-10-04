@@ -14,7 +14,7 @@ use crossterm::{execute, queue};
 
 use twilight_struggle::render::{
     log_entry_line, operation_abandoned_line, pile_cards, render_piles, PileTab, operation_closed_line, operation_header, render_card, render_country, render_forced_card, render_hand,
-    render_event_result, render_event_session, render_final_scoring, render_headline_reveal, render_space_confirm, render_space_result, render_trap_confirm, render_trap_result, render_space_track_with_hint, render_war_result, render_region, render_roll_result, render_scoring_result, render_status_bar_with, render_world_map, Canvas, RollReport, HAND_ROWS,
+    render_event_result, render_event_session, render_final_scoring, render_headline_confirm, render_headline_reveal, render_space_confirm, render_space_result, render_trap_confirm, render_trap_result, render_space_track_with_hint, render_war_result, render_region, render_roll_result, render_scoring_result, render_status_bar_with, render_world_map, Canvas, RollReport, HAND_ROWS,
 };
 use twilight_struggle::events::{PlayAs, EffectResult, ScoringResult, WarResult};
 use twilight_struggle::game::{Phase, Trap, TrapResult, Victory};
@@ -62,6 +62,8 @@ enum Modal {
     TrapConfirm(CardId),
     /// A resolved escape attempt.
     Trap(TrapResult),
+    /// The confirmation before a headline card is chosen.
+    HeadlineConfirm(CardId),
     /// An open event that runs in a modal of its own (Summit's roll-off): drawn live from the
     /// event, keyed by `r` (roll), digits (choose), `c` (confirm and close), ⌫ (back).
     Session,
@@ -340,6 +342,37 @@ pub fn run(
                             _ => {}
                         }
                         maybe_run_ai_turn(ai_side, ai, game, map, cards, dice, &mut message, &mut sticky, &mut zoomed, &mut modal);
+                        draw(&screen, map, layout, cards, game, message.as_deref(), &hand_selected, zoomed, &modal, color)?;
+                        continue;
+                    }
+                    if let Some(&Modal::HeadlineConfirm(card)) = modal.front() {
+                        match key.code {
+                            KeyCode::Enter => {
+                                modal.pop_front();
+                                let side = game.active();
+                                let before = game.log().len();
+                                message = Some(match game.headline(cards, card) {
+                                    Ok(()) => {
+                                        let new_entries = &game.log().entries()[before..];
+                                        queue_turn_modals(&mut modal, game.board(), new_entries);
+                                        if new_entries.iter().any(|e| matches!(e.event, Event::Headline { .. })) {
+                                            format!("{side} chooses {} — both headlines are in", cards.card(card).name)
+                                        } else {
+                                            format!("{side} has chosen a headline card — {} to choose", game.active())
+                                        }
+                                    }
+                                    Err(e) => e.to_string(),
+                                });
+                            }
+                            KeyCode::Esc | KeyCode::Backspace => {
+                                modal.pop_front();
+                            }
+                            KeyCode::Char('q') => return Ok(()),
+                            _ => {}
+                        }
+                        maybe_run_ai_turn(ai_side, ai, game, map, cards, dice, &mut message, &mut sticky, &mut zoomed, &mut modal);
+                        prune_session_modal(&mut modal, game);
+                        ensure_session_modal(&mut modal, game);
                         draw(&screen, map, layout, cards, game, message.as_deref(), &hand_selected, zoomed, &modal, color)?;
                         continue;
                     }
@@ -1060,21 +1093,9 @@ fn handle_hand_key(code: KeyCode, game: &mut Game, map: &WorldMap, cards: &CardC
         }
         KeyCode::Char(' ') if game.phase() == Phase::Headline && !hand_selected.peek => {
             let id = selected_hand_card(game, hand_selected)?;
-            let side = game.active();
-            let before = game.log().len();
-            Some(match game.headline(cards, id) {
-                Ok(()) => {
-                    *zoomed = false;
-                    let new_entries = &game.log().entries()[before..];
-                    queue_turn_modals(modal, game.board(), new_entries);
-                    if new_entries.iter().any(|e| matches!(e.event, Event::Headline { .. })) {
-                        format!("{side} chooses {} — both headlines are in", cards.card(id).name)
-                    } else {
-                        format!("{side} has chosen a headline card — {} to choose", game.active())
-                    }
-                }
-                Err(e) => e.to_string(),
-            })
+            *zoomed = false;
+            modal.push_back(Modal::HeadlineConfirm(id));
+            None
         }
         KeyCode::Char(' ') if game.awaiting_discard().is_some() => {
             let id = selected_hand_card(game, hand_selected)?;
@@ -1245,6 +1266,7 @@ fn draw(
                 None => Canvas::new(0, 0),
             },
             Modal::Trap(result) => render_trap_result(cards, result, queue_pos),
+            Modal::HeadlineConfirm(card) => render_headline_confirm(game.active(), cards.card(*card)),
             Modal::SpaceConfirm => match game.card_in_play() {
                 Some(id) => render_space_confirm(game.status(), cards.card(id)),
                 None => Canvas::new(0, 0),

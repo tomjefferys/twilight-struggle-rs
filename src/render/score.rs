@@ -144,6 +144,32 @@ pub fn render_headline_reveal(
     canvas
 }
 
+/// The confirmation before a headline card is chosen: the first card a side picks in a turn is
+/// its headline, played at once as an event, so this gives a chance to take it back.
+pub fn render_headline_confirm(side: Superpower, card: &crate::cards::Card) -> Canvas {
+    let text_width = SCORE_WIDTH - 2 - 2 * PADDING;
+    let mut lines: Vec<(String, Style)> = Vec::new();
+    let ops = if card.scoring { "scoring".to_string() } else { format!("{} ops", card.ops) };
+    push_text(&mut lines, &format!("{side} headlines {} ({ops})", card.name), Style::color(side_color(side)).bold(), text_width);
+    lines.push((String::new(), Style::default()));
+    push_text(
+        &mut lines,
+        "The first card chosen each turn is the headline: only its event is played, before any action round.",
+        Style::color(Color::Muted),
+        text_width,
+    );
+    lines.push((String::new(), Style::default()));
+    lines.push((format!("{:>text_width$}", "Enter confirm · Esc cancel"), Style::color(Color::Muted)));
+    let height = 2 + lines.len();
+    let mut canvas = Canvas::new(SCORE_WIDTH, height);
+    canvas.draw_thick_box(0, 0, SCORE_WIDTH, height, Style::color(side_color(side)));
+    put_border_title(&mut canvas, 0, 0, "Headline card", Style::default().bold(), "", Style::default(), SCORE_WIDTH);
+    for (i, (line, style)) in lines.iter().enumerate() {
+        canvas.put(1 + i, 1 + PADDING, line, *style);
+    }
+    canvas
+}
+
 /// The summary modal for final scoring after turn 10: each region's swing in the order it
 /// was scored, the China Card's point, the VP track at the end and, once decided, the result.
 /// `results` pair each region's [`ScoringResult`] with the track after it; `winner` is the
