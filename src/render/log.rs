@@ -227,6 +227,9 @@ fn coup_detail(map: &WorldMap, side: Superpower, result: &CoupResult) -> String 
 /// board result.
 fn aftermath_detail(aftermath: &CoupAftermath) -> String {
     let mut parts = Vec::new();
+    if let Some((before, after)) = aftermath.mil_ops {
+        parts.push(format!("mil ops {before}→{after}"));
+    }
     if let Some((before, after)) = aftermath.defcon {
         parts.push(format!("DEFCON {before}→{after}"));
     }

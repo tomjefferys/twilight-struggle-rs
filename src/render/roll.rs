@@ -162,6 +162,9 @@ pub fn render_roll_result(map: &WorldMap, report: &RollReport, queue_pos: Option
 
     if let Some(aftermath) = report.aftermath.filter(|a| !a.is_empty()) {
         lines.push((String::new(), Style::default()));
+        if let Some((before, after)) = aftermath.mil_ops {
+            push_text(&mut lines, &format!("Military Operations {before} → {after}"), Style::color(Color::Muted).bold(), text_width);
+        }
         if let Some((before, after)) = aftermath.defcon {
             push_text(&mut lines, &format!("DEFCON {before} → {after} (battleground coup)"), Style::color(Color::Muted).bold(), text_width);
         }
@@ -392,7 +395,7 @@ mod tests {
         let map = map();
         let id = poland(&map);
         let result = CoupResult { target: id, die: 6, ops: 2, modifier: 0, target_number: 5, margin: 3, removed: 3, added: 0 };
-        let aftermath = CoupAftermath { defcon: Some((4, 3)), defcon_spared: false, vp: Some((-1, -2)) };
+        let aftermath = CoupAftermath { defcon: Some((4, 3)), defcon_spared: false, vp: Some((-1, -2)), mil_ops: None };
         let report = RollReport { side: Us, outcome: RollOutcome::Coup(result), before: (0, 3), aftermath: Some(aftermath) };
         let text = render_roll_result(&map, &report, None).render(ColorMode::Never);
         assert!(text.contains("DEFCON 4 → 3"), "{text}");

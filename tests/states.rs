@@ -1200,8 +1200,8 @@ mod turn_effects {
         game.begin(OperationKind::Coup).unwrap();
         let target = match state {
             "yuri-active" => "Czechoslovakia",
-            "battleground-coup-defcon-2" => "West Germany",
-            _ => "Poland",
+            "battleground-coup-defcon-2" => "Mexico",
+            _ => "Iran",
         };
         game.roll(&map, id(&map, target), &mut Dice::from_seed(4)).unwrap();
         let aftermath = game.log().entries().iter().find_map(|e| match e.event {
@@ -3920,7 +3920,7 @@ mod swaps {
         open(&mut game, &map, &cards);
         game.confirm().unwrap();
         game.begin(OperationKind::Coup).unwrap();
-        game.roll(&map, map.id_by_name("Iran").unwrap(), &mut Dice::from_seed(1)).unwrap();
+        game.roll(&map, map.id_by_name("Angola").unwrap(), &mut Dice::from_seed(1)).unwrap();
         assert_eq!(game.status().defcon, 1);
         assert_eq!(game.winner(), Some(twilight_struggle::game::Victory { side: Superpower::Us, reason: twilight_struggle::game::VictoryReason::Defcon }));
     }
@@ -4023,5 +4023,73 @@ mod swaps {
                 assert!(game.winner().is_some() || game.status().forced_play.is_none() || game.active() != game.status().forced_play.unwrap().0, "{state} seed {seed}");
             }
         }
+    }
+}
+
+/// Coups: Military Operations (rule 6.3.4) and the DEFCON limits on where a coup or
+/// realignment may go (rule 6.1.3).
+mod coups {
+    use super::*;
+    use twilight_struggle::ops::{CoupError, RealignError};
+    use twilight_struggle::{Action, CountryId, Dice, Event, GameError, OperationKind};
+
+    fn load(name: &str) -> (WorldMap, CardCatalog, Game) {
+        let (map, cards, lib) = fixtures();
+        let (scenario, _) = lib.load(&map, &cards, &format!("coups/{name}")).unwrap_or_else(|e| panic!("{name}: {e}"));
+        (map, cards, Game::from_scenario(&scenario))
+    }
+
+    fn id(map: &WorldMap, name: &str) -> CountryId {
+        map.id_by_name(name).unwrap_or_else(|| panic!("no country {name}"))
+    }
+
+    fn open(game: &mut Game, cards: &CardCatalog, kind: OperationKind) {
+        game.play_card(cards, cards.id_by_name("Fidel").unwrap()).unwrap();
+        game.begin(kind).unwrap();
+    }
+
+    #[test]
+    fn each_defcon_level_closes_its_regions_to_coups_and_realignments() {
+        for (state, closed, open_country) in [
+            ("defcon-4-europe-closed", "West Germany", "Iran"),
+            ("defcon-3-asia-closed", "Japan", "Iran"),
+            ("defcon-2-middle-east-closed", "Iran", "Morocco"),
+        ] {
+            for kind in [OperationKind::Coup, OperationKind::Realign] {
+                let (map, cards, mut game) = load(state);
+                open(&mut game, &cards, kind);
+                let legal = game.legal_actions(&map, &cards);
+                assert!(!legal.contains(&Action::Roll(id(&map, closed))), "{state}: {closed} should not be offered for {kind:?}");
+                assert!(legal.contains(&Action::Roll(id(&map, open_country))), "{state}: {open_country} should be offered for {kind:?}");
+                let refused = game.roll(&map, id(&map, closed), &mut Dice::from_seed(1)).unwrap_err();
+                match (kind, refused) {
+                    (OperationKind::Coup, GameError::Coup(CoupError::Banned { .. })) => {}
+                    (OperationKind::Realign, GameError::Realign(RealignError::Banned { .. })) => {}
+                    (_, other) => panic!("{state}: expected a Banned refusal, got {other}"),
+                }
+                game.roll(&map, id(&map, open_country), &mut Dice::from_seed(1)).unwrap_or_else(|e| panic!("{state}: {e}"));
+            }
+        }
+    }
+
+    #[test]
+    fn influence_placement_is_never_restricted_by_defcon() {
+        let (map, cards, mut game) = load("defcon-2-middle-east-closed");
+        open(&mut game, &cards, OperationKind::Influence);
+        game.place(&map, id(&map, "Iran")).unwrap();
+    }
+
+    #[test]
+    fn a_coup_adds_its_ops_to_the_coup_makers_military_ops_capped_at_five() {
+        let (map, cards, mut game) = load("mil-ops-from-coup");
+        open(&mut game, &cards, OperationKind::Coup);
+        game.roll(&map, id(&map, "Morocco"), &mut Dice::from_seed(1)).unwrap();
+        assert_eq!(game.status().military_ops_ussr, 5, "4 + 2 ops, clamped to the track's 5");
+        assert_eq!(game.status().military_ops_us, 1, "the other side's track is untouched");
+        let aftermath = game.log().entries().iter().find_map(|e| match e.event {
+            Event::CoupAftermath(a) => Some(a),
+            _ => None,
+        });
+        assert_eq!(aftermath.unwrap().mil_ops, Some((4, 5)));
     }
 }

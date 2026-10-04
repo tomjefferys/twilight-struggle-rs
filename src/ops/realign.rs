@@ -31,7 +31,7 @@
 use std::fmt;
 
 use crate::board::Board;
-use crate::country::{CountryId, Superpower};
+use crate::country::{CountryId, Region, Superpower};
 use crate::dice::Dice;
 use crate::map::WorldMap;
 use crate::cards::CardId;
@@ -215,6 +215,8 @@ pub enum RealignError {
     Protected { country: String, by: CardId },
     /// The card's event allows realignment rolls only in certain countries.
     OutOfScope { reason: String },
+    /// The DEFCON level has closed `country`'s region to realignment (rule 6.1.3).
+    Banned { country: String, region: Region },
 }
 
 impl fmt::Display for RealignError {
@@ -224,6 +226,7 @@ impl fmt::Display for RealignError {
                 write!(f, "{} has no influence in {country} for {side} to realign against", side.opponent())
             }
             RealignError::OutOfScope { reason } => write!(f, "{reason}"),
+            RealignError::Banned { country, region } => write!(f, "DEFCON bars realignment in {region} ({country})"),
             RealignError::Protected { country, by } => write!(f, "card #{} protects {country} from realignment", by.0),
             RealignError::InsufficientOps { country, remaining } => {
                 write!(f, "rolling in {country} costs 1 op, but only {remaining} remain")
@@ -251,6 +254,8 @@ pub struct Realignment {
     lasting: LastingEffects,
     /// Where a card's event confines these rolls (Junta, Tear Down this Wall).
     scope: Option<TargetScope>,
+    /// Regions the DEFCON level closes to realignment (rule 6.1.3).
+    banned: Vec<Region>,
     /// Extra ops for rolls spent wholly in one area (China Card, Vietnam Revolts).
     bonuses: Vec<OpsBonus>,
     /// The bonuses every roll so far has stayed inside (bit per bonus) —
@@ -271,6 +276,7 @@ impl Realignment {
             effects: TurnEffects::default(),
             lasting: LastingEffects::default(),
             scope: None,
+            banned: Vec::new(),
             bonuses: Vec::new(),
             bonus_mask: u8::MAX,
             base: board.clone(),
@@ -292,6 +298,12 @@ impl Realignment {
     /// Confines these rolls to `scope` (a card event that allows them only there).
     pub fn with_scope(mut self, scope: Option<TargetScope>) -> Self {
         self.scope = scope;
+        self
+    }
+
+    /// Forbids rolls in any of `regions` — the DEFCON track's own limit (rule 6.1.3).
+    pub fn with_banned_regions(mut self, regions: Vec<Region>) -> Self {
+        self.banned = regions;
         self
     }
 
@@ -359,7 +371,7 @@ impl Realignment {
     /// the module doc. Judged against the live `board`, not `base`, so
     /// a country a roll has just emptied stops being legal mid-action.
     pub fn is_legal_target(&self, map: &WorldMap, board: &Board, id: CountryId) -> bool {
-        self.in_scope(map, id) && board.influence(id, self.side.opponent()) > 0 && self.protected_by(map, board, id).is_none()
+        self.in_scope(map, id) && !self.banned.contains(&map.country(id).region) && board.influence(id, self.side.opponent()) > 0 && self.protected_by(map, board, id).is_none()
     }
 
     /// Resolves one roll against `id`, charging exactly 1 op and writing
@@ -378,6 +390,10 @@ impl Realignment {
         }
         if let Some(scope) = self.scope.filter(|s| !s.allows(map, id)) {
             return Err(RealignError::OutOfScope { reason: scope.refusal(map, id) });
+        }
+        let region = map.country(id).region;
+        if self.banned.contains(&region) {
+            return Err(RealignError::Banned { country: map.country(id).name.clone(), region });
         }
         if let Some(by) = self.protected_by(map, board, id) {
             return Err(RealignError::Protected { country: map.country(id).name.clone(), by });

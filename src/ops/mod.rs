@@ -24,6 +24,39 @@ pub use crate::events::war::War;
 pub use influence::{InfluencePlacement, PlacementError};
 pub use realign::{modifiers, odds, resolve, Modifiers, Odds, RealignError, Realignment, RollResult};
 
+/// The regions the DEFCON track closes to coups and realignments (rule 6.1.3):
+/// Europe at DEFCON 4 or lower, Asia from 3, the Middle East at 2. Influence
+/// placement is never restricted.
+pub fn defcon_banned(defcon: u8) -> Vec<crate::country::Region> {
+    use crate::country::Region;
+    let mut banned = Vec::new();
+    if defcon <= 4 {
+        banned.push(Region::Europe);
+    }
+    if defcon <= 3 {
+        banned.push(Region::Asia);
+    }
+    if defcon <= 2 {
+        banned.push(Region::MiddleEast);
+    }
+    banned
+}
+
+#[cfg(test)]
+mod defcon_tests {
+    use super::defcon_banned;
+    use crate::country::Region::{Asia, Europe, MiddleEast};
+
+    #[test]
+    fn the_track_closes_regions_one_level_at_a_time() {
+        assert!(defcon_banned(5).is_empty());
+        assert_eq!(defcon_banned(4), vec![Europe]);
+        assert_eq!(defcon_banned(3), vec![Europe, Asia]);
+        assert_eq!(defcon_banned(2), vec![Europe, Asia, MiddleEast]);
+        assert_eq!(defcon_banned(1), vec![Europe, Asia, MiddleEast]);
+    }
+}
+
 use crate::board::Board;
 use crate::country::{CountryId, Superpower};
 use crate::events::choice::Where;

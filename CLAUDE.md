@@ -13,9 +13,8 @@ Chernobyl, …, held in `GameStatus::effects` until the turn rolls over),
 the five *war* cards (a die roll against a target, Military Ops tracked), and eight *lasting* cards (NATO, US/Japan Pact, Formosan Resolution, We Will Bury You, Willy Brandt, Flower Power, Shuttle Diplomacy — held in `GameStatus::lasting`, never cleared by a turn rolling over — plus Solidarity's prerequisite), which can end the game outright (VP reaching ±20, DEFCON
 reaching 1, or Europe Scoring's Control tier), and the *Space Race* (`src/space.rs`, below). `CARDS.md` tracks which of
 the 110 cards have their event implemented (`tests/cards_progress.rs`
-keeps it honest). Every other card's text, DEFCON degradation *other than a battleground
-coup's* (rule 6.3.4), Military Operations, and
-redealing are still out of scope, as is the headline phase and an
+keeps it honest). Every other card's text, and
+redealing, are still out of scope, as is the headline phase and an
 opponent's card's ops-and-event dual use. A first AI opponent plays
 uniformly random legal moves.
 
@@ -250,7 +249,7 @@ uniformly random legal moves.
     rolls in the same action) — legality and the modifier/odds maths
     always read the live board instead. No presence is required to
     target a country (unlike placement) and there's no DEFCON
-    restriction (rule 6.1.3 is out of scope). `modifiers`/`odds` are free
+    restriction beyond the DEFCON track's own (rule 6.1.3: `ops::defcon_banned` — Europe closed at DEFCON 4 or lower, Asia at 3, the Middle East at 2 — fed to `Realignment`/`Coup::with_banned_regions` by `Game::begin`; `RealignError::Banned`; placement is never restricted). `modifiers`/`odds` are free
     functions of `(map, board, id, side)`, not methods, so a preview
     (region footer, country detail, REPL) works with no session open.
     Dice come from `src/dice.rs`, a small seedable splitmix64-based `Dice`
@@ -265,11 +264,12 @@ uniformly random legal moves.
     than* the target number succeeds by the margin — removing that much
     opposing influence and, if there isn't enough opposing influence to
     absorb the whole margin, adding the rest as friendly influence (rule
-    6.3.3). No presence is required (rule 6.3.1) and, like realignment's
-    6.1.3 carve-out, Military Operations (rule 6.3.4) are out of scope.
-    The *DEFCON degradation* half of 6.3.4 is not done here but in
-    `Game::roll` (`Game::coup_aftermath`, see `Game` below), since it
-    touches the status, not the board. A coup's die can also carry an
+    6.3.3). No presence is required (rule 6.3.1). The *Military Operations*
+    and *DEFCON degradation* halves of 6.3.4 are not done here but in
+    `Game::roll` (`Game::coup_aftermath`, see `Game` below), since they
+    touch the status, not the board: every coup adds its ops to the
+    coup-maker's `military_ops_*` (clamped 0-5, recorded in
+    `CoupAftermath::mil_ops`, so *every* coup now logs an aftermath line). A coup's die can also carry an
     ongoing event's modifier (`CoupResult::modifier`, Death Squads) and
     its ops a Southeast Asia bonus (`Coup::ops_for`).
     `coup_resolve`/`coup_odds` (and their `_with` variants taking the
@@ -1238,7 +1238,7 @@ deliberate exception, for debug-mode test states specifically.
 - `backup/` — earlier full snapshots of the world map, kept in case a
   future change needs to compare against or revert to an earlier version.
 - `states/` — named test states (`src/states.rs`'s own `StateLibrary`),
-  one JSON file per topic (`scoring.json` is the first, then `events.json` for the fixed-effect cards, `choices.json` for the choice cards, `turn-effects.json` for the turn-long ones and `lasting.json` for the game-long ones — each card's own event, plus `*-active` states with an effect already in force), each holding a
+  one JSON file per topic (`scoring.json` is the first, then `events.json` for the fixed-effect cards, `choices.json` for the choice cards, `turn-effects.json` for the turn-long ones and `lasting.json` for the game-long ones, `coups.json` for Military Ops and the DEFCON region limits — each card's own event, plus `*-active` states with an effect already in force), each holding a
   `{"states": [...]}` array of several named `Scenario` snapshots. Read
   from disk at runtime, not `include_str!`-embedded — see `states.rs`'s
   own doc above for why.

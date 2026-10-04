@@ -32,8 +32,8 @@ fn scripted_game() -> (WorldMap, CardCatalog, Game) {
     let mut dice = Dice::from_seed(0);
 
     let poland = map.id_by_name("Poland").unwrap();
-    let italy = map.id_by_name("Italy").unwrap();
-    let west_germany = map.id_by_name("West Germany").unwrap();
+    let iraq = map.id_by_name("Iraq").unwrap();
+    let morocco = map.id_by_name("Morocco").unwrap();
     let iran = map.id_by_name("Iran").unwrap();
 
     // USSR plays Socialist Governments (3 ops) and places two points in
@@ -44,18 +44,18 @@ fn scripted_game() -> (WorldMap, CardCatalog, Game) {
     game.place(&map, poland).unwrap();
     game.confirm().unwrap();
 
-    // US plays Duck and Cover (3 ops) and realigns against Italy, where
+    // US plays Duck and Cover (3 ops) and realigns against Iraq (DEFCON 3 closes Europe and Asia), where
     // USSR has influence to remove.
     play(&mut game, &cards, "Duck and Cover");
     game.begin(OperationKind::Realign).unwrap();
-    game.roll(&map, italy, &mut dice).unwrap();
+    game.roll(&map, iraq, &mut dice).unwrap();
     game.confirm().unwrap();
 
-    // USSR plays Fidel (2 ops) and coups West Germany, where the US has
+    // USSR plays Fidel (2 ops) and coups Morocco, where the US has
     // influence to remove.
     play(&mut game, &cards, "Fidel");
     game.begin(OperationKind::Coup).unwrap();
-    game.roll(&map, west_germany, &mut dice).unwrap();
+    game.roll(&map, morocco, &mut dice).unwrap();
     game.confirm().unwrap();
 
     // US passes — no card needed.

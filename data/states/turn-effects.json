@@ -364,7 +364,7 @@
     },
     {
       "name": "nuclear-subs-active",
-      "description": "Nuclear Subs is in force, DEFCON 4; US to act holding Truman Doctrine (1 op). Poland USSR 3 - a battleground coup that leaves DEFCON alone.",
+      "description": "Nuclear Subs is in force, DEFCON 4; US to act holding Truman Doctrine (1 op). Iran USSR 3 - a battleground coup that leaves DEFCON alone.",
       "status": {
         "active": "Us",
         "defcon": 4,
@@ -373,7 +373,7 @@
         }
       },
       "influence": {
-        "Poland": [
+        "Iran": [
           0,
           3
         ]
@@ -389,13 +389,13 @@
     },
     {
       "name": "us-battleground-coup",
-      "description": "DEFCON 4, no Nuclear Subs; US to act holding Truman Doctrine (1 op). Poland USSR 3 - the battleground coup drops DEFCON to 3.",
+      "description": "DEFCON 4, no Nuclear Subs; US to act holding Truman Doctrine (1 op). Iran USSR 3 - the battleground coup drops DEFCON to 3.",
       "status": {
         "active": "Us",
         "defcon": 4
       },
       "influence": {
-        "Poland": [
+        "Iran": [
           0,
           3
         ]
@@ -411,13 +411,13 @@
     },
     {
       "name": "battleground-coup-defcon-2",
-      "description": "DEFCON 2; USSR to act holding Fidel (2 ops). West Germany US 3 - a battleground coup takes DEFCON to 1, a loss for the phasing USSR.",
+      "description": "DEFCON 2; USSR to act holding Fidel (2 ops). Mexico US 3 - a battleground coup takes DEFCON to 1, a loss for the phasing USSR.",
       "status": {
         "active": "Ussr",
         "defcon": 2
       },
       "influence": {
-        "West Germany": [
+        "Mexico": [
           3,
           0
         ]

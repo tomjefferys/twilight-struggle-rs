@@ -153,7 +153,7 @@ impl fmt::Display for CoupError {
             }
             CoupError::OutOfScope { reason } => write!(f, "{reason}"),
             CoupError::Protected { country, by } => write!(f, "card #{} protects {country} from coups", by.0),
-            CoupError::Banned { country, region } => write!(f, "an event forbids coups in {region} ({country})"),
+            CoupError::Banned { country, region } => write!(f, "coups in {region} are forbidden right now ({country}): a card or the DEFCON level bars them"),
             CoupError::AlreadyResolved { country } => {
                 write!(f, "this coup has already resolved its one attempt (against {country})")
             }

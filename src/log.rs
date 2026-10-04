@@ -133,6 +133,8 @@ pub struct CoupAftermath {
     pub defcon_spared: bool,
     /// Yuri and Samantha's VP: `(signed change, VP track after)`.
     pub vp: Option<(i8, i8)>,
+    /// The coup-maker's Military Operations track `(before, after)`.
+    pub mil_ops: Option<(i8, i8)>,
 }
 
 impl CoupAftermath {

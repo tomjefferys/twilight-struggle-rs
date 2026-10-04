@@ -59,7 +59,7 @@ use crate::ongoing::{LastingEffect, TurnEffects};
 use crate::ops::{
     CoupError, InfluencePlacement, Operation, PlacementError, RealignError, Realignment, RollResult,
 };
-use crate::ops::{Coup, CoupResult};
+use crate::ops::{self, Coup, CoupResult};
 use crate::scenario::Scenario;
 use crate::space::{self, SpaceError, SpaceResult};
 use crate::status::GameStatus;
@@ -724,12 +724,15 @@ impl Game {
                     .with_bonuses(bonuses),
             ),
             OperationKind::Realign => Operation::Realign(
-                Realignment::new(side, ops, &self.board).with_effects(effects).with_bonuses(bonuses).with_lasting(self.status.lasting).with_scope(scope),
+                Realignment::new(side, ops, &self.board).with_banned_regions(ops::defcon_banned(self.status.defcon)).with_effects(effects).with_bonuses(bonuses).with_lasting(self.status.lasting).with_scope(scope),
             ),
             OperationKind::Coup => {
                 // The Reformer (#87), once played, bars the USSR from coups
                 // in Europe for the rest of the game.
-                let banned = if side == Superpower::Ussr && self.hands.removed().contains(&CardId(87)) { vec![Region::Europe] } else { Vec::new() };
+                let mut banned = ops::defcon_banned(self.status.defcon);
+                if side == Superpower::Ussr && self.hands.removed().contains(&CardId(87)) && !banned.contains(&Region::Europe) {
+                    banned.push(Region::Europe);
+                }
                 Operation::Coup(Coup::new(side, ops, &self.board).with_banned_regions(banned).with_effects(effects).with_bonuses(bonuses).with_lasting(self.status.lasting).with_scope(scope))
             }
         });
@@ -853,7 +856,7 @@ impl Game {
         };
         self.log.push(LogEntry { turn: self.status.turn, action_round: self.status.action_round, side: Some(side), event });
         if let RollOutcome::Coup(result) = &outcome {
-            self.coup_aftermath(map, side, result.target);
+            self.coup_aftermath(map, side, result);
         }
         Ok(outcome)
     }
@@ -875,8 +878,17 @@ impl Game {
     /// USSR 1 VP per US coup. DEFCON is applied before VP, so a DEFCON loss
     /// outranks any VP. Logged as one [`Event::CoupAftermath`] after the
     /// coup's own entry, or not at all if nothing happened.
-    fn coup_aftermath(&mut self, map: &WorldMap, side: Superpower, target: CountryId) {
+    fn coup_aftermath(&mut self, map: &WorldMap, side: Superpower, result: &CoupResult) {
+        let target = result.target;
         let mut aftermath = CoupAftermath::default();
+        // Every coup is a Military Operation (rule 6.3.4): its ops go on the coup-maker's track.
+        let track = match side {
+            Superpower::Us => &mut self.status.military_ops_us,
+            Superpower::Ussr => &mut self.status.military_ops_ussr,
+        };
+        let before = *track;
+        *track = (before + result.ops as i8).clamp(0, war::MIL_OPS_MAX);
+        aftermath.mil_ops = Some((before, *track));
         if map.country(target).battleground {
             if self.status.effects.spares_defcon(side) {
                 aftermath.defcon_spared = true;
@@ -2300,7 +2312,7 @@ mod tests {
     fn a_card_is_logged_the_instant_its_first_roll_makes_it_irrevocable() {
         let map = map();
         let cards = cards();
-        // Not a battleground, so the coup (rule 6.3.4) doesn't also log a DEFCON drop.
+        // Not a battleground, so the aftermath is only the coup's Military Ops (no DEFCON drop).
         let poland = id(&map, "Czechoslovakia");
         let mut game = Game::from_scenario(&scenario_with(&map, &cards, "Czechoslovakia", 1, 0));
         let fidel = play(&mut game, &cards, "Fidel");
@@ -2311,9 +2323,10 @@ mod tests {
         game.roll(&map, poland, &mut dice).unwrap();
 
         let entries = game.log().entries();
-        assert_eq!(entries.len(), 2, "the roll's first action should log the card, then the roll itself");
+        assert_eq!(entries.len(), 3, "the roll's first action should log the card, the roll itself, then its Military Ops");
         assert!(matches!(entries[0].event, Event::Selected { card } if card == fidel));
         assert!(matches!(entries[1].event, Event::Coup(_)));
+        assert!(matches!(entries[2].event, Event::CoupAftermath(a) if a.mil_ops == Some((0, 2))));
 
         // A second roll on the same operation shouldn't log the card
         // again — it's `CoupError` territory (a coup only ever attempts

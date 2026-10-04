@@ -1,0 +1,8 @@
+{
+  "states": [
+    {"name": "defcon-4-europe-closed", "description": "DEFCON 4; USSR to act holding Fidel (2 ops). West Germany US 3 (Europe: closed to coups and realignments at DEFCON 4) and Iran US 2 (open).", "status": {"active": "Ussr", "defcon": 4}, "influence": {"West Germany": [3, 0], "Iran": [2, 0]}, "hands": {"us": ["NATO"], "ussr": ["Fidel"]}},
+    {"name": "defcon-3-asia-closed", "description": "DEFCON 3; USSR to act holding Fidel (2 ops). Japan US 3 (Asia: closed from DEFCON 3) and Iran US 2 (open).", "status": {"active": "Ussr", "defcon": 3}, "influence": {"Japan": [3, 0], "Iran": [2, 0]}, "hands": {"us": ["NATO"], "ussr": ["Fidel"]}},
+    {"name": "defcon-2-middle-east-closed", "description": "DEFCON 2; USSR to act holding Fidel (2 ops). Iran US 2, USSR 1 (the Middle East: closed at DEFCON 2, yet the USSR may still place influence there) and Morocco US 1 (Africa: open, not a battleground).", "status": {"active": "Ussr", "defcon": 2}, "influence": {"Iran": [2, 1], "Morocco": [1, 0]}, "hands": {"us": ["NATO"], "ussr": ["Fidel"]}},
+    {"name": "mil-ops-from-coup", "description": "DEFCON 5, USSR 4 Military Ops, US 1; USSR to act holding Fidel (2 ops). Morocco US 1 - any coup there adds its 2 ops to the USSR's track (capped at 5).", "status": {"active": "Ussr", "military_ops_us": 1, "military_ops_ussr": 4}, "influence": {"Morocco": [1, 0]}, "hands": {"us": ["NATO"], "ussr": ["Fidel"]}}
+  ]
+}
