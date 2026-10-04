@@ -293,7 +293,13 @@ pub fn render_country(map: &WorldMap, layout: &MapLayout, board: &Board, id: Cou
     let mut canvas = Canvas::new(content_width, height);
 
     canvas.draw_box(0, 0, content_width, box_height, Style::default());
-    let title_style = if country.battleground { Style::color(Color::Battleground).bold() } else { Style::default().bold() };
+    let title_style = if let Some(side) = board.controller(map, id) {
+        Style::color(match side {
+            Superpower::Us => Color::Us,
+            Superpower::Ussr => Color::Ussr,
+        })
+        .bold()
+    } else if country.battleground { Style::color(Color::Battleground).bold() } else { Style::default().bold() };
     put_border_title(&mut canvas, 0, 0, &title_left, title_style, &title_right, Style::default(), content_width);
 
     let mut row = 1;

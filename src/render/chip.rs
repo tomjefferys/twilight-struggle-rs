@@ -139,12 +139,17 @@ impl ChipGrid {
             Some(eligible) => eligible,
             None => role != ChipRole::Native || op.is_none_or(|o| o.is_legal_target(map, board, id)),
         };
-        let name_style = if legal { frame_style } else { Style::color(Color::Muted) };
+        let controller = board.controller(map, id);
+        // An uncontested country's name takes its controller's colour.
+        let name_style = match controller {
+            _ if !legal => Style::color(Color::Muted),
+            Some(side) => Style::color(if side == Superpower::Us { Color::Us } else { Color::Ussr }).bold(),
+            None => frame_style,
+        };
         canvas.put(row + 1, col + 2, label, name_style);
 
         let us = board.influence(id, Superpower::Us);
         let ussr = board.influence(id, Superpower::Ussr);
-        let controller = board.controller(map, id);
         let sep = control_glyph(controller);
         let sep_style = match controller {
             Some(Superpower::Us) => Style::color(Color::Us),
