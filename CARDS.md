@@ -58,7 +58,7 @@ Every card can already be played for its ops value; this tracks the event text o
 | 40 | Cuban Missile Crisis | Both | ✅ | DEFCON 2; the opponent's coup this turn loses them the game (`VictoryReason::CubanMissileCrisis`), unless it defuses: `d` / `defuse <country>` removes 2 of its own influence from Cuba (USSR) or West Germany/Turkey (US) |
 | 41 | Nuclear Subs | US | ✅ | Turn-long: US battleground coups keep DEFCON (the coup DEFCON drop itself is new) |
 | 42 | Quagmire | USSR | ✅ | The US's action rounds become escape attempts until it rolls 1-4; cancels #106. Each scoring card played while it has no 2+ ops card to discard takes one round |
-| 43 | SALT Negotiations | Both | ✅ | DEFCON +2 and −1 on all coup rolls this turn (`TurnEffects::salt`); the pick from the discard pile is not modelled yet |
+| 43 | SALT Negotiations | Both | ✅ | DEFCON +2 and −1 on all coup rolls this turn (`TurnEffects::salt`); then the player may take one non-scoring discard into their hand (`EventChoice::pick_from_pile`, revealed) |
 | 44 | Bear Trap | US | ✅ | As Quagmire, against the USSR: discard a 2+ ops card (`space`/`escape <card>`) and roll 1-4; with none, play scoring cards, then skip rounds |
 | 45 | Summit | Both | ✅ | Roll-off (+1 per region dominated/controlled); the winner gets 2 VP and picks DEFCON ±1 or no change; a tie does nothing; played in a modal: odds, `r` roll, then choose (`Game::roll_contest`) |
 | 46 | How I Learned to Stop Worrying | Both | ✅ | Choice (mode = DEFCON level 1-5); +5 Military Ops (max 5) |

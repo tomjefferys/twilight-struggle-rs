@@ -57,6 +57,9 @@ pub fn render_event_result(
     for &(side, card) in &result.discards {
         lines.push((format!("{side} discards {}", cards.card(card).name), Style::color(side_color(side))));
     }
+    for &(side, card) in &result.takes {
+        lines.push((format!("{side} takes {} from the discard pile (revealed)", cards.card(card).name), Style::color(side_color(side))));
+    }
     if let Some(reveal) = &result.reveals {
         let names: Vec<&str> = reveal.cards.iter().map(|&c| cards.card(c).name.as_str()).collect();
         let shown = if names.is_empty() { "(empty)".to_string() } else { names.join(", ") };
@@ -156,7 +159,7 @@ pub fn render_event_session(cards: &CardCatalog, e: &crate::events::EventChoice,
             None => lines.push(("A tie — nobody scores, and DEFCON stays where it is.".to_string(), Style::color(Color::Muted).bold())),
         }
         if e.mode().is_some() {
-            push_result(&mut lines, e, status, text_width);
+            push_result(cards, &mut lines, e, status, text_width);
         }
         hint = match (e.mode(), contest.winner(), e.is_participation()) {
             (_, _, true) => "c confirm".to_string(),
@@ -177,7 +180,7 @@ pub fn render_event_session(cards: &CardCatalog, e: &crate::events::EventChoice,
             push_roll_block(&mut lines, e);
             hint = format!("r roll the dice · 1-{} change · ⌫ clear", e.modes().len());
         } else if e.mode().is_some() {
-            push_result(&mut lines, e, status, text_width);
+            push_result(cards, &mut lines, e, status, text_width);
             hint = format!("c confirm · 1-{} change · ⌫ clear", e.modes().len());
         } else {
             hint = format!("1-{} choose", e.modes().len());
@@ -193,6 +196,40 @@ pub fn render_event_session(cards: &CardCatalog, e: &crate::events::EventChoice,
             lines.push((part, muted));
         }
         hint = "r roll the dice · ⌫ cancel the event".to_string();
+    } else if e.is_pile_pick() && e.pile().is_empty() {
+        border = side_color(e.chooser());
+        for part in wrap("The discard pile is empty, so there is no card to take.", text_width) {
+            lines.push((part, Style::default().bold()));
+        }
+        push_result(cards, &mut lines, e, status, text_width);
+        hint = "c confirm · ⌫ take the card back".to_string();
+    } else if e.is_pile_pick() {
+        // A discard-pile pick: a scrolling list, the highlight on `cursor`, the choice marked ▶.
+        const WINDOW: usize = 9;
+        let side = side_color(e.chooser());
+        border = side;
+        for part in wrap(&format!("{} may take one non-scoring card from the discard pile ({} there):", e.chooser(), e.pile().len()), text_width) {
+            lines.push((part, Style::default().bold()));
+        }
+        lines.push((String::new(), Style::default()));
+        let total = e.modes().len();
+        let start = e.cursor().saturating_sub(WINDOW / 2).min(total.saturating_sub(WINDOW));
+        let end = (start + WINDOW).min(total);
+        lines.push((if start > 0 { format!("   ↑ {start} more") } else { String::new() }, muted));
+        for i in start..end {
+            let (chosen, here) = (e.mode() == Some(i), e.cursor() == i);
+            let style = if chosen { Style::color(side).bold() } else if here { Style::default().bold() } else { Style::default() };
+            let label = &e.modes()[i].label;
+            let text: String = label.chars().take(text_width.saturating_sub(5)).collect();
+            lines.push((format!("{}{} {text}", if here { "›" } else { " " }, if chosen { "▶" } else { " " }), style));
+        }
+        lines.push((if end < total { format!("   ↓ {} more", total - end) } else { String::new() }, muted));
+        if e.mode().is_some() {
+            push_result(cards, &mut lines, e, status, text_width);
+            hint = "↑↓ move · Enter change · c confirm · ⌫ clear".to_string();
+        } else {
+            hint = "↑↓ / [ ] move · Enter choose".to_string();
+        }
     } else {
         hint = String::new();
     }
@@ -245,13 +282,16 @@ fn push_roll_block(lines: &mut Vec<(String, Style)>, e: &crate::events::EventCho
 }
 
 /// What the chosen option does: the DEFCON move, any operations it allows, and the VP.
-fn push_result(lines: &mut Vec<(String, Style)>, e: &crate::events::EventChoice, status: &crate::status::GameStatus, text_width: usize) {
+fn push_result(cards: &CardCatalog, lines: &mut Vec<(String, Style)>, e: &crate::events::EventChoice, status: &crate::status::GameStatus, text_width: usize) {
     let muted = Style::color(Color::Muted);
     let result = e.into_result(status);
     lines.push((String::new(), Style::default()));
     lines.push(("Result:".to_string(), muted));
     if let Some((before, after)) = result.defcon {
         lines.push((format!("  DEFCON {before} → {after}"), Style::default()));
+    }
+    for &(side, card) in &result.takes {
+        lines.push((format!("  {side} takes {} (revealed)", cards.card(card).name), Style::color(side_color(side))));
     }
     if let Some(grant) = e.grant() {
         let sponsor = e.chooser().opponent();
@@ -276,7 +316,7 @@ mod tests {
     use crate::render::ColorMode;
 
     fn result(ongoing: Option<OngoingEffect>, vp_delta: i8) -> EffectResult {
-        EffectResult { card: CardId(25), player: Superpower::Us, influence: Vec::new(), vp_delta, defcon: None, ongoing, lasting: None, cancels: None, china: None, space: None, mil_ops: 0, ends_game: false, reveals: None, discards: Vec::new(), contest: None }
+        EffectResult { card: CardId(25), player: Superpower::Us, influence: Vec::new(), vp_delta, defcon: None, ongoing, lasting: None, cancels: None, china: None, space: None, mil_ops: 0, ends_game: false, reveals: None, discards: Vec::new(), takes: Vec::new(), contest: None }
     }
 
     #[test]

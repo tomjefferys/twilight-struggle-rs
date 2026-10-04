@@ -135,6 +135,8 @@ pub struct EffectResult {
     /// Cards discarded from a side's hand: paid to avoid Blockade's penalty, picked
     /// out of the US hand by Aldrich Ames, or lost at random to Terrorism.
     pub discards: Vec<(Superpower, CardId)>,
+    /// Cards a side takes out of the discard pile into its hand (SALT Negotiations); shown to both.
+    pub takes: Vec<(Superpower, CardId)>,
 }
 
 /// What one card's effect function sees and mutates: the board as it was
@@ -369,7 +371,7 @@ pub fn resolve(map: &WorldMap, board: &Board, status: &GameStatus, card: CardId)
     let effect = effect_for(card)?;
     let mut ctx = Ctx { map, before: board, working: board.clone(), status, changes: Vec::new(), vp_delta: 0, defcon: None, ongoing: None, lasting: None, cancels: None, china: None, space: None, reveals: None };
     effect(&mut ctx);
-    Some(EffectResult { card, player: status.active, influence: ctx.changes, vp_delta: ctx.vp_delta, defcon: ctx.defcon, ongoing: ctx.ongoing, lasting: ctx.lasting, cancels: ctx.cancels, china: ctx.china, space: ctx.space, mil_ops: 0, ends_game: false, reveals: ctx.reveals, discards: Vec::new(), contest: None })
+    Some(EffectResult { card, player: status.active, influence: ctx.changes, vp_delta: ctx.vp_delta, defcon: ctx.defcon, ongoing: ctx.ongoing, lasting: ctx.lasting, cancels: ctx.cancels, china: ctx.china, space: ctx.space, mil_ops: 0, ends_game: false, reveals: ctx.reveals, discards: Vec::new(), takes: Vec::new(), contest: None })
 }
 
 // ---- the cards, in printed-number order ----

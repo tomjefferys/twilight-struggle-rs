@@ -251,24 +251,44 @@ pub fn run(
                                     message = Some(e.to_string());
                                 }
                             }
+                            KeyCode::Up | KeyCode::Char('[') | KeyCode::BackTab => game.move_event_cursor(-1),
+                            KeyCode::Down | KeyCode::Char(']') | KeyCode::Tab => game.move_event_cursor(1),
+                            KeyCode::Enter | KeyCode::Char(' ') => {
+                                if let Err(e) = game.choose_event_cursor(map) {
+                                    message = Some(e.to_string());
+                                }
+                            }
                             KeyCode::Char(d @ '1'..='9') => {
                                 if let Err(e) = game.choose_mode(map, d as usize - '1' as usize) {
                                     message = Some(e.to_string());
                                 }
                             }
-                            KeyCode::Char('c') => match game.confirm() {
-                                Ok(op) => {
-                                    // The modal already showed what it did: no result modal on top.
-                                    modal.pop_front();
-                                    message = Some(operation_closed_line(&op, true, game.decider()));
+                            KeyCode::Char('c') => {
+                                let logged = game.log().entries().len();
+                                match game.confirm() {
+                                    Ok(op) => {
+                                        // The modal already showed what it did: no result modal on top —
+                                        // except for a card taken from the discard pile, which the
+                                        // opponent must be shown.
+                                        modal.pop_front();
+                                        message = Some(operation_closed_line(&op, true, game.decider()));
+                                        let entries = game.log().entries();
+                                        if let Some(at) = entries[logged..].iter().rposition(|e| matches!(&e.event, Event::EventResolved { result, .. } if !result.takes.is_empty())) {
+                                            if let Event::EventResolved { result, .. } = &entries[logged + at].event {
+                                                let names: Vec<String> = result.takes.iter().map(|&(side, c)| format!("{side} takes {} from the discard pile", cards.card(c).name)).collect();
+                                                message = Some(names.join(" · "));
+                                            }
+                                            queue_turn_modals(&mut modal, game.board(), &entries[logged + at..]);
+                                        }
+                                    }
+                                    Err(e) => message = Some(e.to_string()),
                                 }
-                                Err(e) => message = Some(e.to_string()),
-                            },
+                            }
                             KeyCode::Backspace | KeyCode::Esc => {
                                 if game.clear_event_mode(map) {
                                     // Back to choosing.
-                                } else if matches!(game.operation(), Some(Operation::Event(e)) if e.needs_roll()) {
-                                    // Not rolled yet: take the card back.
+                                } else if matches!(game.operation(), Some(Operation::Event(e)) if e.needs_roll() || e.is_pile_pick()) {
+                                    // Not rolled / chosen yet: take the card back.
                                     match game.abandon() {
                                         Ok(op) => {
                                             modal.pop_front();

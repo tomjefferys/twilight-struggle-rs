@@ -122,6 +122,8 @@ pub fn render_status_bar_with(
                 let name = card.map(|c| c.name.as_str()).unwrap_or(if e.is_triggered() { "NORAD" } else { "?" });
                 let n = e.modes().len();
                 let keys = match (e.mode(), e.is_designation()) {
+                    _ if e.is_pile_pick() && e.pile().is_empty() => "c confirm · ⌫ take the card back".to_string(),
+                    _ if e.is_pile_pick() => "↑↓ move · Enter choose · c done · ⌫ clear".to_string(),
                     _ if e.needs_roll() && e.is_participation() => format!("r roll the dice · 1-{n} change · ⌫ clear"),
                     _ if e.needs_roll() => "r roll the dice · ⌫ cancel the event".to_string(),
                     (None, false) if !e.gate_cards().is_empty() => "[ ] pick a card · space discard it · 1 keep your cards".to_string(),

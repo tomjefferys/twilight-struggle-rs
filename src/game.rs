@@ -738,6 +738,25 @@ impl Game {
         }
     }
 
+    /// Moves the highlight of an open discard-pile pick.
+    pub fn move_event_cursor(&mut self, delta: i32) {
+        if let Some(Operation::Event(e)) = &mut self.op {
+            e.move_cursor(delta);
+        }
+    }
+
+    /// Chooses the mode the open event's highlight is on (a discard-pile pick).
+    pub fn choose_event_cursor(&mut self, map: &WorldMap) -> Result<(), GameError> {
+        match &mut self.op {
+            Some(Operation::Event(e)) => {
+                let at = e.cursor();
+                Ok(e.choose_mode(map, at)?)
+            }
+            Some(op) => Err(GameError::WrongKind { open: op.verb() }),
+            None => Err(GameError::NoOperation),
+        }
+    }
+
     /// Chooses which way to play an open multi-mode event (0-based).
     pub fn choose_mode(&mut self, map: &WorldMap, mode: usize) -> Result<(), GameError> {
         match &mut self.op {
@@ -1292,6 +1311,19 @@ impl Game {
             return Ok(EventOutcome::Pending { card: card.id, chooser: self.status.active });
         }
 
+        // SALT Negotiations: DEFCON +2 and the coup penalty, then the player may take a
+        // non-scoring card from the discard pile (an empty pile still opens the pick, to say so).
+        if card.id == CardId(43) {
+            let pile: Vec<(CardId, String)> = self.hands.discards().iter().filter(|&&c| !cards.card(c).scoring).map(|&c| (c, cards.card(c).name.clone())).collect();
+            let player = self.status.active;
+            let defcon = Some((self.status.defcon + 2).min(5));
+            // Even an empty pile opens the pick, so the player sees why nothing can be taken.
+            if let Some(pick) = EventChoice::pick_from_pile(map, &self.board, card.id, player, &pile, defcon, Some(crate::ongoing::OngoingEffect::Salt)) {
+                self.op = Some(Operation::Event(Box::new(pick)));
+                return Ok(EventOutcome::Pending { card: card.id, chooser: player });
+            }
+        }
+
         // Aldrich Ames Remix: the USSR picks a card out of the (revealed) US hand to
         // discard. With nothing there, only the reveal happens, through the ordinary event.
         if card.id == CardId(98) {
@@ -1420,6 +1452,11 @@ impl Game {
         for &(side, card) in &result.discards {
             if self.hands.remove(side, card).is_some() {
                 self.hands.discard(card);
+            }
+        }
+        for &(side, card) in &result.takes {
+            if self.hands.take(card) {
+                self.hands.push_to_hand(side, card);
             }
         }
         for change in &result.influence {

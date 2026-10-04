@@ -265,10 +265,12 @@ struct Extra {
     contest: bool,
     /// Choosing this mode lets the player who played the card conduct operations with it (Olympic Games' boycott).
     grant: Option<OpsGrant>,
+    /// This side takes this card out of the discard pile (SALT Negotiations).
+    take: Option<(Superpower, CardId)>,
 }
 
 impl Extra {
-    const NONE: Extra = Extra { defcon: None, mil_ops: 0, ends_game: false, discard: None, then: false, contest: false, grant: None };
+    const NONE: Extra = Extra { defcon: None, mil_ops: 0, ends_game: false, discard: None, then: false, contest: false, grant: None, take: None };
 }
 
 /// One side's bonus to a roll-off and where it comes from.
@@ -395,6 +397,12 @@ pub struct EventChoice {
     /// Whether the event was set off by a trigger rather than a played card (NORAD): there is no
     /// card to spend and no turn to hand over when it ends.
     triggered: bool,
+    /// The discard-pile cards a pile pick offers, one per mode after the first; empty otherwise.
+    pile: Vec<CardId>,
+    /// Whether this is a discard-pile pick (even over an empty pile).
+    pile_pick: bool,
+    /// Which mode the picker's highlight is on.
+    cursor: usize,
 }
 
 impl EventChoice {
@@ -432,6 +440,9 @@ impl EventChoice {
             follow_up: None,
             second_stage: false,
             triggered: false,
+            pile: Vec::new(),
+            pile_pick: false,
+            cursor: 0,
         };
         if choice.modes.len() == 1 {
             choice.select(map, 0);
@@ -502,6 +513,51 @@ impl EventChoice {
         choice.gate_prompt = format!("picks a card from the {victim} hand to discard");
         choice.reveal = Some(Reveal { side: victim, cards: choice.gate.clone() });
         Some(choice)
+    }
+
+    /// SALT Negotiations (#43): after its fixed effects (`defcon`, `ongoing`) the player may take
+    /// one of the non-scoring cards in the discard `pile` into their hand, revealed. Mode 0 takes
+    /// none; mode `i + 1` takes `pile[i]`. With an empty pile there is only mode 0, and the modal
+    /// says why nothing can be taken.
+    pub fn pick_from_pile(map: &WorldMap, board: &Board, card: CardId, picker: Superpower, pile: &[(CardId, String)], defcon: Option<u8>, ongoing: Option<OngoingEffect>) -> Option<Self> {
+        let mode = |label: String, take: Option<CardId>| Mode {
+            label,
+            fixed: Vec::new(),
+            rule: None,
+            ongoing,
+            vp: 0,
+            china: None,
+            extra: Extra { defcon, take: take.map(|c| (picker, c)), ..Extra::NONE },
+        };
+        let mut modes = vec![mode("take no card".to_string(), None)];
+        modes.extend(pile.iter().map(|(id, name)| mode(format!("take {name}"), Some(*id))));
+        let mut choice = Self::from_spec(map, board, card, Spec { chooser: picker, optional: false, modes });
+        choice.pile = pile.iter().map(|(id, _)| *id).collect();
+        choice.pile_pick = true;
+        choice.session_modal = true;
+        choice.cursor = 0;
+        Some(choice)
+    }
+
+    /// The discard-pile cards on offer (mode `i + 1` is `pile()[i]`); empty unless this is a pile pick.
+    pub fn pile(&self) -> &[CardId] {
+        &self.pile
+    }
+
+    /// Whether this is a discard-pile pick, offering `pile()` (possibly nothing).
+    pub fn is_pile_pick(&self) -> bool {
+        self.pile_pick
+    }
+
+    /// The mode the picker's highlight is on.
+    pub fn cursor(&self) -> usize {
+        self.cursor
+    }
+
+    /// Moves the picker's highlight by `delta` modes, wrapping.
+    pub fn move_cursor(&mut self, delta: i32) {
+        let n = self.modes.len().max(1) as i32;
+        self.cursor = (self.cursor as i32 + delta).rem_euclid(n) as usize;
     }
 
     /// The Cambridge Five (#104): the USSR may add 1 influence to a single country in one of
@@ -1202,6 +1258,7 @@ impl EventChoice {
             ends_game: extra.ends_game,
             reveals: self.reveal.clone(),
             discards: extra.discard.into_iter().collect(),
+            takes: extra.take.into_iter().collect(),
             contest: if extra.contest { self.contest.clone() } else { None },
         }
     }

@@ -3444,6 +3444,7 @@ mod salt {
         let (map, cards, mut game) = load("salt-negotiations");
         game.play_card(&cards, cards.id_by_name("SALT Negotiations").unwrap()).unwrap();
         game.play_event(&map, &cards).unwrap();
+        game.confirm().unwrap();
         assert_eq!(game.status().defcon, 4);
         assert!(game.status().effects.salt);
     }
@@ -3453,6 +3454,7 @@ mod salt {
         let (map, cards, mut game) = load("salt-negotiations-near-top");
         game.play_card(&cards, cards.id_by_name("SALT Negotiations").unwrap()).unwrap();
         game.play_event(&map, &cards).unwrap();
+        game.confirm().unwrap();
         assert_eq!(game.status().defcon, 5);
     }
 
@@ -3476,5 +3478,152 @@ mod salt {
         }
         assert!(!game.status().effects.salt);
         assert_eq!(game.status().turn, 2);
+    }
+}
+
+mod discard_pile {
+    use super::*;
+    use twilight_struggle::ops::Operation;
+
+    fn start() -> (WorldMap, CardCatalog, Game) {
+        let (map, cards, lib) = fixtures();
+        let (scenario, _) = lib.load(&map, &cards, "events/salt-negotiations-discards").unwrap();
+        let mut game = Game::from_scenario(&scenario);
+        game.play_card(&cards, cards.id_by_name("SALT Negotiations").unwrap()).unwrap();
+        (map, cards, game)
+    }
+
+    fn names(cards: &CardCatalog, ids: &[twilight_struggle::CardId]) -> Vec<String> {
+        ids.iter().map(|&c| cards.card(c).name.clone()).collect()
+    }
+
+    #[test]
+    fn salt_offers_the_non_scoring_discards_and_a_no_card_option() {
+        let (map, cards, mut game) = start();
+        game.play_event(&map, &cards).unwrap();
+        let Some(Operation::Event(e)) = game.operation() else { panic!("the pick opens") };
+        assert_eq!(names(&cards, e.pile()), ["Fidel", "Containment", "Truman Doctrine"]);
+        let labels: Vec<&str> = e.modes().iter().map(|m| m.label.as_str()).collect();
+        assert_eq!(labels, ["take no card", "take Fidel", "take Containment", "take Truman Doctrine"]);
+        assert_eq!(game.decider(), Superpower::Ussr);
+        assert_eq!(game.status().defcon, 2, "nothing applies until it's confirmed");
+    }
+
+    #[test]
+    fn taking_a_card_moves_it_to_the_hand_and_applies_the_fixed_effects() {
+        let (map, cards, mut game) = start();
+        game.play_event(&map, &cards).unwrap();
+        game.move_event_cursor(2);
+        game.choose_event_cursor(&map).unwrap();
+        game.confirm().unwrap();
+        let containment = cards.id_by_name("Containment").unwrap();
+        assert!(game.hand(Superpower::Ussr).contains(&containment));
+        assert!(!game.discards().contains(&containment));
+        assert!(game.discards().contains(&cards.id_by_name("Fidel").unwrap()));
+        assert_eq!(game.status().defcon, 4);
+        assert!(game.status().effects.salt);
+        assert_eq!(game.active(), Superpower::Us);
+    }
+
+    #[test]
+    fn taking_nothing_still_applies_the_fixed_effects() {
+        let (map, cards, mut game) = start();
+        game.play_event(&map, &cards).unwrap();
+        game.choose_event_cursor(&map).unwrap();
+        game.confirm().unwrap();
+        assert_eq!(game.hand(Superpower::Ussr).len(), 0);
+        assert_eq!(game.status().defcon, 4);
+        assert!(game.status().effects.salt);
+    }
+
+    #[test]
+    fn the_cursor_wraps_and_the_player_can_back_out_before_choosing() {
+        let (map, cards, mut game) = start();
+        game.play_event(&map, &cards).unwrap();
+        game.move_event_cursor(-1);
+        let Some(Operation::Event(e)) = game.operation() else { panic!() };
+        assert_eq!(e.cursor(), 3);
+        game.abandon().unwrap();
+        assert_eq!(game.status().defcon, 2);
+    }
+
+    #[test]
+    fn the_modal_lists_the_pile_and_fits() {
+        use twilight_struggle::render::render_event_session;
+        use twilight_struggle::ColorMode;
+        let (map, cards, mut game) = start();
+        game.play_event(&map, &cards).unwrap();
+        game.move_event_cursor(1);
+        game.choose_event_cursor(&map).unwrap();
+        let Some(Operation::Event(e)) = game.operation() else { panic!() };
+        let text = render_event_session(&cards, e, game.status()).render(ColorMode::Never);
+        assert!(text.contains("take Fidel") && text.contains("USSR takes Fidel (revealed)") && text.contains("DEFCON 2 → 4"), "{text}");
+        for line in text.lines() {
+            assert!(line.chars().count() <= 69, "{line:?}");
+        }
+    }
+
+    #[test]
+    fn an_empty_pile_opens_the_same_pick_and_says_why_nothing_can_be_taken() {
+        use twilight_struggle::render::render_event_session;
+        use twilight_struggle::ColorMode;
+        let (map, cards, lib) = fixtures();
+        let (scenario, _) = lib.load(&map, &cards, "events/salt-negotiations").unwrap();
+        let mut game = Game::from_scenario(&scenario);
+        game.play_card(&cards, cards.id_by_name("SALT Negotiations").unwrap()).unwrap();
+        game.play_event(&map, &cards).unwrap();
+        let Some(Operation::Event(e)) = game.operation() else { panic!("the pick opens even over an empty pile") };
+        assert!(e.is_pile_pick() && e.pile().is_empty() && e.has_session_modal());
+        let text = render_event_session(&cards, e, game.status()).render(ColorMode::Never);
+        assert!(text.contains("discard pile is empty") && text.contains("DEFCON 2 → 4"), "{text}");
+        assert_eq!(game.status().defcon, 2, "nothing applies until it's confirmed");
+        game.confirm().unwrap();
+        assert!(game.status().defcon == 4 && game.status().effects.salt);
+        assert_eq!(game.active(), Superpower::Us);
+    }
+
+    #[test]
+    fn the_ai_finishes_the_pick() {
+        use twilight_struggle::{play_turn, Dice, RandomAi};
+        for seed in 0..10 {
+            let (map, cards, mut game) = start();
+            game.play_event(&map, &cards).unwrap();
+            play_turn(&mut RandomAi::from_seed(seed), &mut game, &map, &cards, &mut Dice::from_seed(seed)).unwrap();
+            assert!(game.operation().is_none() && game.status().effects.salt, "seed {seed}");
+        }
+    }
+}
+
+mod discard_pile_reveal {
+    use super::*;
+    use twilight_struggle::{Dice, Event, RandomAi};
+
+    #[test]
+    fn the_logged_result_carries_the_taken_card_for_both_a_human_and_an_ai_pick() {
+        let (map, cards, lib) = fixtures();
+        let (scenario, _) = lib.load(&map, &cards, "events/salt-negotiations-discards").unwrap();
+        for seed in 0..20 {
+            let mut game = Game::from_scenario(&scenario);
+            game.play_card(&cards, cards.id_by_name("SALT Negotiations").unwrap()).unwrap();
+            game.play_event(&map, &cards).unwrap();
+            twilight_struggle::play_turn(&mut RandomAi::from_seed(seed), &mut game, &map, &cards, &mut Dice::from_seed(seed)).unwrap();
+            let takes: Vec<_> = game
+                .log()
+                .entries()
+                .iter()
+                .filter_map(|e| match &e.event {
+                    Event::EventResolved { result, .. } => Some(result.takes.clone()),
+                    _ => None,
+                })
+                .collect();
+            // Whatever the AI took is recorded, and is in its hand.
+            for &(side, card) in takes.iter().flatten() {
+                assert!(game.hand(side).contains(&card), "seed {seed}");
+            }
+            let line = twilight_struggle::render::log_entry_line(&map, &cards, game.log().entries().last().unwrap());
+            if takes.iter().any(|t| !t.is_empty()) {
+                assert!(line.contains("from the discard pile"), "{line}");
+            }
+        }
     }
 }
