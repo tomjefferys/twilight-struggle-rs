@@ -442,6 +442,11 @@ impl Game {
         self.hands.hand(side)
     }
 
+    /// All the card piles — hands, deck, discard and removed — read-only, for a view of them.
+    pub fn hands(&self) -> &Hands {
+        &self.hands
+    }
+
     /// Every card discarded so far — via `confirm`/`cancel` (the ops
     /// path) or [`Game::play_event`] on a card that isn't
     /// `removed_after_event`. Read-only, the same shape [`Game::hand`]

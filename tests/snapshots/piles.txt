@@ -1,0 +1,9 @@
+Discard pile: 4 cards
+    4  3  Duck and Cover
+    8  2  Fidel*
+   11  2  Korean War*
+   13  2  Arab-Israeli War
+Removed pile: 2 cards
+   23  4  Marshall Plan*
+   19  1  Truman Doctrine*
+Deck: 5 cards, face down

@@ -6,7 +6,7 @@ use rustyline::history::DefaultHistory;
 use rustyline::Editor;
 
 use twilight_struggle::render::{
-    coup_result_line, game_over_line, log_entry_line, log_text, ongoing_effect_line, operation_abandoned_line, operation_balance_line, render_card,
+    coup_result_line, game_over_line, log_entry_line, log_text, piles_text, PileTab, ongoing_effect_line, operation_abandoned_line, operation_balance_line, render_card,
     render_country, render_event_result, render_space_result, render_space_track, render_war_result, render_hand, render_log, render_region, render_scoring_result, render_world, render_world_map, roll_result_line,
 };
 use twilight_struggle::{
@@ -33,7 +33,7 @@ const COMMANDS: &[&str] = &[
     "map", "world", "worldmap", "wm", "region", "country", "set", "add", "remove", "clear", "blank", "load", "save", "states", "play",
     "influence", "realign", "coup", "event", "place", "roll", "undo", "confirm", "cancel", "abandon", "status", "pass", "ai", "hand",
     "card", "log", "history", "export", "seed", "width", "color", "debug", "vp", "defcon", "turn", "ar", "active", "china", "give",
-    "discard", "exile", "help", "+", "-", "take", "mode", "space", "spacerace", "track", "escape", "defuse",
+    "discard", "exile", "help", "+", "-", "take", "mode", "space", "spacerace", "track", "escape", "defuse", "piles",
 ];
 
 struct Session {
@@ -680,6 +680,7 @@ fn run_command(session: &mut Session, line: &str) {
         "defuse" => run_defuse_command(session, &words),
         "ai" => run_ai_command(session, &words),
         "hand" => run_hand_command(session, &words),
+        "piles" => run_piles_command(session, &words),
         "card" => run_card_command(session, &words),
         "log" | "history" => run_log_command(session, &words),
         "export" => run_export_command(session, &words),
@@ -1282,6 +1283,24 @@ fn run_hand_command(session: &Session, words: &[&str]) {
     println!("{}", canvas.render(session.color));
 }
 
+/// `piles [discard|removed|deck]` lists the discard pile, the removed-from-play pile and the
+/// draw deck's size (the deck's contents are hidden) — or just the one named.
+fn run_piles_command(session: &Session, words: &[&str]) {
+    let tabs: Vec<PileTab> = match words.get(1).map(|w| w.to_lowercase()) {
+        None => PileTab::ALL.to_vec(),
+        Some(w) => match PileTab::ALL.iter().find(|t| t.label().to_lowercase().starts_with(&w)) {
+            Some(&tab) => vec![tab],
+            None => {
+                println!("usage: piles [discard|removed|deck]");
+                return;
+            }
+        },
+    };
+    for tab in tabs {
+        println!("{}", piles_text(&session.cards, session.game.hands(), tab));
+    }
+}
+
 /// `card <id|name>` prints one card's full detail — the same zoom view
 /// the interactive map overlays on `z`.
 fn run_card_command(session: &Session, words: &[&str]) {
@@ -1767,6 +1786,11 @@ Commands:
   hand [us|ussr]          the named side's hand (default: active side),
                           as a strip of mini-card boxes — or see it drawn
                           under every screen inside the interactive map
+  piles [discard|removed|deck]
+                          the discard pile and the removed-from-play pile
+                          card by card, and the draw deck's size (its
+                          contents are hidden) — or press D inside the
+                          interactive map (←→ tabs, z zooms a card)
   card <id|name>          one card's full detail (id, name prefix, or
                           exact name) — or press z to zoom the selected
                           card inside the interactive map

@@ -74,7 +74,11 @@ uniformly random legal moves.
   `CardError`) with a `find` lookup (`CardFound`) like `WorldMap::find`'s,
   except a numeric query matches a card's id (its printed number) before
   falling back to name matching. `Hands` is the mutable per-game state — a
-  `[Vec<CardId>; 2]` indexed by `Superpower`, plus a shared `discard` pile
+  `[Vec<CardId>; 2]` indexed by `Superpower`, plus a face-down draw `deck`
+  (`Hands::draw` takes the last card and, when the deck is empty, shuffles
+  the discard pile into it — never the removed pile; `Dice::shuffle` is the
+  Fisher-Yates behind that; a scenario/state file's optional `deck` lists
+  it, top card last), a shared `discard` pile
   a played card lands in once its operation (or an event that isn't
   `removed_after_event`) closes, and a second `removed` pile for one that
   is — kept here rather than its own module since it's still a thin
@@ -745,6 +749,7 @@ uniformly random legal moves.
     `draw_divider` for the `├─ Title ─┤` rows between panels, and the free
     function `put_border_title` for the outer box's own
     `┌─ * Poland ─── Europe · stability 3 ─┐` top border.
+  - `piles.rs` — `render_piles`, the tabbed Discard/Removed/Deck view (`PileTab`; a scrolling card list with the highlight on a cursor, the deck tab showing only a count — it's hidden information) and `piles_text`, the same lists as plain text. Interactive mode opens it with `D` (`Modal::Piles`: ←→/`[`/`]` switch tab, ↑↓ move, `z` zooms the highlighted card via `render_card`, Enter/Esc close); the REPL's `piles [discard|removed|deck]` prints it. The status bar's turn row appends `deck N · discard N` whenever either pile is non-empty (`render_status_bar_with`'s `piles` argument).
   - `log.rs` — turns a `GameLog` into text: `log_entry_line` (now taking a
     `CardCatalog` alongside the `WorldMap`, so an `Event::Selected`
     entry's own card can be named) is the canonical rendering of one
@@ -1238,7 +1243,7 @@ deliberate exception, for debug-mode test states specifically.
 - `backup/` — earlier full snapshots of the world map, kept in case a
   future change needs to compare against or revert to an earlier version.
 - `states/` — named test states (`src/states.rs`'s own `StateLibrary`),
-  one JSON file per topic (`scoring.json` is the first, then `events.json` for the fixed-effect cards, `choices.json` for the choice cards, `turn-effects.json` for the turn-long ones and `lasting.json` for the game-long ones, `coups.json` for Military Ops and the DEFCON region limits — each card's own event, plus `*-active` states with an effect already in force), each holding a
+  one JSON file per topic (`scoring.json` is the first, then `events.json` for the fixed-effect cards, `choices.json` for the choice cards, `turn-effects.json` for the turn-long ones and `lasting.json` for the game-long ones, `coups.json` for Military Ops and the DEFCON region limits, `piles.json` for the deck and pile views — each card's own event, plus `*-active` states with an effect already in force), each holding a
   `{"states": [...]}` array of several named `Scenario` snapshots. Read
   from disk at runtime, not `include_str!`-embedded — see `states.rs`'s
   own doc above for why.

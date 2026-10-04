@@ -4093,3 +4093,61 @@ mod coups {
         assert_eq!(aftermath.unwrap().mil_ops, Some((4, 5)));
     }
 }
+
+/// The draw deck and the pile views (`data/states/piles.json`).
+mod piles {
+    use super::*;
+    use twilight_struggle::render::{piles_text, PileTab};
+    use twilight_struggle::{CardId, Dice};
+
+    fn load() -> (WorldMap, CardCatalog, Game) {
+        let (map, cards, lib) = fixtures();
+        let (scenario, _) = lib.load(&map, &cards, "piles/mid-game-piles").unwrap();
+        (map, cards, Game::from_scenario(&scenario))
+    }
+
+    #[test]
+    fn a_saved_state_keeps_its_deck_in_order_and_the_piles_are_readable() {
+        let (_, cards, game) = load();
+        let names = |ids: &[CardId]| ids.iter().map(|&id| cards.card(id).name.clone()).collect::<Vec<_>>();
+        assert_eq!(names(game.hands().deck()), ["Blockade", "Decolonization", "Suez Crisis", "Romanian Abdication", "NATO"]);
+        assert_eq!(game.discards().len(), 4);
+        assert_eq!(game.removed_from_game().len(), 2);
+    }
+
+    #[test]
+    fn saving_and_reloading_a_state_round_trips_its_deck() {
+        let (map, cards, game) = load();
+        let dir = std::env::temp_dir().join(format!("ts-piles-{}", std::process::id()));
+        let lib = StateLibrary::new(dir.clone());
+        let scenario = game.snapshot();
+        lib.save(&map, &cards, "roundtrip/deck", "deck survives", &scenario).unwrap();
+        let (back, _) = lib.load(&map, &cards, "roundtrip/deck").unwrap();
+        assert_eq!(back.hands.deck(), game.hands().deck());
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn drawing_past_the_deck_reshuffles_the_discard_pile_but_not_the_removed_one() {
+        let (_, _, mut game) = load();
+        let mut dice = Dice::from_seed(5);
+        let hands = game.hands_mut();
+        for _ in 0..5 {
+            assert!(hands.draw(&mut dice).is_some());
+        }
+        assert!(hands.deck().is_empty());
+        let mut again = Vec::new();
+        while let Some(card) = hands.draw(&mut dice) {
+            again.push(card);
+        }
+        assert_eq!(again.len(), 4, "exactly the four discards came back");
+        assert_eq!(hands.removed().len(), 2);
+    }
+
+    #[test]
+    fn the_piles_command_matches_its_snapshot() {
+        let (_, cards, game) = load();
+        let text = PileTab::ALL.iter().map(|&t| piles_text(&cards, game.hands(), t)).collect::<Vec<_>>().join("\n");
+        assert_eq!(text, include_str!("snapshots/piles.txt").trim_end_matches('\n'));
+    }
+}

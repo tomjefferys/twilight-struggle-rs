@@ -1,0 +1,5 @@
+{
+  "states": [
+    {"name": "mid-game-piles", "description": "Turn 3 with something in every pile: four cards discarded, two removed from the game (Marshall Plan and Truman Doctrine, both played as events) and a five-card deck face down. Each side holds two cards.", "status": {"turn": 3, "action_round": 2, "action_rounds_per_turn": 6, "active": "Us"}, "hands": {"us": ["Containment", "Nasser"], "ussr": ["Comecon", "Vietnam Revolts"]}, "discard": ["Duck and Cover", "Fidel", "Korean War", "Arab-Israeli War"], "removed": ["Marshall Plan", "Truman Doctrine"], "deck": ["Blockade", "Decolonization", "Suez Crisis", "Romanian Abdication", "NATO"]}
+  ]
+}

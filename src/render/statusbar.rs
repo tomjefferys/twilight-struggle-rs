@@ -68,7 +68,7 @@ pub fn render_status_bar(
     winner: Option<Victory>,
     width: usize,
 ) -> Canvas {
-    render_status_bar_with(layout, board, status, card, op, winner, None, None, width)
+    render_status_bar_with(layout, board, status, card, op, winner, None, None, None, width)
 }
 
 /// [`render_status_bar`] for a game whose card in play has already had its
@@ -84,6 +84,7 @@ pub fn render_status_bar_with(
     winner: Option<Victory>,
     after_event: Option<crate::events::OpsGrant>,
     forced_by: Option<(&Card, crate::events::PlayAs)>,
+    piles: Option<(usize, usize)>,
     width: usize,
 ) -> Canvas {
     // An open event's chooser (the card's own side) is who's really to
@@ -94,13 +95,14 @@ pub fn render_status_bar_with(
         None => after_event.and_then(|g| g.side).unwrap_or(status.active),
     };
     let turn_line = format!(
-        "TURN {} · AR {} · {} to act · DEFCON {} · VP {}{}",
+        "TURN {} · AR {} · {} to act · DEFCON {} · VP {}{}{}",
         status.turn,
         ar_label(status),
         to_act,
         status.defcon,
         vp_line(status.vp),
         space_label(status),
+        pile_label(piles),
     );
     let (op_line, op_style) = if let Some(victory) = winner {
         (game_over_line(victory), side_style(victory.side).bold())
@@ -243,6 +245,15 @@ const EFFECT_SEP: &str = " · ";
 /// ` · Space 2-1` — the USA's box, then the USSR's.
 fn space_label(status: &GameStatus) -> String {
     format!(" · Space {}-{}", status.space_race_us, status.space_race_ussr)
+}
+
+/// ` · deck 19 · discard 3`: how many cards are left to draw and how many have been played —
+/// omitted when there is neither (a scenario without a deck), so such a bar doesn't change.
+fn pile_label(piles: Option<(usize, usize)>) -> String {
+    match piles {
+        Some((deck, discard)) if deck + discard > 0 => format!(" · deck {deck} · discard {discard}"),
+        _ => String::new(),
+    }
 }
 
 /// ` · s space race` for any card that has ops to spend — the key opens a

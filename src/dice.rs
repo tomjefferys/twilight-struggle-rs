@@ -60,6 +60,15 @@ impl Dice {
         assert!(n > 0, "Dice::index called with n == 0");
         (((self.next_u64() as u128) * n as u128) >> 64) as usize
     }
+
+    /// Fisher-Yates shuffle of `items` in place, one [`Dice::index`] per swap — so a seeded
+    /// `Dice` always deals the same deck.
+    pub fn shuffle<T>(&mut self, items: &mut [T]) {
+        for i in (1..items.len()).rev() {
+            let j = self.index(i + 1);
+            items.swap(i, j);
+        }
+    }
 }
 
 #[cfg(test)]
@@ -135,5 +144,17 @@ mod tests {
             let deviation = (count as f64 - expected).abs() / expected;
             assert!(deviation < 0.01, "face {} deviated by {:.2}% (count {count}, expected {expected})", face + 1, deviation * 100.0);
         }
+    }
+
+    #[test]
+    fn shuffle_keeps_every_item_and_is_reproducible() {
+        let mut a: Vec<u8> = (0..30).collect();
+        let mut b = a.clone();
+        Dice::from_seed(9).shuffle(&mut a);
+        Dice::from_seed(9).shuffle(&mut b);
+        assert_eq!(a, b);
+        assert_ne!(a, (0..30).collect::<Vec<u8>>(), "30 items staying in order would be astronomically unlikely");
+        a.sort();
+        assert_eq!(a, (0..30).collect::<Vec<u8>>());
     }
 }

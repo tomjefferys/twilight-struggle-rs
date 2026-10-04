@@ -13,7 +13,7 @@ use crossterm::terminal::{self, Clear, ClearType, EnterAlternateScreen, LeaveAlt
 use crossterm::{execute, queue};
 
 use twilight_struggle::render::{
-    log_entry_line, operation_abandoned_line, operation_closed_line, operation_header, render_card, render_country, render_forced_card, render_hand,
+    log_entry_line, operation_abandoned_line, pile_cards, render_piles, PileTab, operation_closed_line, operation_header, render_card, render_country, render_forced_card, render_hand,
     render_event_result, render_event_session, render_space_confirm, render_space_result, render_trap_confirm, render_trap_result, render_space_track_with_hint, render_war_result, render_region, render_roll_result, render_scoring_result, render_status_bar_with, render_world_map, Canvas, RollReport, HAND_ROWS,
 };
 use twilight_struggle::events::{PlayAs, EffectResult, ScoringResult, WarResult};
@@ -24,6 +24,11 @@ use twilight_struggle::{
     ai, Board, CardCatalog, CardId, ColorMode, CountryId, Dice, Direction, Event, EventOutcome, Game, GameError, LogEntry, MapLayout,
     OperationKind, RandomAi, Region, RollOutcome, Superpower, ViewMode, WorldMap, CHINA_CARD,
 };
+
+/// How many cards the piles view can scroll through on `tab`.
+fn piles_len(game: &Game, tab: PileTab) -> usize {
+    pile_cards(game.hands(), tab).len()
+}
 
 /// Whichever irreversible result is currently shown as its own modal —
 /// a resolved realignment roll/coup attempt, or a resolved scoring
@@ -63,6 +68,9 @@ enum Modal {
     /// `t`: the space race track, for information only — drawn live from
     /// the status, dismissed with Enter, Esc or `t` again.
     SpaceTrack,
+    /// `D`: the discard, removed and deck piles, for information only — drawn live from the
+    /// game's hands. `zoom` shows the highlighted card in full instead of the list.
+    Piles { tab: PileTab, cursor: usize, zoom: bool },
 }
 
 /// Which screen is currently showing.
@@ -348,6 +356,24 @@ pub fn run(
                         draw(&screen, map, layout, cards, game, message.as_deref(), &hand_selected, zoomed, &modal, color)?;
                         continue;
                     }
+                    if let Some(Modal::Piles { tab, cursor, zoom }) = modal.front_mut() {
+                        let len = piles_len(game, *tab);
+                        match key.code {
+                            KeyCode::Char('q') => return Ok(()),
+                            KeyCode::Esc | KeyCode::Enter | KeyCode::Char('D') | KeyCode::Backspace if *zoom => *zoom = false,
+                            KeyCode::Esc | KeyCode::Enter | KeyCode::Char('D') | KeyCode::Backspace => {
+                                modal.pop_front();
+                            }
+                            KeyCode::Right | KeyCode::Char(']') | KeyCode::Tab => (*tab, *cursor) = (tab.next(), 0),
+                            KeyCode::Left | KeyCode::Char('[') | KeyCode::BackTab => (*tab, *cursor) = (tab.prev(), 0),
+                            KeyCode::Down | KeyCode::Char('j') => *cursor = (*cursor + 1).min(len.saturating_sub(1)),
+                            KeyCode::Up | KeyCode::Char('k') => *cursor = cursor.saturating_sub(1),
+                            KeyCode::Char('z') if *tab != PileTab::Deck && len > 0 => *zoom = !*zoom,
+                            _ => {}
+                        }
+                        draw(&screen, map, layout, cards, game, message.as_deref(), &hand_selected, zoomed, &modal, color)?;
+                        continue;
+                    }
                     match key.code {
                         KeyCode::Enter | KeyCode::Esc => {
                             modal.pop_front();
@@ -415,6 +441,10 @@ pub fn run(
                     KeyCode::Char('t') => {
                         zoomed = false;
                         modal.push_back(Modal::SpaceTrack);
+                    }
+                    KeyCode::Char('D') => {
+                        zoomed = false;
+                        modal.push_back(Modal::Piles { tab: PileTab::Discard, cursor: 0, zoom: false });
                     }
                     // Cuban Missile Crisis: the threatened side removes 2 of its own influence from the selected country.
                     KeyCode::Char('d') => match &screen {
@@ -1139,6 +1169,13 @@ fn draw(
             Modal::War(result, vp_after, winner) => render_war_result(map, cards, result, *vp_after, *winner, queue_pos),
             Modal::Space(result, vp_after, winner) => render_space_result(cards, result, *vp_after, *winner, queue_pos),
             Modal::SpaceTrack => render_space_track_with_hint(game.status(), "Enter/Esc/⌫/t close"),
+            Modal::Piles { tab, cursor, zoom } => {
+                let list = pile_cards(game.hands(), *tab);
+                match list.get((*cursor).min(list.len().saturating_sub(1))) {
+                    Some(&id) if *zoom => render_card(cards, id, None),
+                    _ => render_piles(cards, game.hands(), *tab, *cursor),
+                }
+            }
             Modal::Session => match game.operation() {
                 Some(Operation::Event(e)) => render_event_session(cards, e, game.status()),
                 _ => Canvas::new(0, 0),
@@ -1157,7 +1194,7 @@ fn draw(
     }
 
     let card_in_play = game.card_in_play().map(|id| cards.card(id));
-    let bar = render_status_bar_with(layout, board, game.status(), card_in_play, op, game.winner(), game.ops_after_event(), game.forced_by().zip(game.forced_how()).map(|(c, how)| (cards.card(c), how)), canvas.width());
+    let bar = render_status_bar_with(layout, board, game.status(), card_in_play, op, game.winner(), game.ops_after_event(), game.forced_by().zip(game.forced_how()).map(|(c, how)| (cards.card(c), how)), Some((game.hands().deck().len(), game.discards().len())), canvas.width());
 
     let rows = terminal::size().map(|(_, h)| h as usize).unwrap_or(bar.height() + canvas.height() + HAND_ROWS);
     let view_budget = rows.saturating_sub(bar.height() + message.is_some() as usize + HAND_ROWS);

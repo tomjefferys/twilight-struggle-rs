@@ -94,6 +94,9 @@ pub(crate) struct RawScenario {
     discard: Vec<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     removed: Vec<String>,
+    /// The draw deck, top card last.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    deck: Vec<String>,
 }
 
 fn is_default_status(status: &GameStatus) -> bool {
@@ -182,6 +185,7 @@ impl Scenario {
         let ussr_hand = resolve_pile(&raw.hands.ussr, &mut dealt)?;
         let discard = resolve_pile(&raw.discard, &mut dealt)?;
         let removed = resolve_pile(&raw.removed, &mut dealt)?;
+        let deck = resolve_pile(&raw.deck, &mut dealt)?;
         if us_hand.len() > MAX_HAND_SIZE {
             return Err(ScenarioError::HandTooLarge { side: Superpower::Us, size: us_hand.len() });
         }
@@ -189,7 +193,7 @@ impl Scenario {
             return Err(ScenarioError::HandTooLarge { side: Superpower::Ussr, size: ussr_hand.len() });
         }
 
-        Ok(Scenario { status: raw.status, board, hands: Hands::with_piles(us_hand, ussr_hand, discard, removed) })
+        Ok(Scenario { status: raw.status, board, hands: Hands::with_piles(us_hand, ussr_hand, discard, removed).with_deck(deck) })
     }
 
     /// The inverse of [`Scenario::from_raw`]: turns this scenario's board/
@@ -217,6 +221,7 @@ impl Scenario {
             hands: RawHands { us: names(self.hands.hand(Superpower::Us)), ussr: names(self.hands.hand(Superpower::Ussr)) },
             discard: names(self.hands.discards()),
             removed: names(self.hands.removed()),
+            deck: names(self.hands.deck()),
         }
     }
 }

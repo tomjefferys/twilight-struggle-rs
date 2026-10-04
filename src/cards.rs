@@ -13,6 +13,8 @@
 use std::collections::HashMap;
 use std::fmt;
 
+use crate::dice::Dice;
+
 use serde::Deserialize;
 
 use crate::country::Superpower;
@@ -343,10 +345,11 @@ pub const MAX_HAND_SIZE: usize = 9;
 /// ([`CHINA_CARD`]), which is tracked separately (`GameStatus::china_card`)
 /// since it changes hands outside the normal draw/discard cycle.
 ///
-/// Also holds the shared `discard` pile a played card lands in once its
-/// operation closes ([`crate::game::Game::confirm`]/`cancel`) — nothing
-/// reads it yet (no redraw or reshuffle exists), but a played card needs
-/// *somewhere* to go once it leaves a hand.
+/// Also holds the face-down draw `deck` (in draw order: the next card is the
+/// last one) and the shared `discard` pile a played card lands in once its
+/// operation closes ([`crate::game::Game::confirm`]/`cancel`). An empty deck
+/// is refilled from the discard pile by [`Hands::draw`] — never from the
+/// removed pile.
 ///
 /// Cheap to clone, like [`crate::board::Board`] and every other piece of
 /// per-game state `Game` carries — the same reason: `Game` itself needs to
@@ -357,11 +360,12 @@ pub struct Hands {
     ussr: Vec<CardId>,
     discard: Vec<CardId>,
     removed: Vec<CardId>,
+    deck: Vec<CardId>,
 }
 
 impl Hands {
     pub fn new(us: Vec<CardId>, ussr: Vec<CardId>) -> Self {
-        Hands { us, ussr, discard: Vec::new(), removed: Vec::new() }
+        Hands { us, ussr, discard: Vec::new(), removed: Vec::new(), deck: Vec::new() }
     }
 
     /// Like [`Hands::new`], but also seeding the discard and removed-from-
@@ -369,7 +373,35 @@ impl Hands {
     /// to restore a saved test state, which (unlike a fresh scenario) can
     /// have cards sitting in either pile already.
     pub fn with_piles(us: Vec<CardId>, ussr: Vec<CardId>, discard: Vec<CardId>, removed: Vec<CardId>) -> Self {
-        Hands { us, ussr, discard, removed }
+        Hands { us, ussr, discard, removed, deck: Vec::new() }
+    }
+
+    /// Replaces the draw deck (in draw order: the next card drawn is the last one).
+    pub fn with_deck(mut self, deck: Vec<CardId>) -> Self {
+        self.deck = deck;
+        self
+    }
+
+    /// The draw deck, hidden information in play — for a count, or a test state's own listing.
+    pub fn deck(&self) -> &[CardId] {
+        &self.deck
+    }
+
+    /// Shuffles `cards` into the deck (new cards go underneath what's left, then everything is
+    /// shuffled together — what the Mid and Late War additions do).
+    pub fn shuffle_into_deck(&mut self, cards: impl IntoIterator<Item = CardId>, dice: &mut Dice) {
+        self.deck.extend(cards);
+        dice.shuffle(&mut self.deck);
+    }
+
+    /// Draws the top card, first shuffling the discard pile into an empty deck (rule 4.5 —
+    /// the removed pile never comes back). `None` when both are empty.
+    pub fn draw(&mut self, dice: &mut Dice) -> Option<CardId> {
+        if self.deck.is_empty() && !self.discard.is_empty() {
+            let pile = std::mem::take(&mut self.discard);
+            self.shuffle_into_deck(pile, dice);
+        }
+        self.deck.pop()
     }
 
     pub fn hand(&self, side: Superpower) -> &[CardId] {
@@ -458,6 +490,10 @@ impl Hands {
             self.removed.remove(index);
             return true;
         }
+        if let Some(index) = self.deck.iter().position(|&c| c == card) {
+            self.deck.remove(index);
+            return true;
+        }
         false
     }
 
@@ -472,6 +508,25 @@ impl Hands {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn ids(n: &[u8]) -> Vec<CardId> {
+        n.iter().map(|&i| CardId(i)).collect()
+    }
+
+    #[test]
+    fn drawing_takes_the_top_card_and_an_empty_deck_reshuffles_the_discard_but_never_the_removed_pile() {
+        let mut hands = Hands::with_piles(vec![], vec![], ids(&[7, 8, 9]), ids(&[50])).with_deck(ids(&[1, 2]));
+        let mut dice = Dice::from_seed(3);
+        assert_eq!(hands.draw(&mut dice), Some(CardId(2)));
+        assert_eq!(hands.draw(&mut dice), Some(CardId(1)));
+        assert!(hands.deck().is_empty() && hands.discards().len() == 3);
+        let mut drawn: Vec<u8> = (0..3).map(|_| hands.draw(&mut dice).unwrap().0).collect();
+        drawn.sort();
+        assert_eq!(drawn, vec![7, 8, 9], "the discard pile was shuffled into the deck");
+        assert!(hands.discards().is_empty());
+        assert_eq!(hands.draw(&mut dice), None, "the removed pile is never redrawn");
+        assert_eq!(hands.removed(), &ids(&[50])[..]);
+    }
 
     #[test]
     fn the_standard_catalog_loads_all_110_cards() {
