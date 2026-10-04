@@ -511,8 +511,13 @@ pub fn game_over_line(victory: crate::game::Victory) -> String {
         crate::game::VictoryReason::Defcon => "DEFCON 1",
         crate::game::VictoryReason::Wargames => "Wargames",
         crate::game::VictoryReason::CubanMissileCrisis => "Cuban Missile Crisis",
+        crate::game::VictoryReason::HeldScoringCard => "held a scoring card at the end of the turn",
+        crate::game::VictoryReason::FinalScoring => "final scoring",
     };
-    format!("GAME OVER — {} wins ({reason})", victory.side)
+    match victory.side {
+        Some(side) => format!("GAME OVER — {side} wins ({reason})"),
+        None => format!("GAME OVER — a draw ({reason})"),
+    }
 }
 
 /// The side/verb/ops-remaining half of [`operation_balance_line`] on its

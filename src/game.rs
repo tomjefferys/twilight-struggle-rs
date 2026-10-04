@@ -46,14 +46,14 @@
 use std::fmt;
 
 use crate::board::Board;
-use crate::cards::{CardCatalog, CardId, Hands, CHINA_CARD};
+use crate::cards::{CardCatalog, CardId, CardPhase, Hands, CHINA_CARD};
 use crate::country::{CountryId, Region, Superpower};
 use crate::dice::Dice;
 use crate::cards::CardSide;
 use crate::events::choice::{EventChoiceError, PileCard, Sign};
 use crate::events::EventChoice;
 use crate::events::{self, war, EffectResult, EventOutcome, OpsGrant, PlayAs, PlayCard, WarResult};
-use crate::log::{CoupAftermath, Event, GameLog, LogEntry};
+use crate::log::{CoupAftermath, Event, GameLog, LogEntry, TurnEndReport};
 use crate::map::WorldMap;
 use crate::ongoing::{LastingEffect, TurnEffects};
 use crate::ops::{
@@ -62,7 +62,7 @@ use crate::ops::{
 use crate::ops::{self, Coup, CoupResult};
 use crate::scenario::Scenario;
 use crate::space::{self, SpaceError, SpaceResult};
-use crate::status::GameStatus;
+use crate::status::{hand_size_for_turn, rounds_for_turn, GameStatus, TURN_RANGE};
 
 /// Why the game ended.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -79,6 +79,10 @@ pub enum VictoryReason {
     Wargames,
     /// A coup while Cuban Missile Crisis was in force: the coup-maker's opponent wins.
     CubanMissileCrisis,
+    /// A side still held a scoring card when the turn ended (rule 3.2.1): its opponent wins.
+    HeldScoringCard,
+    /// Turn 10 ended and final scoring left one side ahead on VP — or level, a draw.
+    FinalScoring,
 }
 
 /// What a side whose action rounds are escape attempts (Bear Trap, Quagmire) has to do with this one.
@@ -110,10 +114,10 @@ fn standard_cards() -> &'static CardCatalog {
     CARDS.get_or_init(|| CardCatalog::standard().expect("the standard deck loads"))
 }
 
-/// The game is over: who won, and why.
+/// The game is over: who won (`None` for a draw), and why.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Victory {
-    pub side: Superpower,
+    pub side: Option<Superpower>,
     pub reason: VictoryReason,
 }
 
@@ -353,6 +357,16 @@ pub struct Game {
     round_defcon: u8,
     /// NORAD may be owed at the end of the last action round; [`Game::settle`] decides.
     norad_due: bool,
+    phase: Phase,
+}
+
+/// Where in a turn the game is. Only `ActionRounds` lets a card be played; `TurnEnd` is the
+/// moment after the last action round that [`Game::settle`] resolves — it needs the map, the
+/// catalog and dice, which the rest of turn handling (`advance`) deliberately doesn't have.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Phase {
+    ActionRounds,
+    TurnEnd,
 }
 
 impl Game {
@@ -369,6 +383,7 @@ impl Game {
             winner: None,
             round_defcon: scenario.status.defcon,
             norad_due: false,
+            phase: Phase::ActionRounds,
         }
     }
 
@@ -431,7 +446,12 @@ impl Game {
             winner: self.winner,
             round_defcon: self.round_defcon,
             norad_due: self.norad_due,
+            phase: self.phase,
         }
+    }
+
+    pub fn phase(&self) -> Phase {
+        self.phase
     }
 
     /// `side`'s held cards, in hand order. Doesn't include the China Card
@@ -1247,28 +1267,139 @@ impl Game {
         if self.norad_due {
             return Err(GameError::Trap("NORAD's trigger has to be settled first".into()));
         }
+        if self.phase == Phase::TurnEnd {
+            return Err(GameError::Trap("the turn is over — settle its end first".into()));
+        }
         Ok(())
     }
 
-    /// Whether [`Game::settle`] has something to do.
+    /// Whether [`Game::settle`] has something to do: NORAD's trigger, or the end of the turn
+    /// (unless an event it opened — NORAD's — is still waiting on its player).
     pub fn settlement_due(&self) -> bool {
-        self.norad_due
+        self.norad_due || (self.phase == Phase::TurnEnd && self.op.is_none() && self.winner.is_none())
     }
 
     /// Settles what the last action round set off that needs the map: NORAD's +1 US influence
     /// (opened as an event for the US, if it holds Canada and has influence to add to). Callers
     /// run it after anything that can end an action round.
-    pub fn settle(&mut self, map: &WorldMap) {
-        if !std::mem::take(&mut self.norad_due) || self.winner.is_some() || self.op.is_some() {
+    pub fn settle(&mut self, map: &WorldMap, cards: &CardCatalog, dice: &mut Dice) {
+        if self.winner.is_some() || self.op.is_some() {
             return;
         }
-        let Some(canada) = map.id_by_name("Canada") else { return };
-        if !self.board.is_controlled_by(map, canada, Superpower::Us) {
+        if std::mem::take(&mut self.norad_due) {
+            let canada_held = map.id_by_name("Canada").is_some_and(|c| self.board.is_controlled_by(map, c, Superpower::Us));
+            if canada_held && let Some(e) = EventChoice::norad(map, &self.board, &self.status) {
+                self.op = Some(Operation::Event(Box::new(e)));
+                return;
+            }
+        }
+        if self.phase == Phase::TurnEnd {
+            self.end_turn(cards, dice);
+        }
+    }
+
+    /// The end of a turn (rule 4.5), in order: Military Operations against DEFCON, a held scoring
+    /// card, the China Card and every "remainder of the turn" effect, then — after turn 10, the
+    /// end of the game — the next turn: DEFCON improves by 1, Mid/Late War cards join the deck
+    /// when their turn comes, and both hands are dealt back up.
+    fn end_turn(&mut self, cards: &CardCatalog, dice: &mut Dice) {
+        let (turn, round) = (self.status.turn, self.status.action_round);
+        let mut report = TurnEndReport { mil_ops: (self.status.military_ops_us, self.status.military_ops_ussr), defcon: self.status.defcon, ..Default::default() };
+        // Each side short of DEFCON hands the opponent the shortfall; both short nets out.
+        let short = |ops: i8| (self.status.defcon as i8 - ops).max(0);
+        let swing = short(report.mil_ops.1) - short(report.mil_ops.0);
+        self.status.military_ops_us = 0;
+        self.status.military_ops_ussr = 0;
+        self.apply_vp(swing);
+        report.vp_delta = swing;
+        report.vp_after = self.status.vp;
+        // A scoring card still held loses the game (the USSR is checked first if both hold one).
+        for side in [Superpower::Ussr, Superpower::Us] {
+            if self.hands.hand(side).iter().any(|&c| cards.card(c).scoring) {
+                self.set_winner(side.opponent(), VictoryReason::HeldScoringCard);
+            }
+        }
+        self.status.china_card_face_up = true;
+        self.status.space_attempts_us = 0;
+        self.status.space_attempts_ussr = 0;
+        self.status.effects = TurnEffects::default();
+        if self.winner.is_none() && turn >= *TURN_RANGE.end() {
+            self.push_turn_end(turn, round, report);
+            self.finish_game();
             return;
         }
-        if let Some(e) = EventChoice::norad(map, &self.board, &self.status) {
-            self.op = Some(Operation::Event(Box::new(e)));
+        if self.winner.is_none() {
+            self.start_next_turn(cards, dice, &mut report);
         }
+        self.push_turn_end(turn, round, report);
+        self.log_game_over();
+    }
+
+    /// Logged against the turn that ended, whatever the status says by now.
+    fn push_turn_end(&mut self, turn: u8, action_round: u8, report: TurnEndReport) {
+        self.log.push(LogEntry { turn, action_round, side: None, event: Event::TurnEnd(report) });
+    }
+
+    /// Turn marker, DEFCON, deck additions and the deal for the turn after the one that just ended.
+    fn start_next_turn(&mut self, cards: &CardCatalog, dice: &mut Dice, report: &mut TurnEndReport) {
+        self.status.turn += 1;
+        let turn = self.status.turn;
+        self.status.action_rounds_per_turn = rounds_for_turn(turn);
+        self.status.action_round = 1;
+        self.status.active = Superpower::Ussr;
+        self.phase = Phase::ActionRounds;
+        if self.status.defcon < 5 {
+            report.defcon_change = Some((self.status.defcon, self.status.defcon + 1));
+            self.status.defcon += 1;
+        }
+        self.round_defcon = self.status.defcon;
+        let joining = match turn {
+            4 => Some(CardPhase::Mid),
+            8 => Some(CardPhase::Late),
+            _ => None,
+        };
+        if let Some(era) = joining {
+            let unseen: Vec<CardId> = cards
+                .ids()
+                .filter(|&id| id != CHINA_CARD && cards.card(id).phase == era && !self.hands.contains(id))
+                .collect();
+            report.added = unseen.len() as u8;
+            self.hands.shuffle_into_deck(unseen, dice);
+        }
+        let target = hand_size_for_turn(turn);
+        let discards_before = self.hands.discards().len();
+        loop {
+            let mut dealt_any = false;
+            for side in [Superpower::Ussr, Superpower::Us] {
+                if self.hands.hand(side).len() < target
+                    && let Some(card) = self.hands.draw(dice)
+                {
+                    self.hands.push_to_hand(side, card);
+                    match side {
+                        Superpower::Us => report.dealt.0 += 1,
+                        Superpower::Ussr => report.dealt.1 += 1,
+                    }
+                    dealt_any = true;
+                }
+            }
+            if !dealt_any {
+                break;
+            }
+        }
+        report.reshuffled = discards_before > 0 && self.hands.discards().is_empty();
+    }
+
+    /// After turn 10: the game is over; the side ahead on VP wins, level is a draw.
+    fn finish_game(&mut self) {
+        if self.winner.is_none() {
+            let side = match self.status.vp.signum() {
+                1 => Some(Superpower::Us),
+                -1 => Some(Superpower::Ussr),
+                _ => None,
+            };
+            self.winner = Some(Victory { side, reason: VictoryReason::FinalScoring });
+        }
+        self.log_game_over();
     }
 
     /// Forfeits the active side's turn without opening an operation.
@@ -1788,7 +1919,7 @@ impl Game {
     /// victory would otherwise race on the same call).
     fn set_winner(&mut self, side: Superpower, reason: VictoryReason) {
         if self.winner.is_none() {
-            self.winner = Some(Victory { side, reason });
+            self.winner = Some(Victory { side: Some(side), reason });
         }
     }
 
@@ -1986,14 +2117,9 @@ impl Game {
                 return;
             }
         }
-        self.status.active = Superpower::Ussr;
-        self.status.action_round = 1;
-        self.status.turn += 1;
-        self.status.china_card_face_up = true;
-        self.status.space_attempts_us = 0;
-        self.status.space_attempts_ussr = 0;
-        // Every "for the remainder of the turn" effect ends here.
-        self.status.effects = TurnEffects::default();
+        // Neither side has a round left: the turn is over. `active`/`action_round` stay where they
+        // are until `settle` (which has the map, cards and dice) runs the end of the turn.
+        self.phase = Phase::TurnEnd;
     }
 }
 
@@ -2014,6 +2140,11 @@ mod tests {
 
     fn id(map: &WorldMap, name: &str) -> CountryId {
         map.id_by_name(name).unwrap_or_else(|| panic!("no country named {name:?}"))
+    }
+
+    /// Runs the end of the turn, which `advance` leaves to `settle`.
+    fn settle(game: &mut Game, map: &WorldMap, cards: &CardCatalog) {
+        game.settle(map, cards, &mut Dice::from_seed(1));
     }
 
     /// Every test scenario deals the same four cards, so any test can play
@@ -2117,6 +2248,9 @@ mod tests {
         play(&mut game, &cards, "Duck and Cover");
         game.begin(OperationKind::Influence).unwrap();
         game.confirm().unwrap(); // US -> USSR: AR 2 was the last of the turn
+        assert_eq!(game.phase(), Phase::TurnEnd, "the turn waits for settle, which has the map, cards and dice it needs");
+        assert_eq!(game.status().turn, 1);
+        settle(&mut game, &map, &cards);
         assert_eq!(game.status().turn, 2);
         assert_eq!(game.status().action_round, 1);
     }
@@ -2693,7 +2827,8 @@ mod tests {
         let mut game = Game::from_scenario(&Scenario::from_json(&map, &cards, &json).unwrap());
         assert!(!game.status().china_card_face_up);
 
-        game.pass().unwrap(); // Us -> Ussr, rolls the turn over
+        game.pass().unwrap(); // Us -> Ussr, ends the turn
+        settle(&mut game, &map, &cards);
         assert_eq!(game.status().turn, 2);
         assert!(game.status().china_card_face_up, "the turn rollover should flip it back up");
     }
@@ -2786,7 +2921,7 @@ mod tests {
         game.play_card(&cards, se_asia).unwrap();
         game.play_event(&map, &cards).unwrap();
         assert_eq!(game.status().vp, 20, "VP should clamp at +20, not overshoot to 26");
-        assert_eq!(game.winner(), Some(Victory { side: Us, reason: VictoryReason::Vp }));
+        assert_eq!(game.winner(), Some(Victory { side: Some(Us), reason: VictoryReason::Vp }));
     }
 
     #[test]
@@ -2808,7 +2943,7 @@ mod tests {
         game.play_card(&cards, se_asia).unwrap();
         game.play_event(&map, &cards).unwrap();
         assert_eq!(game.status().vp, -20, "VP should clamp at -20, not overshoot to -26");
-        assert_eq!(game.winner(), Some(Victory { side: Ussr, reason: VictoryReason::Vp }));
+        assert_eq!(game.winner(), Some(Victory { side: Some(Ussr), reason: VictoryReason::Vp }));
     }
 
     #[test]
@@ -2821,7 +2956,7 @@ mod tests {
 
         game.play_card(&cards, europe_scoring).unwrap();
         game.play_event(&map, &cards).unwrap();
-        assert_eq!(game.winner(), Some(Victory { side: Ussr, reason: VictoryReason::EuropeControl }));
+        assert_eq!(game.winner(), Some(Victory { side: Some(Ussr), reason: VictoryReason::EuropeControl }));
     }
 
     #[test]

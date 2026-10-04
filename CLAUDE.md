@@ -13,9 +13,11 @@ Chernobyl, …, held in `GameStatus::effects` until the turn rolls over),
 the five *war* cards (a die roll against a target, Military Ops tracked), and eight *lasting* cards (NATO, US/Japan Pact, Formosan Resolution, We Will Bury You, Willy Brandt, Flower Power, Shuttle Diplomacy — held in `GameStatus::lasting`, never cleared by a turn rolling over — plus Solidarity's prerequisite), which can end the game outright (VP reaching ±20, DEFCON
 reaching 1, or Europe Scoring's Control tier), and the *Space Race* (`src/space.rs`, below). `CARDS.md` tracks which of
 the 110 cards have their event implemented (`tests/cards_progress.rs`
-keeps it honest). Every other card's text, and
-redealing, are still out of scope, as is the headline phase and an
-opponent's card's ops-and-event dual use. A first AI opponent plays
+keeps it honest). The end of a turn (Military Operations, held scoring
+cards, DEFCON +1, the Mid/Late War deck additions and the redeal) is
+implemented (`Game::settle`, below); the headline phase, new-game setup,
+final scoring and an opponent's card's ops-and-event dual use are still
+out of scope. A first AI opponent plays
 uniformly random legal moves.
 
 ## Architecture
@@ -177,7 +179,7 @@ uniformly random legal moves.
   plain `Copy` data (one bool/`Option` per card) that is a field of
   `GameStatus` (`#[serde(default, skip_serializing_if = is_empty)]`, so a
   scenario/state file only mentions it when something's active) and is
-  reset by `Game::advance` when the turn rolls over. It holds no rules
+  reset by `Game::settle`'s end-of-turn step. It holds no rules
   beyond small pure queries the ops code asks: `card_ops` (Containment /
   Brezhnev +1, Red Scare −1: the modifiers are *summed*, then clamped to
   1–4, so Containment and Red Scare on the US cancel; also returns each
@@ -446,10 +448,29 @@ uniformly random legal moves.
   or — for the China Card — passing it face down to the opponent instead,
   via the private `discard_played_card`) and hand the turn to the other
   side via the private `advance` (USSR → USA; USA → USSR plus
-  `action_round += 1`, rolling `turn` over — clearing `GameStatus::effects`
-  (every "remainder of the turn" event ends there), and flipping the China Card
-  face up again, wherever it's landed — once `action_round` exceeds
-  `action_rounds_per_turn`). **Events are the exception to "one operation
+  `action_round += 1`) — once `action_round` exceeds `action_rounds_per_turn`
+  (and neither side has an extra round) `advance` only sets `Game::phase` to
+  `Phase::TurnEnd`: `active`/`turn`/`action_round` stay put until
+  `Game::settle(map, cards, dice)` runs **the end of the turn** — it needs the
+  map, the catalog and dice, which `advance` deliberately doesn't have. The
+  same `settle` (and `Action::Settle`, the only legal action while
+  `settlement_due`) also resolves NORAD; `play_card`/`pass`/`escape_trap` are
+  refused with `GameError::Trap` while either is due, and every driver (REPL
+  after each command, the interactive loop before the AI hook, `ai::play_turn`)
+  already calls it. `end_turn` does, in order and logging one `Event::TurnEnd`
+  (`TurnEndReport`, `turnend` line): each side short of DEFCON hands the other
+  the shortfall in VP (both short nets out; both Military Ops tracks reset), a
+  side still holding a scoring card loses (`VictoryReason::HeldScoringCard`, the
+  USSR checked first), the China Card flips face up, `GameStatus::effects`
+  clears (every "remainder of the turn" event ends there) and space attempts
+  reset; after turn 10 `finish_game` ends it by VP (`Victory::side` is an
+  `Option` — `None` is a draw, `VictoryReason::FinalScoring`), else
+  `start_next_turn`: turn +1, DEFCON +1 (max 5), `action_rounds_per_turn`
+  from `status::rounds_for_turn` (6, then 7 from turn 4), the *unseen* Mid
+  (turn 4) or Late (turn 8) War cards shuffled into the deck
+  (`Hands::shuffle_into_deck`; the China Card never), and both hands dealt up
+  to `status::hand_size_for_turn` (8, then 9), USSR first, alternating,
+  reshuffling the discard pile when the deck runs out. **Events are the exception to "one operation
   spends the card"**: a choice card's `play_event` opens `Operation::Event`
   instead of resolving, and `confirm` finishes it (refused with
   `GameError::EventIncomplete` until `EventChoice::is_complete`), applying
@@ -503,8 +524,8 @@ uniformly random legal moves.
   isn't bounded and a search cloning many nodes shouldn't drag a growing
   history through every branch it never plays out. `Game` also carries the
   scenario's starting `Hands`, read-only via `Game::hand(side)` (always
-  reflecting what `play_card`/`return_card` have done to it — there's
-  still no draw or redeal) and `Game::card_in_play()`, which names
+  reflecting what `play_card`/`return_card` have done to it, plus the end of
+  turn's deal) and `Game::card_in_play()`, which names
   whichever card `play_card` has taken but not yet discarded.
   `Game::card_in_play_slot()` pairs that id with where it came from
   (`PlayedCard::hand_index` — `None` for the China Card) purely so
@@ -1243,7 +1264,7 @@ deliberate exception, for debug-mode test states specifically.
 - `backup/` — earlier full snapshots of the world map, kept in case a
   future change needs to compare against or revert to an earlier version.
 - `states/` — named test states (`src/states.rs`'s own `StateLibrary`),
-  one JSON file per topic (`scoring.json` is the first, then `events.json` for the fixed-effect cards, `choices.json` for the choice cards, `turn-effects.json` for the turn-long ones and `lasting.json` for the game-long ones, `coups.json` for Military Ops and the DEFCON region limits, `piles.json` for the deck and pile views — each card's own event, plus `*-active` states with an effect already in force), each holding a
+  one JSON file per topic (`scoring.json` is the first, then `events.json` for the fixed-effect cards, `choices.json` for the choice cards, `turn-effects.json` for the turn-long ones and `lasting.json` for the game-long ones, `coups.json` for Military Ops and the DEFCON region limits, `piles.json` for the deck and pile views, `turn-end.json` for the end of a turn — each card's own event, plus `*-active` states with an effect already in force), each holding a
   `{"states": [...]}` array of several named `Scenario` snapshots. Read
   from disk at runtime, not `include_str!`-embedded — see `states.rs`'s
   own doc above for why.

@@ -279,6 +279,11 @@ impl CardCatalog {
         &self.cards[self.by_id[&id]]
     }
 
+    /// Every card's id, in printed-number order.
+    pub fn ids(&self) -> impl Iterator<Item = CardId> + '_ {
+        self.cards.iter().map(|c| c.id)
+    }
+
     pub fn id_by_name(&self, name: &str) -> Option<CardId> {
         self.cards.iter().find(|c| c.name == name).map(|c| c.id)
     }
@@ -495,6 +500,11 @@ impl Hands {
             return true;
         }
         false
+    }
+
+    /// Whether `card` is in either hand, the deck, the discard pile or the removed pile.
+    pub fn contains(&self, card: CardId) -> bool {
+        self.us.contains(&card) || self.ussr.contains(&card) || self.deck.contains(&card) || self.discard.contains(&card) || self.removed.contains(&card)
     }
 
     /// Adds `card` to `side`'s hand, at the end — the other half of

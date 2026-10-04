@@ -20,6 +20,16 @@ pub const DEFCON_RANGE: std::ops::RangeInclusive<u8> = 1..=5;
 /// The real game runs exactly ten turns.
 pub const TURN_RANGE: std::ops::RangeInclusive<u8> = 1..=10;
 
+/// Action rounds a turn plays (rule 4.1): six in the Early War (turns 1-3), seven after.
+pub fn rounds_for_turn(turn: u8) -> u8 {
+    if turn <= 3 { 6 } else { 7 }
+}
+
+/// Cards a hand is dealt up to at the start of `turn` (rule 4.2): eight in the Early War, nine after.
+pub fn hand_size_for_turn(turn: u8) -> usize {
+    if turn <= 3 { 8 } else { 9 }
+}
+
 /// The real game deals at most seven action rounds in a turn (six for
 /// turns 1-3, seven from turn 4 on — a distinction this crate doesn't
 /// derive automatically, see `GameStatus::action_rounds_per_turn`'s own

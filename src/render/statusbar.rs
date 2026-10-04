@@ -105,7 +105,7 @@ pub fn render_status_bar_with(
         pile_label(piles),
     );
     let (op_line, op_style) = if let Some(victory) = winner {
-        (game_over_line(victory), side_style(victory.side).bold())
+        (game_over_line(victory), victory.side.map_or(Style::color(Color::Muted), side_style).bold())
     } else {
         match (card, op) {
             // A discard-or-suffer decision gets its own compact line: the keys
@@ -413,7 +413,7 @@ mod tests {
     fn a_winner_replaces_the_card_and_operation_row() {
         let (map, layout) = fixtures();
         let board = Board::new(&map);
-        let victory = Victory { side: Superpower::Ussr, reason: VictoryReason::EuropeControl };
+        let victory = Victory { side: Some(Superpower::Ussr), reason: VictoryReason::EuropeControl };
         let text = render_status_bar(&layout, &board, &status(), None, None, Some(victory), 60).render(ColorMode::Never);
         assert!(text.contains("GAME OVER"), "missing the game-over row:\n{text}");
         assert!(text.contains("USSR wins (Europe control)"), "missing the winner and reason:\n{text}");

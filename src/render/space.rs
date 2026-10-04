@@ -187,8 +187,8 @@ pub fn render_space_result(
     let mut border = if result.success { side_color(side) } else { Color::Muted };
     if let Some(victory) = winner {
         lines.push((String::new(), Style::default()));
-        lines.push((game_over_line(victory), Style::color(side_color(victory.side)).bold()));
-        border = side_color(victory.side);
+        lines.push((game_over_line(victory), Style::color(victory.side.map_or(Color::Muted, side_color)).bold()));
+        border = victory.side.map_or(Color::Muted, side_color);
     }
     lines.push((String::new(), Style::default()));
     let hint = match queue_pos {

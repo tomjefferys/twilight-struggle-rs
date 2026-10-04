@@ -241,7 +241,7 @@ impl Game {
             Action::Space => self.space(dice).map(|_| ()),
             Action::Escape(card) => self.escape_trap(dice, card).map(|_| ()),
             Action::Settle => {
-                self.settle(map);
+                self.settle(map, cards, dice);
                 Ok(())
             }
             Action::Pass => self.pass(),

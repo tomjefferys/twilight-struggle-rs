@@ -719,7 +719,14 @@ fn maybe_run_ai_turn(
     modal: &mut VecDeque<Modal>,
 ) {
     // What the last action round set off (NORAD) needs the map to settle.
-    game.settle(map);
+    let before = game.log().len();
+    game.settle(map, cards, dice);
+    let settled: Vec<String> = game.log().entries()[before..].iter().map(|e| log_entry_line(map, cards, e)).collect();
+    if !settled.is_empty() {
+        *message = Some(settled.join(" · "));
+        *sticky = true;
+        *zoomed = false;
+    }
     // `decider`, not `active`: an event's chooser is the card's own side. A
     // few rounds, since one human move can hand the AI an event to resolve
     // and then its own turn straight after.

@@ -122,6 +122,26 @@ pub enum Event {
     /// A free-text annotation — e.g. reloading the demo scenario — with no
     /// side and no board effect of its own.
     Note(String),
+    /// A turn ended (rule 4.5): Military Operations settled, then the next turn dealt.
+    TurnEnd(TurnEndReport),
+}
+
+/// What the end of a turn did, in order — kept whole so the log line can say all of it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct TurnEndReport {
+    /// `(US, USSR)` Military Operations when the turn ended, and DEFCON they were measured against.
+    pub mil_ops: (i8, i8),
+    pub defcon: u8,
+    /// VP the shortfalls were worth, positive favouring the US, and the track afterwards.
+    pub vp_delta: i8,
+    pub vp_after: i8,
+    /// DEFCON `(before, after)` when it improved at the turn change.
+    pub defcon_change: Option<(u8, u8)>,
+    /// Cards dealt `(US, USSR)` and whether the discard pile had to be reshuffled to do it.
+    pub dealt: (u8, u8),
+    pub reshuffled: bool,
+    /// Mid or Late War cards shuffled into the deck at this turn change.
+    pub added: u8,
 }
 
 /// What a coup attempt triggered besides its own board result.

@@ -229,7 +229,11 @@ fn main() {
 fn maybe_run_ai_turn(session: &mut Session) {
     // What the last action round set off (NORAD) needs the map to settle.
     if session.game.settlement_due() {
-        session.game.settle(&session.map);
+        let before = session.game.log().len();
+        session.game.settle(&session.map, &session.cards, &mut session.dice);
+        for entry in &session.game.log().entries()[before..] {
+            println!("{}", log_entry_line(&session.map, &session.cards, entry));
+        }
         if session.game.operation().is_some() {
             println!("NORAD: the US adds 1 influence to a country where it has some");
             print_event_prompt(session);

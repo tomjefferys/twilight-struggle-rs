@@ -28,6 +28,11 @@ fn play_scoring_state(map: &WorldMap, cards: &CardCatalog, lib: &StateLibrary, r
     (game, outcome)
 }
 
+/// Runs the end of the turn a final `confirm`/`pass` leaves to `Game::settle`.
+fn end_turn(game: &mut Game, map: &WorldMap, cards: &CardCatalog) {
+    game.settle(map, cards, &mut twilight_struggle::Dice::from_seed(1));
+}
+
 fn region_tiers(outcome: &EventOutcome) -> (Tier, Tier) {
     match outcome {
         EventOutcome::Scoring(result) => match &result.kind {
@@ -63,7 +68,7 @@ fn europe_ussr_control_wins_the_game_outright() {
     let (us_tier, ussr_tier) = region_tiers(&outcome);
     assert_eq!(ussr_tier, Tier::Control);
     assert_ne!(us_tier, Tier::Control);
-    assert_eq!(game.winner(), Some(Victory { side: Superpower::Ussr, reason: VictoryReason::EuropeControl }));
+    assert_eq!(game.winner(), Some(Victory { side: Some(Superpower::Ussr), reason: VictoryReason::EuropeControl }));
     // A card whose event just won the game is never discarded — there's
     // nothing left to hand the turn to.
     assert!(game.discards().contains(&cards.id_by_name("Europe Scoring").unwrap()));
@@ -153,7 +158,7 @@ fn the_vp_cap_ends_the_game_for_the_us() {
     let (map, cards, lib) = fixtures();
     let (game, _outcome) = play_scoring_state(&map, &cards, &lib, "scoring/vp-cap-us-wins");
     assert_eq!(game.status().vp, 20);
-    assert_eq!(game.winner(), Some(Victory { side: Superpower::Us, reason: VictoryReason::Vp }));
+    assert_eq!(game.winner(), Some(Victory { side: Some(Superpower::Us), reason: VictoryReason::Vp }));
 }
 
 #[test]
@@ -161,7 +166,7 @@ fn the_vp_cap_ends_the_game_for_the_ussr() {
     let (map, cards, lib) = fixtures();
     let (game, _outcome) = play_scoring_state(&map, &cards, &lib, "scoring/vp-cap-ussr-wins");
     assert_eq!(game.status().vp, -20);
-    assert_eq!(game.winner(), Some(Victory { side: Superpower::Ussr, reason: VictoryReason::Vp }));
+    assert_eq!(game.winner(), Some(Victory { side: Some(Superpower::Ussr), reason: VictoryReason::Vp }));
 }
 
 #[test]
@@ -213,7 +218,7 @@ fn duck_and_cover_at_defcon_2_loses_the_game_for_the_us() {
     let (map, cards, lib) = fixtures();
     let game = play_effect_state(&map, &cards, &lib, "duck-and-cover-defcon-1-loses", "Duck and Cover");
     assert_eq!(game.status().defcon, 1);
-    assert_eq!(game.winner(), Some(Victory { side: Superpower::Ussr, reason: VictoryReason::Defcon }));
+    assert_eq!(game.winner(), Some(Victory { side: Some(Superpower::Ussr), reason: VictoryReason::Defcon }));
     assert_eq!(game.active(), Superpower::Us, "a finished game doesn't hand the turn over");
 }
 
@@ -321,7 +326,7 @@ fn an_evil_empire_pays_one_vp_and_can_hit_the_vp_cap() {
     let g = play_effect_state(&map, &cards, &lib, "an-evil-empire", "“An Evil Empire”");
     assert_eq!(g.status().vp, 1);
     let g = play_effect_state(&map, &cards, &lib, "vp-cap-us-wins", "“An Evil Empire”");
-    assert_eq!(g.winner(), Some(Victory { side: Superpower::Us, reason: VictoryReason::Vp }));
+    assert_eq!(g.winner(), Some(Victory { side: Some(Superpower::Us), reason: VictoryReason::Vp }));
 }
 
 #[test]
@@ -344,7 +349,7 @@ fn a_defcon_loss_goes_against_the_phasing_player_not_the_cards_side() {
     game.hands_mut().push_to_hand(Superpower::Ussr, card);
     game.play_card(&cards, card).unwrap();
     game.play_event(&map, &cards).unwrap();
-    assert_eq!(game.winner(), Some(Victory { side: Superpower::Us, reason: VictoryReason::Defcon }));
+    assert_eq!(game.winner(), Some(Victory { side: Some(Superpower::Us), reason: VictoryReason::Defcon }));
     assert_eq!(game.status().vp, 4, "Duck and Cover still pays the US 5-1 = 4 VP");
 }
 
@@ -1226,7 +1231,7 @@ mod turn_effects {
     fn a_coup_taking_defcon_to_1_loses_for_the_phasing_player() {
         let (game, _) = aftermath_of_us_coup("battleground-coup-defcon-2");
         assert_eq!(game.status().defcon, 1);
-        assert_eq!(game.winner(), Some(Victory { side: Superpower::Us, reason: VictoryReason::Defcon }));
+        assert_eq!(game.winner(), Some(Victory { side: Some(Superpower::Us), reason: VictoryReason::Defcon }));
     }
 
     #[test]
@@ -1246,7 +1251,6 @@ mod turn_effects {
     #[test]
     fn north_sea_oil_gives_the_us_an_extra_round_then_everything_expires_with_the_turn() {
         let (map, cards, mut game) = load("north-sea-oil-final-round");
-        let _ = &map;
         assert_eq!((game.status().turn, game.status().action_round), (3, 6));
         play(&mut game, &cards, "Truman Doctrine");
         game.begin(OperationKind::Influence).unwrap();
@@ -1258,13 +1262,14 @@ mod turn_effects {
         play(&mut game, &cards, "Marshall Plan");
         game.begin(OperationKind::Influence).unwrap();
         game.confirm().unwrap();
+        end_turn(&mut game, &map, &cards);
         assert_eq!((game.status().turn, game.status().action_round, game.active()), (4, 1, Superpower::Ussr));
         assert!(in_force(&game).is_empty(), "the turn's effects end with it");
     }
 
     #[test]
     fn effects_survive_between_rounds_of_a_turn_and_clear_at_its_end() {
-        let (_, cards, mut game) = load("containment-active");
+        let (map, cards, mut game) = load("containment-active");
         play(&mut game, &cards, "Truman Doctrine");
         game.begin(OperationKind::Influence).unwrap();
         game.confirm().unwrap();
@@ -1274,6 +1279,7 @@ mod turn_effects {
         play(&mut game, &cards, "Marshall Plan");
         game.begin(OperationKind::Influence).unwrap();
         game.confirm().unwrap();
+        end_turn(&mut game, &map, &cards);
         assert!(in_force(&game).is_empty());
     }
 
@@ -1367,7 +1373,7 @@ mod wars {
         declare(&mut game, &map, &cards, "South Korea", 6);
         assert_eq!(game.status().vp, -20);
         let victory = game.winner().expect("20 VP ends the game");
-        assert_eq!(victory.side, Superpower::Ussr);
+        assert_eq!(victory.side, Some(Superpower::Ussr));
         assert_eq!(game.active(), Superpower::Ussr, "no handover once the game is over");
     }
 
@@ -1876,29 +1882,32 @@ mod space {
 
     #[test]
     fn the_space_station_holder_plays_the_extra_rounds_alone_then_the_turn_rolls_over() {
-        let (_, _, mut game) = load("space-station-ussr");
+        let (map, cards, mut game) = load("space-station-ussr");
         game.pass().unwrap(); // US finishes AR 6
         assert_eq!((game.status().active, game.status().action_round), (Superpower::Ussr, 7));
         game.pass().unwrap();
         assert_eq!((game.status().active, game.status().action_round), (Superpower::Ussr, 8), "the US has no AR 7");
         game.pass().unwrap();
+        end_turn(&mut game, &map, &cards);
         assert_eq!((game.status().active, game.status().action_round, game.status().turn), (Superpower::Ussr, 1, 2));
     }
 
     #[test]
     fn nobody_gets_extra_rounds_once_both_reach_the_space_station() {
-        let (_, _, mut game) = load("space-station-cancelled");
+        let (map, cards, mut game) = load("space-station-cancelled");
         game.pass().unwrap();
+        end_turn(&mut game, &map, &cards);
         assert_eq!((game.status().active, game.status().action_round, game.status().turn), (Superpower::Ussr, 1, 2));
     }
 
     #[test]
     fn space_attempts_reset_when_the_turn_rolls_over() {
-        let (_, cards, mut game) = load("first-attempt");
+        let (map, cards, mut game) = load("first-attempt");
         game.status_mut().active = Superpower::Us;
         game.status_mut().action_round = 6;
         game.status_mut().space_attempts_ussr = 1;
         attempt(&mut game, &cards, "Fidel", &mut Dice::from_seed(1)).unwrap();
+        end_turn(&mut game, &map, &cards);
         assert_eq!((game.status().turn, game.status().space_attempts_us, game.status().space_attempts_ussr), (2, 0, 0));
     }
 
@@ -1928,7 +1937,7 @@ mod space {
         let (_, cards, mut game) = load("vp-win-by-space");
         attempt(&mut game, &cards, "Duck and Cover", &mut dice_rolling(|r| r <= 3)).unwrap();
         assert_eq!(game.status().vp, 20);
-        assert_eq!(game.winner().map(|v| v.side), Some(Superpower::Us));
+        assert_eq!(game.winner().and_then(|v| v.side), Some(Superpower::Us));
     }
 
     #[test]
@@ -2041,7 +2050,7 @@ mod batch_one {
         let (map, mut game) = open_choice("how-i-learned", "How I Learned to Stop Worrying");
         game.choose_mode(&map, 0).unwrap();
         game.confirm().unwrap();
-        assert_eq!(game.winner(), Some(Victory { side: Superpower::Us, reason: VictoryReason::Defcon }));
+        assert_eq!(game.winner(), Some(Victory { side: Some(Superpower::Us), reason: VictoryReason::Defcon }));
     }
 
     #[test]
@@ -2058,7 +2067,7 @@ mod batch_one {
         game.choose_mode(&map, 0).unwrap();
         game.confirm().unwrap();
         assert_eq!(game.status().vp, -2);
-        assert_eq!(game.winner(), Some(Victory { side: Superpower::Ussr, reason: VictoryReason::Wargames }));
+        assert_eq!(game.winner(), Some(Victory { side: Some(Superpower::Ussr), reason: VictoryReason::Wargames }));
     }
 
     #[test]
@@ -2067,7 +2076,7 @@ mod batch_one {
         game.choose_mode(&map, 0).unwrap();
         game.confirm().unwrap();
         assert_eq!(game.status().vp, 3);
-        assert_eq!(game.winner(), Some(Victory { side: Superpower::Us, reason: VictoryReason::Wargames }));
+        assert_eq!(game.winner(), Some(Victory { side: Some(Superpower::Us), reason: VictoryReason::Wargames }));
     }
 
     #[test]
@@ -2703,10 +2712,11 @@ mod hands {
         assert!(game.status().effects.hand_revealed(Superpower::Us));
         // Both sides pass out the rest of the turn.
         for _ in 0..30 {
-            if game.status().turn > 8 {
+            if game.status().turn > 8 || game.winner().is_some() {
                 break;
             }
             game.pass().unwrap();
+            end_turn(&mut game, &map, &cards);
         }
         assert!(!game.status().effects.hand_revealed(Superpower::Us));
     }
@@ -2948,7 +2958,7 @@ mod contests {
         game.choose_mode(&map, 1).unwrap();
         game.confirm().unwrap();
         assert_eq!(game.status().defcon, 1);
-        assert_eq!(game.winner(), Some(Victory { side: Superpower::Ussr, reason: VictoryReason::Defcon }), "the phasing player (the US) is responsible");
+        assert_eq!(game.winner(), Some(Victory { side: Some(Superpower::Ussr), reason: VictoryReason::Defcon }), "the phasing player (the US) is responsible");
     }
 
     #[test]
@@ -3093,7 +3103,7 @@ mod contests {
         game.play_event(&map, &cards).unwrap();
         game.choose_mode(&map, 1).unwrap();
         game.confirm().unwrap();
-        assert_eq!(game.winner(), Some(Victory { side: Superpower::Us, reason: VictoryReason::Defcon }), "the USSR is phasing, so it is responsible even though the US boycotted");
+        assert_eq!(game.winner(), Some(Victory { side: Some(Superpower::Us), reason: VictoryReason::Defcon }), "the USSR is phasing, so it is responsible even though the US boycotted");
     }
 
     #[test]
@@ -3301,7 +3311,7 @@ mod rounds {
         assert!(game.settlement_due());
         assert!(matches!(game.legal_actions(&map, &cards).as_slice(), [Action::Settle]));
         assert!(matches!(game.play_card(&cards, card(&cards, "Fidel")), Err(GameError::Trap(_))), "the trigger has to be settled first");
-        game.settle(&map);
+        game.settle(&map, &cards, &mut Dice::from_seed(1));
         let Some(Operation::Event(e)) = game.operation() else { panic!("NORAD opens an event") };
         assert!(e.is_triggered() && e.chooser() == Superpower::Us);
         assert_eq!(game.decider(), Superpower::Us);
@@ -3323,7 +3333,7 @@ mod rounds {
         game.play_card(&cards, card(&cards, "Duck and Cover")).unwrap();
         game.play_event(&map, &cards).unwrap();
         assert_eq!(game.status().defcon, 2);
-        game.settle(&map);
+        game.settle(&map, &cards, &mut Dice::from_seed(1));
         assert!(game.operation().is_none() && !game.settlement_due());
     }
 
@@ -3374,7 +3384,7 @@ mod rounds {
         // The AI is never offered the coup.
         game.begin(OperationKind::Coup).unwrap();
         game.roll(&map, id(&map, "Honduras"), &mut Dice::from_seed(1)).unwrap();
-        assert_eq!(game.winner(), Some(Victory { side: Superpower::Us, reason: VictoryReason::CubanMissileCrisis }));
+        assert_eq!(game.winner(), Some(Victory { side: Some(Superpower::Us), reason: VictoryReason::CubanMissileCrisis }));
     }
 
     #[test]
@@ -3472,9 +3482,10 @@ mod salt {
 
     #[test]
     fn it_ends_with_the_turn() {
-        let (_, _, mut game) = load("salt-active");
+        let (map, cards, mut game) = load("salt-active");
         for _ in 0..12 {
             game.pass().unwrap();
+            end_turn(&mut game, &map, &cards);
         }
         assert!(!game.status().effects.salt);
         assert_eq!(game.status().turn, 2);
@@ -3922,7 +3933,7 @@ mod swaps {
         game.begin(OperationKind::Coup).unwrap();
         game.roll(&map, map.id_by_name("Angola").unwrap(), &mut Dice::from_seed(1)).unwrap();
         assert_eq!(game.status().defcon, 1);
-        assert_eq!(game.winner(), Some(twilight_struggle::game::Victory { side: Superpower::Us, reason: twilight_struggle::game::VictoryReason::Defcon }));
+        assert_eq!(game.winner(), Some(twilight_struggle::game::Victory { side: Some(Superpower::Us), reason: twilight_struggle::game::VictoryReason::Defcon }));
     }
 
     #[test]
@@ -4149,5 +4160,126 @@ mod piles {
         let (_, cards, game) = load();
         let text = PileTab::ALL.iter().map(|&t| piles_text(&cards, game.hands(), t)).collect::<Vec<_>>().join("\n");
         assert_eq!(text, include_str!("snapshots/piles.txt").trim_end_matches('\n'));
+    }
+}
+
+/// The end of a turn (`Game::settle`, rule 4.5): Military Operations, held scoring cards, the
+/// deck and the redeal (`data/states/turn-end.json`).
+mod turn_end {
+    use super::*;
+    use twilight_struggle::game::Phase;
+    use twilight_struggle::{CardPhase, Event, GameError};
+
+    fn load(name: &str) -> (WorldMap, CardCatalog, Game) {
+        let (map, cards, lib) = fixtures();
+        let (scenario, _) = lib.load(&map, &cards, &format!("turn-end/{name}")).unwrap_or_else(|e| panic!("{name}: {e}"));
+        (map, cards, Game::from_scenario(&scenario))
+    }
+
+    /// The US passes the last round of the turn, and the turn is settled.
+    fn finish_turn(name: &str) -> (WorldMap, CardCatalog, Game) {
+        let (map, cards, mut game) = load(name);
+        game.pass().unwrap();
+        assert_eq!(game.phase(), Phase::TurnEnd);
+        assert!(game.settlement_due());
+        end_turn(&mut game, &map, &cards);
+        (map, cards, game)
+    }
+
+    fn report(game: &Game) -> twilight_struggle::log::TurnEndReport {
+        game.log().entries().iter().find_map(|e| match e.event {
+            Event::TurnEnd(r) => Some(r),
+            _ => None,
+        }).expect("a turn-end entry")
+    }
+
+    #[test]
+    fn a_turn_does_not_roll_over_until_it_is_settled_and_nothing_can_be_played_meanwhile() {
+        let (map, cards, mut game) = load("mil-ops-shortfall");
+        game.pass().unwrap();
+        assert_eq!((game.status().turn, game.phase()), (2, Phase::TurnEnd));
+        assert!(matches!(game.play_card(&cards, cards.id_by_name("Fidel").unwrap()), Err(GameError::Trap(_))));
+        assert!(matches!(game.pass(), Err(GameError::Trap(_))));
+        assert_eq!(game.legal_actions(&map, &cards), vec![twilight_struggle::Action::Settle]);
+        end_turn(&mut game, &map, &cards);
+        assert_eq!((game.status().turn, game.phase(), game.active(), game.status().action_round), (3, Phase::ActionRounds, Superpower::Ussr, 1));
+    }
+
+    #[test]
+    fn the_side_short_of_defcon_hands_the_opponent_the_shortfall_and_both_tracks_reset() {
+        let (_, _, game) = finish_turn("mil-ops-shortfall");
+        assert_eq!(game.status().vp, -3);
+        assert_eq!((game.status().military_ops_us, game.status().military_ops_ussr), (0, 0));
+        let r = report(&game);
+        assert_eq!((r.mil_ops, r.defcon, r.vp_delta, r.vp_after), ((1, 4), 4, -3, -3));
+        assert_eq!(game.status().defcon, 5, "DEFCON improves by 1 at the turn change");
+        assert_eq!(r.defcon_change, Some((4, 5)));
+    }
+
+    #[test]
+    fn shortfalls_on_both_sides_net_out() {
+        let (_, _, game) = finish_turn("mil-ops-both-short");
+        assert_eq!(game.status().vp, -2);
+        assert_eq!(game.status().defcon, 5, "already at 5 — it can't improve further");
+        assert_eq!(report(&game).defcon_change, None);
+    }
+
+    #[test]
+    fn holding_a_scoring_card_at_the_end_of_the_turn_loses_the_game() {
+        let (_, _, game) = finish_turn("held-scoring-loses");
+        assert_eq!(game.winner(), Some(Victory { side: Some(Superpower::Ussr), reason: VictoryReason::HeldScoringCard }));
+        assert_eq!(game.status().turn, 2, "the game ended before the next turn began");
+    }
+
+    #[test]
+    fn mid_war_cards_join_the_deck_at_turn_four_and_both_hands_are_dealt_to_nine() {
+        let (_, cards, game) = finish_turn("turn-3-to-4-adds-mid-war");
+        assert_eq!((game.status().turn, game.status().action_rounds_per_turn), (4, 7));
+        assert_eq!((game.hand(Superpower::Us).len(), game.hand(Superpower::Ussr).len()), (9, 9));
+        let mid: Vec<_> = cards.ids().filter(|&c| cards.card(c).phase == CardPhase::Mid).collect();
+        assert!(mid.iter().all(|&c| game.hands().contains(c)), "every Mid War card is somewhere in the game");
+        assert!(mid.iter().any(|&c| game.hands().deck().contains(&c)), "and most are still in the deck");
+        let late = cards.ids().filter(|&c| cards.card(c).phase == CardPhase::Late);
+        assert!(late.into_iter().all(|c| !game.hands().contains(c)), "Late War cards wait until turn 8");
+        assert!(!game.hands().contains(twilight_struggle::CHINA_CARD), "the China Card is never dealt");
+        assert_eq!(report(&game).added as usize, mid.len());
+    }
+
+    #[test]
+    fn an_empty_deck_reshuffles_the_discard_pile_and_the_deal_stops_when_cards_run_out() {
+        let (_, _, game) = finish_turn("reshuffle-on-empty-deck");
+        assert!(game.discards().is_empty() && game.hands().deck().is_empty());
+        assert_eq!(game.removed_from_game().len(), 1, "the removed pile never comes back");
+        assert_eq!((game.hand(Superpower::Us).len(), game.hand(Superpower::Ussr).len()), (7, 7));
+        let r = report(&game);
+        assert_eq!(r.dealt, (6, 6));
+        assert!(r.reshuffled);
+    }
+
+    #[test]
+    fn the_china_card_turns_face_up_and_turn_effects_end() {
+        let (map, cards, mut game) = load("mil-ops-shortfall");
+        game.status_mut().china_card_face_up = false;
+        game.status_mut().effects.salt = true;
+        game.pass().unwrap();
+        end_turn(&mut game, &map, &cards);
+        assert!(game.status().china_card_face_up && !game.status().effects.salt);
+    }
+
+    #[test]
+    fn the_ai_settles_turn_ends_on_its_own() {
+        use twilight_struggle::{play_turn, Dice, RandomAi};
+        for seed in 0..10 {
+            let (map, cards, mut game) = load("turn-3-to-4-adds-mid-war");
+            let mut ai = RandomAi::from_seed(seed);
+            let mut dice = Dice::from_seed(seed);
+            for _ in 0..40 {
+                if game.winner().is_some() {
+                    break;
+                }
+                play_turn(&mut ai, &mut game, &map, &cards, &mut dice).unwrap();
+            }
+            assert!(game.status().turn >= 4 || game.winner().is_some(), "seed {seed}");
+        }
     }
 }

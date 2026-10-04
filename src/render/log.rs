@@ -15,7 +15,7 @@ use crate::country::{CountryId, Superpower};
 use crate::events::scoring::{ScoringKind, SideScore, Tier};
 use crate::events::{EffectResult, ScoringResult};
 use crate::game::{OperationKind, Victory, VictoryReason};
-use crate::log::{CoupAftermath, Event, GameLog, LogEntry};
+use crate::log::{CoupAftermath, Event, GameLog, LogEntry, TurnEndReport};
 use crate::map::WorldMap;
 use crate::ops::{CoupResult, RollResult};
 
@@ -142,7 +142,27 @@ fn action_and_detail(map: &WorldMap, cards: &CardCatalog, entry: &LogEntry) -> (
         Event::Trap(r) => ("trap", format!("{}: {} discards {}, d6:{} need:≤4 — {}", cards.card(r.trap).name, r.side, cards.card(r.discarded).name, r.roll, if r.escaped { "escapes" } else { "still trapped" })),
         Event::Defused { side, country } => ("defuse", format!("{side} removes 2 influence from {} — Cuban Missile Crisis ends", map.country(*country).name)),
         Event::GameOver(victory) => ("gameover", game_over_detail(*victory)),
+        Event::TurnEnd(report) => ("turnend", turn_end_detail(report)),
     }
+}
+
+/// `mil ops US 2 USSR 4 vs DEFCON 3 → +1 VP (now 3) · DEFCON 3→4 · 14 cards join · dealt US 5, USSR 4`.
+fn turn_end_detail(report: &TurnEndReport) -> String {
+    let mut parts = vec![format!("mil ops US {} USSR {} vs DEFCON {}", report.mil_ops.0, report.mil_ops.1, report.defcon)];
+    if report.vp_delta != 0 {
+        parts.push(format!("{:+} VP (now {})", report.vp_delta, report.vp_after));
+    }
+    if let Some((before, after)) = report.defcon_change {
+        parts.push(format!("DEFCON {before}→{after}"));
+    }
+    if report.added > 0 {
+        parts.push(format!("{} cards join the deck", report.added));
+    }
+    if report.dealt != (0, 0) {
+        let reshuffle = if report.reshuffled { ", discard pile reshuffled" } else { "" };
+        parts.push(format!("dealt US {}, USSR {}{reshuffle}", report.dealt.0, report.dealt.1));
+    }
+    parts.join(" · ")
 }
 
 fn ops_str(spent: u8, total: u8) -> String {
@@ -386,6 +406,11 @@ fn game_over_detail(victory: Victory) -> String {
         VictoryReason::Defcon => "DEFCON 1",
         VictoryReason::Wargames => "Wargames",
         VictoryReason::CubanMissileCrisis => "Cuban Missile Crisis",
+        VictoryReason::HeldScoringCard => "held a scoring card at the end of the turn",
+        VictoryReason::FinalScoring => "final scoring",
     };
-    format!("{} wins ({reason})", victory.side)
+    match victory.side {
+        Some(side) => format!("{side} wins ({reason})"),
+        None => format!("a draw ({reason})"),
+    }
 }
