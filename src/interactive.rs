@@ -1170,6 +1170,7 @@ fn draw(
     // A choice waiting only for its confirmation stays on the message row
     // (unless something more pressing replaced it) until confirmed or undone.
     let forced = game.forced_by().zip(game.card_in_play()).zip(game.forced_how()).map(|((host, card), how)| match how {
+        PlayAs::Event if host == card => format!("{} was spent on operations — now its event (the opponent's) has to be played: press e", cards.card(card).name),
         _ if host == card => format!("{} has to be used for operations this action round — i, a or o", cards.card(card).name),
         PlayAs::Event => format!("{} puts {} in play — press e to play its event (it can't be skipped or taken back)", cards.card(host).name, cards.card(card).name),
         PlayAs::Either => format!("{} puts {} in play — play it now: e for its event, or i/a/o for its operations", cards.card(host).name, cards.card(card).name),

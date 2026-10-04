@@ -16,9 +16,9 @@ the 110 cards have their event implemented (`tests/cards_progress.rs`
 keeps it honest). The end of a turn (Military Operations, held scoring
 cards, DEFCON +1, the Mid/Late War deck additions and the redeal) is
 implemented (`Game::settle`, below), as is final scoring after turn 10; the
-headline phase and new-game setup (below) are too; an opponent's card's
-ops-and-event dual use is still out of scope. A first AI opponent plays
-uniformly random legal moves.
+headline phase, new-game setup and an opponent's card's ops-and-event dual
+use (below) are too, which completes the game's rules loop. A first AI
+opponent plays uniformly random legal moves.
 
 ## Architecture
 
@@ -381,9 +381,9 @@ uniformly random legal moves.
     that other card exists, and a played event's card already sits in
     `Hands`'s removed pile. Either side may play any card's event,
     its opponent's included — the event does what the card says whoever
-    plays it (Duck and Cover pays the US even when the USSR plays it).
-    Playing an opponent's card for its ops *as well* is still out of
-    scope. DEFCON reaching 1 ends the game against the phasing player —
+    plays it (Duck and Cover pays the US even when the USSR plays it) —
+    and playing an opponent's card for its ops fires its event too
+    (**dual use**, see `Game` below). DEFCON reaching 1 ends the game against the phasing player —
     whoever is playing the action round, not the card's side
     (`VictoryReason::Defcon`); DEFCON is applied before VP, so that
     loss outranks any VP the same card awards. A new card of this kind
@@ -596,12 +596,25 @@ uniformly random legal moves.
   hands the turn over the same way `confirm`/`cancel` do, or — if the VP
   cap was just hit, or the event is an outright win (Europe Scoring's
   Control tier) — leaves the turn exactly where it ended instead, since
-  there's nothing left to hand over. Nothing here yet lets a card be
-  played for ops *and* its event in either order (the dual-use rule for
-  an opponent's card) — every event implemented so far (scoring cards)
-  has no ops to combine with, so `PlayedCard` has no "which half is still
-  open" state; a future stage that adds an ops-and-event card will need
-  to grow that, not reshape it. `Game::winner()` reports the result once
+  there's nothing left to hand over. **Dual use** (rule 5.2: an opponent's
+  card spent for operations also triggers its event, before or after
+  them as its player chooses): `PlayedCard::opponents` (cached when the card
+  is taken: its side is neither `Both` nor the player's) and `event_owed`.
+  Choosing the operations first (`begin`) sets `event_owed` when the event
+  is implemented and not prevented; when that operation closes
+  (`finish_operation`) the card stays in play with
+  `forced_event = (itself, PlayAs::Event)` — only `e` is offered, `pass`/
+  `space`/`return_card` are refused — and playing the event then ends the
+  turn as usual. Choosing the event first (`e`) leaves the card in play
+  with `ops_after_event = OpsGrant::ANY` (`Game::dual_use_grant`, applied in
+  `finish_effect` and `finish_war`, unless the event gave its own grant, as
+  Grain Sales does) — the ABM Treaty path: any operation, or `pass` to skip
+  it. A space attempt never fires the event, a headline is its event only, an
+  unimplemented or prevented event is simply not played, an event that ends
+  the game leaves no operations to take, and Flower Power pays once per card.
+  (Limitation: an event that puts another card in play — Five Year Plan, Star
+  Wars — has no room for its host's operations when played event-first.)
+  `Game::winner()` reports the result once
   either path sets it (a `Victory { side, reason }`, `reason` one of
   `VictoryReason::Vp`/`EuropeControl`) — never clears, and from then on
   `play_card`/`begin`/`pass` all refuse with `GameError::GameOver`.
@@ -1321,7 +1334,7 @@ deliberate exception, for debug-mode test states specifically.
 - `backup/` — earlier full snapshots of the world map, kept in case a
   future change needs to compare against or revert to an earlier version.
 - `states/` — named test states (`src/states.rs`'s own `StateLibrary`),
-  one JSON file per topic (`scoring.json` is the first, then `events.json` for the fixed-effect cards, `choices.json` for the choice cards, `turn-effects.json` for the turn-long ones and `lasting.json` for the game-long ones, `coups.json` for Military Ops and the DEFCON region limits, `piles.json` for the deck and pile views, `turn-end.json` for the end of a turn, `final.json` for final scoring, `headline.json` for the headline phase (`tests/setup.rs` covers new-game setup) — each card's own event, plus `*-active` states with an effect already in force), each holding a
+  one JSON file per topic (`scoring.json` is the first, then `events.json` for the fixed-effect cards, `choices.json` for the choice cards, `turn-effects.json` for the turn-long ones and `lasting.json` for the game-long ones, `coups.json` for Military Ops and the DEFCON region limits, `piles.json` for the deck and pile views, `turn-end.json` for the end of a turn, `final.json` for final scoring, `headline.json` for the headline phase (`tests/setup.rs` covers new-game setup), `dual-use.json` for an opponent's card played for ops and event — each card's own event, plus `*-active` states with an effect already in force), each holding a
   `{"states": [...]}` array of several named `Scenario` snapshots. Read
   from disk at runtime, not `include_str!`-embedded — see `states.rs`'s
   own doc above for why.

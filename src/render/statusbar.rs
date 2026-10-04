@@ -170,7 +170,9 @@ pub fn render_status_bar_with(
             }
             (Some(card), None) if forced_by.is_some() => {
                 let (host, how) = forced_by.expect("guard checked");
-                let line = if host.id == card.id {
+                let line = if host.id == card.id && how == crate::events::PlayAs::Event {
+                    format!("{} was spent on operations · its event (the opponent's) now has to be played · e play it", card.name)
+                } else if host.id == card.id {
                     format!("{} must be used for operations this round · i influence · a realign · o coup ({})", card.name, ops_text(status, card))
                 } else {
                     match how {
@@ -188,6 +190,15 @@ pub fn render_status_bar_with(
             (Some(card), None) if card.scoring => {
                 (format!("playing {} — e score · ⌫ return card", card.name), Style::color(Color::Selected))
             }
+            (Some(card), None) if events::is_implemented(card.id) && card.side != crate::cards::CardSide::Neutral && card.side != crate::cards::side_of(status.active) => (
+                format!(
+                    "playing {} ({}) — an opponent's card: its event happens too · e event, then ops · i influence · a realign · o coup (event after){} · ⌫ return card",
+                    card.name,
+                    ops_text(status, card),
+                    space_hint(card)
+                ),
+                Style::color(Color::Selected),
+            ),
             (Some(card), None) if events::is_implemented(card.id) => (
                 format!("playing {} ({}) — e event · i influence · a realign · o coup{} · ⌫ return card", card.name, ops_text(status, card), space_hint(card)),
                 Style::color(Color::Selected),

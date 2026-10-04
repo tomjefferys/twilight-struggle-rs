@@ -297,6 +297,9 @@ fn the_ai_makes_the_choices_for_its_own_card_when_the_human_is_phasing() {
     let mut dice = Dice::from_seed(3);
     play_turn(&mut ai, &mut game, &map, &cards, &mut dice).unwrap();
     assert!(game.operation().is_none(), "the AI finished the event");
+    // Comecon is the USSR's card, played by the US for its event: the US may now use its operations.
+    assert!(game.ops_after_event().is_some(), "the US's operations follow the opponent's event");
+    game.pass().unwrap();
     assert_eq!(game.active(), Superpower::Ussr, "the US's action round is over");
     let placed = ["East Germany", "Czechoslovakia", "Hungary", "Romania", "Bulgaria", "Yugoslavia", "Finland", "Austria"]
         .iter()

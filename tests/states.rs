@@ -334,7 +334,9 @@ fn either_side_can_play_the_opponents_event() {
     let (map, cards, lib) = fixtures();
     let g = play_effect_state(&map, &cards, &lib, "opponents-event", "Kitchen Debates");
     assert_eq!(g.status().vp, 2, "Kitchen Debates pays the US even when the USSR plays it");
-    assert_eq!(g.active(), Superpower::Us);
+    // …and the USSR, having played the US's card, may now use its operations too.
+    assert_eq!(g.active(), Superpower::Ussr);
+    assert_eq!(g.ops_after_event(), Some(twilight_struggle::events::OpsGrant::ANY));
 }
 
 #[test]
@@ -820,6 +822,9 @@ mod choices {
         assert_eq!(e.chooser(), Superpower::Ussr);
         plus(&mut game, &map, &["East Germany", "Czechoslovakia", "Hungary", "Romania"]);
         game.confirm().unwrap();
+        // The US played the USSR's card for its event, so it may now spend the card's operations.
+        assert!(game.ops_after_event().is_some() && game.active() == Superpower::Us);
+        game.pass().unwrap();
         assert_eq!(game.active(), Superpower::Ussr, "after the US's action round the turn passes on");
     }
 
@@ -1657,12 +1662,28 @@ mod lasting {
         let (map, cards, lib) = fixtures();
         assert!(play_event(&map, &cards, &lib, "flower-power", "Flower Power").status().lasting.flower_power);
 
-        // Spent for ops.
+        let paid = |game: &Game| game.log().entries().iter().filter(|e| matches!(e.event, twilight_struggle::Event::Triggered { card, .. } if card.number() == 59)).count();
+
+        // Spent for ops: Korean War is the USSR's card, so its event follows the operations — and
+        // Flower Power is paid once for the card, not once for each half.
         let mut game = load(&map, &cards, &lib, "flower-power-active");
         game.play_card(&cards, cards.id_by_name("Korean War").unwrap()).unwrap();
         game.begin(OperationKind::Influence).unwrap();
         game.confirm().unwrap();
-        assert_eq!(game.status().vp, -2);
+        assert_eq!(game.forced_how(), Some(twilight_struggle::events::PlayAs::Event), "the opponent's event is next");
+        game.play_event(&map, &cards).unwrap();
+        game.roll(&map, country(&map, "South Korea"), &mut Dice::from_seed(3)).unwrap();
+        assert_eq!(paid(&game), 1);
+
+        // Event first, then the operations: still once.
+        let mut game = load(&map, &cards, &lib, "flower-power-active");
+        game.play_card(&cards, cards.id_by_name("Korean War").unwrap()).unwrap();
+        game.play_event(&map, &cards).unwrap();
+        game.roll(&map, country(&map, "South Korea"), &mut Dice::from_seed(3)).unwrap();
+        assert!(game.ops_after_event().is_some());
+        game.begin(OperationKind::Influence).unwrap();
+        game.confirm().unwrap();
+        assert_eq!(paid(&game), 1);
 
         // A non-war card pays nothing.
         let mut game = load(&map, &cards, &lib, "flower-power-active");
@@ -2195,8 +2216,10 @@ mod event_then_ops {
     fn only_the_cards_own_side_gets_the_operation() {
         let (map, cards, lib) = fixtures();
         let game = play_effect_state(&map, &cards, &lib, "kal-007-played-by-ussr", "Soviets Shoot Down KAL-007");
-        assert_eq!((game.status().defcon, game.status().vp, game.active()), (3, 2, Superpower::Us), "the event's VP and DEFCON still apply");
-        assert!(game.ops_after_event().is_none());
+        assert_eq!((game.status().defcon, game.status().vp, game.active()), (3, 2, Superpower::Ussr), "the event's VP and DEFCON still apply");
+        // KAL-007's own follow-up (influence or realign) is the US's; the USSR, as the player of an
+        // opponent's card, gets the ordinary dual use instead: any operation.
+        assert_eq!(game.ops_after_event(), Some(twilight_struggle::events::OpsGrant::ANY));
     }
 
     #[test]
@@ -3313,6 +3336,8 @@ mod rounds {
         game.play_card(&cards, card(&cards, "Duck and Cover")).unwrap();
         game.play_event(&map, &cards).unwrap();
         assert_eq!(game.status().defcon, 2);
+        assert!(!game.settlement_due(), "the round isn't over until the card's operations are used or skipped");
+        game.pass().unwrap();
         assert!(game.settlement_due());
         assert!(matches!(game.legal_actions(&map, &cards).as_slice(), [Action::Settle]));
         assert!(matches!(game.play_card(&cards, card(&cards, "Fidel")), Err(GameError::Trap(_))), "the trigger has to be settled first");
@@ -4635,6 +4660,149 @@ mod headline {
                     }
                 }
                 assert!(game.phase() != Phase::Headline || game.winner().is_some(), "{state} seed {seed}");
+            }
+        }
+    }
+}
+
+/// Playing an opponent's card for operations: its event happens too, in either order
+/// (`data/states/dual-use.json`).
+mod dual_use {
+    use super::*;
+    use twilight_struggle::events::{OpsGrant, PlayAs};
+    use twilight_struggle::{play_turn, Action, CountryId, Dice, Event, GameError, OperationKind, RandomAi};
+
+    fn load(name: &str) -> (WorldMap, CardCatalog, Game) {
+        let (map, cards, lib) = fixtures();
+        let (scenario, _) = lib.load(&map, &cards, &format!("dual-use/{name}")).unwrap_or_else(|e| panic!("{name}: {e}"));
+        (map, cards, Game::from_scenario(&scenario))
+    }
+
+    fn play(game: &mut Game, cards: &CardCatalog, name: &str) {
+        game.play_card(cards, cards.id_by_name(name).unwrap()).unwrap();
+    }
+
+    fn country(map: &WorldMap, name: &str) -> CountryId {
+        map.id_by_name(name).unwrap()
+    }
+
+    /// Spends the card in play on a one-point influence placement in Poland.
+    fn spend_ops(game: &mut Game, map: &WorldMap) {
+        game.begin(OperationKind::Influence).unwrap();
+        game.place(map, country(map, "Poland")).unwrap();
+        game.confirm().unwrap();
+    }
+
+    fn events_resolved(game: &Game) -> usize {
+        game.log().entries().iter().filter(|e| matches!(e.event, Event::EventResolved { .. })).count()
+    }
+
+    #[test]
+    fn operations_first_leave_the_opponents_event_to_be_played_next() {
+        let (map, cards, mut game) = load("ussr-plays-us-cards");
+        play(&mut game, &cards, "Duck and Cover");
+        spend_ops(&mut game, &map);
+        assert_eq!(game.card_in_play(), Some(cards.id_by_name("Duck and Cover").unwrap()), "the card waits for its event");
+        assert_eq!((game.active(), game.forced_how(), game.status().defcon), (Superpower::Ussr, Some(PlayAs::Event), 4));
+        assert_eq!(game.legal_actions(&map, &cards), vec![Action::Event], "nothing but the event is left");
+        assert!(matches!(game.pass(), Err(GameError::CardInPlay { .. })));
+        assert!(game.return_card().is_err(), "the card can't be taken back once its operations are done");
+        assert!(matches!(game.space(&mut Dice::from_seed(1)), Err(GameError::Trap(_))), "no space attempt once the operations are done");
+        game.play_event_with(&map, &cards, &mut Dice::from_seed(1)).unwrap();
+        assert_eq!((game.status().defcon, game.active(), game.card_in_play()), (3, Superpower::Us, None), "the US's event: DEFCON -1, then the turn passes");
+        assert!(game.discards().contains(&cards.id_by_name("Duck and Cover").unwrap()));
+        assert_eq!(events_resolved(&game), 1);
+    }
+
+    #[test]
+    fn the_event_first_leaves_the_operations_to_follow() {
+        let (map, cards, mut game) = load("ussr-plays-us-cards");
+        play(&mut game, &cards, "Duck and Cover");
+        assert!(game.legal_actions(&map, &cards).contains(&Action::Event) && game.legal_actions(&map, &cards).contains(&Action::Begin(OperationKind::Coup)));
+        game.play_event_with(&map, &cards, &mut Dice::from_seed(1)).unwrap();
+        assert_eq!((game.status().defcon, game.active()), (3, Superpower::Ussr), "the turn isn't over");
+        assert_eq!(game.ops_after_event(), Some(OpsGrant::ANY));
+        assert!(matches!(game.play_event_with(&map, &cards, &mut Dice::from_seed(1)), Err(GameError::EventPlayed { .. })), "the event can't be played twice");
+        spend_ops(&mut game, &map);
+        assert_eq!((game.active(), game.card_in_play()), (Superpower::Us, None));
+        assert_eq!(game.board().influence(country(&map, "Poland"), Superpower::Ussr), 4);
+        assert_eq!(events_resolved(&game), 1, "the event happened once");
+        assert!(game.discards().contains(&cards.id_by_name("Duck and Cover").unwrap()));
+    }
+
+    #[test]
+    fn the_operations_after_an_event_can_be_skipped_but_the_event_after_operations_cannot() {
+        let (map, cards, mut game) = load("ussr-plays-us-cards");
+        play(&mut game, &cards, "Duck and Cover");
+        game.play_event_with(&map, &cards, &mut Dice::from_seed(1)).unwrap();
+        game.pass().unwrap();
+        assert_eq!(game.active(), Superpower::Us);
+    }
+
+    #[test]
+    fn a_space_attempt_never_triggers_the_event() {
+        let (map, cards, mut game) = load("ussr-plays-us-cards");
+        play(&mut game, &cards, "Duck and Cover");
+        let _ = &map;
+        game.space(&mut Dice::from_seed(2)).unwrap();
+        assert_eq!(game.status().defcon, 4, "Duck and Cover's event did not happen");
+        assert_eq!(events_resolved(&game), 0);
+    }
+
+    #[test]
+    fn an_unimplemented_or_prevented_event_just_doesnt_happen() {
+        let (map, cards, mut game) = load("ussr-plays-us-cards");
+        play(&mut game, &cards, "Our Man in Tehran");
+        spend_ops(&mut game, &map);
+        assert_eq!((game.active(), game.card_in_play()), (Superpower::Us, None), "no event owed: it isn't implemented");
+
+        let (map, cards, mut game) = load("us-plays-blocked-ussr-card");
+        play(&mut game, &cards, "Arab-Israeli War");
+        assert!(!game.legal_actions(&map, &cards).contains(&Action::Event));
+        game.begin(OperationKind::Influence).unwrap();
+        game.place(&map, country(&map, "Canada")).unwrap();
+        game.confirm().unwrap();
+        assert_eq!((game.active(), game.card_in_play()), (Superpower::Ussr, None), "Camp David Accords prevents it");
+    }
+
+    #[test]
+    fn your_own_cards_and_a_neutral_ones_are_ordinary_operations() {
+        let (map, cards, mut game) = load("ussr-plays-us-cards");
+        play(&mut game, &cards, "Fidel");
+        spend_ops(&mut game, &map);
+        assert_eq!((game.active(), game.card_in_play(), events_resolved(&game)), (Superpower::Us, None, 0), "Fidel is the USSR's own: operations only");
+    }
+
+    #[test]
+    fn an_event_that_ends_the_game_leaves_no_operations_to_take() {
+        // Event first.
+        let (map, cards, mut game) = load("ussr-plays-us-card-at-defcon-2");
+        play(&mut game, &cards, "Duck and Cover");
+        game.play_event_with(&map, &cards, &mut Dice::from_seed(1)).unwrap();
+        assert_eq!(game.winner(), Some(Victory { side: Some(Superpower::Us), reason: VictoryReason::Defcon }));
+        assert!(game.legal_actions(&map, &cards).is_empty());
+
+        // Operations first: the event follows, and loses the game then.
+        let (map, cards, mut game) = load("ussr-plays-us-card-at-defcon-2");
+        play(&mut game, &cards, "Duck and Cover");
+        spend_ops(&mut game, &map);
+        assert!(game.winner().is_none());
+        game.play_event_with(&map, &cards, &mut Dice::from_seed(1)).unwrap();
+        assert_eq!(game.winner(), Some(Victory { side: Some(Superpower::Us), reason: VictoryReason::Defcon }));
+    }
+
+    #[test]
+    fn the_ai_plays_opponents_cards_both_ways_without_stalling() {
+        for state in ["ussr-plays-us-cards", "us-plays-blocked-ussr-card", "ussr-plays-us-card-at-defcon-2"] {
+            for seed in 0..25 {
+                let (map, cards, mut game) = load(state);
+                let mut ai = RandomAi::from_seed(seed);
+                let mut dice = Dice::from_seed(seed);
+                for _ in 0..4 {
+                    if game.winner().is_none() {
+                        play_turn(&mut ai, &mut game, &map, &cards, &mut dice).unwrap_or_else(|e| panic!("{state} seed {seed}: {e}"));
+                    }
+                }
             }
         }
     }
