@@ -95,9 +95,9 @@ pub fn render_status_bar_with(
         None => after_event.and_then(|g| g.side).unwrap_or(status.active),
     };
     let turn_line = format!(
-        "TURN {} · AR {} · {} to act · DEFCON {} · VP {}{}{}",
+        "TURN {} · {} · {} to act · DEFCON {} · VP {}{}{}",
         status.turn,
-        ar_label(status),
+        round_label(status),
         to_act,
         status.defcon,
         vp_line(status.vp),
@@ -195,6 +195,10 @@ pub fn render_status_bar_with(
                 format!("playing {} ({}) — i influence · a realign · o coup{} · ⌫ return card", card.name, ops_text(status, card), space_hint(card)),
                 Style::color(Color::Selected),
             ),
+            (None, None) if status.in_headline() => (
+                format!("{} to choose a headline card · [ ] select · space choose it — its event only, and it can't be taken back", status.active),
+                side_style(status.active).bold(),
+            ),
             (None, None) if status.forced_play.is_some_and(|(side, _)| side == status.active) => (
                 format!("{} to act · you must play Missile Envy for operations this round · [ ] select it · space play", status.active),
                 side_style(status.active).bold(),
@@ -262,6 +266,11 @@ fn space_hint(card: &Card) -> &'static str {
     if card.scoring { "" } else { " · s space race" }
 }
 
+/// `AR 3/7`, or `Headline` before the first action round.
+fn round_label(status: &GameStatus) -> String {
+    if status.in_headline() { "Headline".to_string() } else { format!("AR {}", ar_label(status)) }
+}
+
 /// `3`, or `8/7+1` for the extra round North Sea Oil gives the US.
 fn ar_label(status: &GameStatus) -> String {
     let (round, per_turn) = (status.action_round, status.action_rounds_per_turn);
@@ -320,7 +329,7 @@ fn draw_turn_line(canvas: &mut Canvas, status: &GameStatus, to_act: Superpower) 
         col += text.chars().count();
     };
 
-    put(canvas, &format!("TURN {} · AR {} · ", status.turn, ar_label(status)), Style::default());
+    put(canvas, &format!("TURN {} · {} · ", status.turn, round_label(status)), Style::default());
     let side_style = match to_act {
         Superpower::Us => Style::color(Color::Us).bold(),
         Superpower::Ussr => Style::color(Color::Ussr).bold(),

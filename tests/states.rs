@@ -1263,7 +1263,7 @@ mod turn_effects {
         game.begin(OperationKind::Influence).unwrap();
         game.confirm().unwrap();
         end_turn(&mut game, &map, &cards);
-        assert_eq!((game.status().turn, game.status().action_round, game.active()), (4, 1, Superpower::Ussr));
+        assert_eq!((game.status().turn, game.status().action_round, game.active()), (4, 0, Superpower::Ussr), "the headline phase opens turn 4");
         assert!(in_force(&game).is_empty(), "the turn's effects end with it");
     }
 
@@ -1893,7 +1893,8 @@ mod space {
         assert_eq!(game.awaiting_discard(), Some(Superpower::Ussr));
         game.pass().unwrap();
         end_turn(&mut game, &map, &cards);
-        assert_eq!((game.status().active, game.status().action_round, game.status().turn), (Superpower::Ussr, 1, 2));
+        // …and past box 4: the Man in Earth Orbit perk makes the US choose its headline first.
+        assert_eq!((game.status().active, game.status().action_round, game.status().turn), (Superpower::Us, 0, 2));
     }
 
     #[test]
@@ -1901,7 +1902,7 @@ mod space {
         let (map, cards, mut game) = load("space-station-cancelled");
         game.pass().unwrap();
         end_turn(&mut game, &map, &cards);
-        assert_eq!((game.status().active, game.status().action_round, game.status().turn), (Superpower::Ussr, 1, 2));
+        assert_eq!((game.status().active, game.status().action_round, game.status().turn), (Superpower::Ussr, 0, 2), "the headline phase opens the turn");
     }
 
     #[test]
@@ -4206,7 +4207,7 @@ mod turn_end {
         assert!(matches!(game.pass(), Err(GameError::Trap(_))));
         assert_eq!(game.legal_actions(&map, &cards), vec![twilight_struggle::Action::Settle]);
         end_turn(&mut game, &map, &cards);
-        assert_eq!((game.status().turn, game.phase(), game.active(), game.status().action_round), (3, Phase::ActionRounds, Superpower::Ussr, 1));
+        assert_eq!((game.status().turn, game.phase(), game.active(), game.status().action_round), (3, Phase::Headline, Superpower::Ussr, 0));
     }
 
     #[test]
@@ -4322,7 +4323,7 @@ mod eagle_bear {
         assert!(game.discards().contains(&id(&cards, "Containment")), "the discarded card went to the discard pile");
         assert!(game.settlement_due());
         end_turn(&mut game, &map, &cards);
-        assert_eq!((game.status().turn, game.phase(), game.awaiting_discard()), (3, Phase::ActionRounds, None));
+        assert_eq!((game.status().turn, game.phase(), game.awaiting_discard()), (3, Phase::Headline, None));
         assert!(game.log().entries().iter().any(|e| matches!(e.event, Event::HeldDiscard { card: Some(c) } if c == id(&cards, "Containment"))));
     }
 
@@ -4467,6 +4468,174 @@ mod final_scoring {
                 }
             }
             assert!(game.winner().is_some(), "seed {seed}");
+        }
+    }
+}
+
+/// The headline phase that opens every turn (`data/states/headline.json`).
+mod headline {
+    use super::*;
+    use twilight_struggle::game::Phase;
+    use twilight_struggle::{play_turn, Action, CountryId, Dice, Event, GameError, RandomAi};
+
+    fn load(name: &str) -> (WorldMap, CardCatalog, Game) {
+        let (map, cards, lib) = fixtures();
+        let (scenario, _) = lib.load(&map, &cards, &format!("headline/{name}")).unwrap_or_else(|e| panic!("{name}: {e}"));
+        (map, cards, Game::from_scenario(&scenario))
+    }
+
+    fn card(cards: &CardCatalog, name: &str) -> twilight_struggle::CardId {
+        cards.id_by_name(name).unwrap_or_else(|| panic!("no card {name}"))
+    }
+
+    fn country(map: &WorldMap, name: &str) -> CountryId {
+        map.id_by_name(name).unwrap()
+    }
+
+    /// Both sides choose (in the order the game asks for them) and the cards are played.
+    fn play_headlines(map: &WorldMap, cards: &CardCatalog, game: &mut Game, ussr: &str, us: &str) {
+        for _ in 0..2 {
+            let name = if game.active() == Superpower::Ussr { ussr } else { us };
+            game.headline(cards, card(cards, name)).unwrap_or_else(|e| panic!("{name}: {e}"));
+        }
+        end_turn(game, map, cards);
+    }
+
+    fn selected_order(cards: &CardCatalog, game: &Game) -> Vec<String> {
+        game.log().entries().iter().filter_map(|e| match e.event {
+            Event::Selected { card } => Some(cards.card(card).name.clone()),
+            _ => None,
+        }).collect()
+    }
+
+    #[test]
+    fn the_game_starts_in_the_headline_phase_with_the_ussr_choosing_first() {
+        let (map, cards, game) = load("ussr-higher-first");
+        assert_eq!((game.phase(), game.status().action_round, game.active(), game.decider()), (Phase::Headline, 0, Superpower::Ussr, Superpower::Ussr));
+        assert!(game.picking_headline());
+        let legal = game.legal_actions(&map, &cards);
+        assert_eq!(legal, vec![Action::Headline(card(&cards, "Fidel")), Action::Headline(card(&cards, "Romanian Abdication"))]);
+    }
+
+    #[test]
+    fn nothing_but_a_headline_can_be_done_until_both_have_chosen() {
+        let (_, cards, mut game) = load("ussr-higher-first");
+        assert!(matches!(game.play_card(&cards, card(&cards, "Fidel")), Err(GameError::Trap(_))));
+        assert!(matches!(game.pass(), Err(GameError::Trap(_))));
+        assert!(matches!(game.begin(twilight_struggle::OperationKind::Influence), Err(GameError::Trap(_))));
+        assert!(matches!(game.headline(&cards, card(&cards, "Containment")), Err(GameError::NotInHand)));
+        game.headline(&cards, card(&cards, "Fidel")).unwrap();
+        assert_eq!((game.active(), game.phase(), game.headline_other_has_chosen()), (Superpower::Us, Phase::Headline, true));
+        assert!(game.log().entries().is_empty(), "the first choice stays hidden: nothing is logged");
+        assert!(game.hand(Superpower::Ussr).contains(&card(&cards, "Fidel")), "the card stays in the hand until it is played");
+    }
+
+    #[test]
+    fn the_higher_operations_card_resolves_first() {
+        let (map, cards, mut game) = load("ussr-higher-first");
+        play_headlines(&map, &cards, &mut game, "Fidel", "Panama Canal Returned");
+        assert_eq!(selected_order(&cards, &game), ["Fidel", "Panama Canal Returned"]);
+        assert_eq!((game.phase(), game.status().action_round, game.active()), (Phase::ActionRounds, 1, Superpower::Ussr));
+        assert_eq!(game.board().influence(country(&map, "Cuba"), Superpower::Us), 0, "Fidel was played");
+        assert!(game.discards().contains(&card(&cards, "Fidel")) || game.removed_from_game().contains(&card(&cards, "Fidel")));
+
+        let (map, cards, mut game) = load("us-higher-first");
+        play_headlines(&map, &cards, &mut game, "Fidel", "Duck and Cover");
+        assert_eq!(selected_order(&cards, &game), ["Duck and Cover", "Fidel"]);
+    }
+
+    #[test]
+    fn a_tie_goes_to_the_us() {
+        let (map, cards, mut game) = load("tie-us-first");
+        play_headlines(&map, &cards, &mut game, "Fidel", "Camp David Accords");
+        assert_eq!(selected_order(&cards, &game), ["Camp David Accords", "Fidel"]);
+    }
+
+    #[test]
+    fn the_reveal_is_logged_once_both_have_chosen() {
+        let (map, cards, mut game) = load("us-higher-first");
+        play_headlines(&map, &cards, &mut game, "Fidel", "Duck and Cover");
+        let Some(Event::Headline { ussr, us, first, cancelled }) = game.log().entries().iter().map(|e| e.event.clone()).find(|e| matches!(e, Event::Headline { .. })) else {
+            panic!("a headline entry");
+        };
+        assert_eq!((ussr, us, first, cancelled), (Some(card(&cards, "Fidel")), Some(card(&cards, "Duck and Cover")), Some(Superpower::Us), false));
+        let text = twilight_struggle::render::log_text(&map, &cards, game.log());
+        assert!(text.contains("headline") && text.contains("USA resolves first") && text.contains("HL"), "{text}");
+    }
+
+    #[test]
+    fn defectors_cancels_the_ussr_headline_whatever_its_value() {
+        let (map, cards, mut game) = load("defectors-cancels");
+        play_headlines(&map, &cards, &mut game, "Fidel", "Defectors");
+        assert_eq!(game.board().influence(country(&map, "Cuba"), Superpower::Us), 2, "Fidel never happened");
+        assert!(game.discards().contains(&card(&cards, "Fidel")), "the cancelled card goes to the discard pile");
+        assert_eq!(selected_order(&cards, &game), ["Defectors"]);
+        assert_eq!(game.status().vp, 0, "Defectors pays nothing as a headline");
+        assert_eq!(game.phase(), Phase::ActionRounds);
+        let Some(Event::Headline { cancelled, first, .. }) = game.log().entries().iter().map(|e| e.event.clone()).find(|e| matches!(e, Event::Headline { .. })) else { panic!() };
+        assert!(cancelled && first == Some(Superpower::Us));
+    }
+
+    #[test]
+    fn the_man_in_earth_orbit_holder_chooses_second_and_sees_the_first_card() {
+        let (_, cards, mut game) = load("man-in-earth-orbit");
+        assert_eq!(game.active(), Superpower::Us, "the US shows its card first");
+        assert_eq!(game.headline_pick_seen(), None);
+        game.headline(&cards, card(&cards, "Panama Canal Returned")).unwrap();
+        assert_eq!(game.active(), Superpower::Ussr);
+        assert_eq!(game.headline_pick_seen(), Some((Superpower::Us, card(&cards, "Panama Canal Returned"))));
+    }
+
+    #[test]
+    fn a_headline_that_takes_defcon_to_one_loses_for_the_headliner() {
+        let (map, cards, mut game) = load("headline-defcon-loss");
+        play_headlines(&map, &cards, &mut game, "Duck and Cover", "Panama Canal Returned");
+        assert_eq!(game.winner(), Some(Victory { side: Some(Superpower::Us), reason: VictoryReason::Defcon }));
+        assert_eq!(selected_order(&cards, &game), ["Duck and Cover"], "the game ended before the other card");
+    }
+
+    #[test]
+    fn a_side_with_no_cards_skips_its_headline() {
+        let (map, cards, mut game) = load("us-has-no-cards");
+        game.headline(&cards, card(&cards, "Fidel")).unwrap();
+        assert!(game.settlement_due(), "the US has nothing to headline, which settle records");
+        end_turn(&mut game, &map, &cards);
+        assert_eq!((game.phase(), game.status().action_round), (Phase::ActionRounds, 1));
+        assert_eq!(selected_order(&cards, &game), ["Fidel"]);
+        let Some(Event::Headline { us, .. }) = game.log().entries().iter().map(|e| e.event.clone()).find(|e| matches!(e, Event::Headline { .. })) else { panic!() };
+        assert_eq!(us, None);
+    }
+
+    #[test]
+    fn un_intervention_cannot_be_headlined() {
+        let (map, cards, mut game) = load("un-intervention-held");
+        assert!(matches!(game.headline(&cards, card(&cards, "UN Intervention")), Err(GameError::Trap(_))));
+        assert_eq!(game.legal_actions(&map, &cards), vec![Action::Headline(card(&cards, "Fidel"))]);
+    }
+
+    #[test]
+    fn a_headline_is_its_event_only_so_an_ops_grant_is_not_offered() {
+        let (map, cards, mut game) = load("ops-card-headlined");
+        play_headlines(&map, &cards, &mut game, "ABM Treaty", "Panama Canal Returned");
+        assert_eq!(game.card_in_play(), None);
+        assert_eq!((game.phase(), game.status().action_round), (Phase::ActionRounds, 1));
+        assert_eq!(game.status().defcon, 4, "ABM Treaty's DEFCON +1 happened");
+    }
+
+    #[test]
+    fn the_ai_chooses_headlines_and_plays_on() {
+        for state in ["ussr-higher-first", "us-higher-first", "defectors-cancels", "man-in-earth-orbit", "us-has-no-cards", "ops-card-headlined"] {
+            for seed in 0..10 {
+                let (map, cards, mut game) = load(state);
+                let mut ai = RandomAi::from_seed(seed);
+                let mut dice = Dice::from_seed(seed);
+                for _ in 0..6 {
+                    if game.winner().is_none() {
+                        play_turn(&mut ai, &mut game, &map, &cards, &mut dice).unwrap_or_else(|e| panic!("{state} seed {seed}: {e}"));
+                    }
+                }
+                assert!(game.phase() != Phase::Headline || game.winner().is_some(), "{state} seed {seed}");
+            }
         }
     }
 }

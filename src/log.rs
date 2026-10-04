@@ -122,6 +122,10 @@ pub enum Event {
     /// A free-text annotation — e.g. reloading the demo scenario — with no
     /// side and no board effect of its own.
     Note(String),
+    /// Both headline cards revealed (rule 4.4). `first` is whoever resolves first (higher
+    /// Operations, the US on a tie — or the US with Defectors, which also `cancelled` the
+    /// USSR's headline event). A side with nothing to headline shows `None`.
+    Headline { ussr: Option<CardId>, us: Option<CardId>, first: Option<Superpower>, cancelled: bool },
     /// Final scoring after turn 10: every region scored in turn (each result with the VP track
     /// after it), then the China Card holder's point, and the track at the end.
     FinalScoring { results: Vec<(crate::events::ScoringResult, i8)>, china: Option<Superpower>, vp_after: i8 },

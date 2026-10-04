@@ -118,7 +118,7 @@ Every card can already be played for its ops value; this tracks the event text o
 | 100 | Wargames | Both | ✅ | Choice (end the game / play on) at DEFCON 2: the opponent gets 6 VP, the VP leader wins (a tie goes to the opponent); nothing at other levels |
 | 101 | Solidarity | US | ✅ | Needs #68 first |
 | 102 | Iran-Iraq War | Both | ✅ | War (choose Iran/Iraq) |
-| 103 | Defectors | US | ✅ | USSR playing it gives the US 1 VP; the headline half pending a headline phase |
+| 103 | Defectors | US | ✅ | USSR playing it in an action round gives the US 1 VP; headlined by the US it resolves first and cancels the USSR's headline event (the card is discarded unplayed) |
 | 104 | The Cambridge Five | USSR | ✅ | Reveals the US scoring cards; the USSR may add 1 influence to one country in a region they name (Southeast Asia isn't a region); not in the Late War |
 | 105 | Special Relationship | US | ✅ | Choice; adjacent-to-UK branch, or with NATO in effect +2 influence in Western Europe and +2 VP |
 | 106 | NORAD | US | ✅ | After an action round that moved DEFCON to 2, with Canada US-controlled: +1 US influence where it has some (`Game::settle` opens it as a triggered `EventChoice`) |

@@ -143,6 +143,11 @@ impl GameStatus {
         if space::perk_holder(self, Perk::EightRounds) == Some(side) { usual.max(8) } else { usual }
     }
 
+    /// Whether this is the headline phase (`action_round` 0), before the first action round.
+    pub fn in_headline(&self) -> bool {
+        self.action_round == 0
+    }
+
     /// Whether every field is within the bounds a real `GameStatus`
     /// could actually be in — the one check both a loaded `Scenario`/
     /// test state and a live debug-mode edit (`vp`/`defcon`/`turn`/`ar`)
@@ -175,8 +180,9 @@ impl GameStatus {
                 return Err(StatusError::SpaceAttemptsOutOfRange(n));
             }
         }
-        // North Sea Oil and the Space Station box give one side rounds past the usual count.
-        if self.action_round < 1 || self.action_round > self.rounds_for(self.active) {
+        // North Sea Oil and the Space Station box give one side rounds past the usual count;
+        // round 0 is the headline phase, before the first action round.
+        if self.action_round > self.rounds_for(self.active) {
             return Err(StatusError::ActionRoundOutOfRange {
                 action_round: self.action_round,
                 action_rounds_per_turn: self.action_rounds_per_turn,
@@ -262,8 +268,10 @@ mod tests {
     fn action_round_must_fit_within_action_rounds_per_turn() {
         let status = GameStatus { action_round: 7, action_rounds_per_turn: 6, ..GameStatus::default() };
         assert_eq!(status.validate(), Err(StatusError::ActionRoundOutOfRange { action_round: 7, action_rounds_per_turn: 6 }));
+        // Round 0 is the headline phase, before the first action round.
         let status = GameStatus { action_round: 0, ..GameStatus::default() };
-        assert_eq!(status.validate(), Err(StatusError::ActionRoundOutOfRange { action_round: 0, action_rounds_per_turn: 6 }));
+        assert_eq!(status.validate(), Ok(()));
+        assert!(status.in_headline());
         // The same action_round is fine once action_rounds_per_turn grows
         // to fit it.
         let status = GameStatus { action_round: 7, action_rounds_per_turn: 7, ..GameStatus::default() };

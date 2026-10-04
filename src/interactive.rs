@@ -14,10 +14,10 @@ use crossterm::{execute, queue};
 
 use twilight_struggle::render::{
     log_entry_line, operation_abandoned_line, pile_cards, render_piles, PileTab, operation_closed_line, operation_header, render_card, render_country, render_forced_card, render_hand,
-    render_event_result, render_event_session, render_final_scoring, render_space_confirm, render_space_result, render_trap_confirm, render_trap_result, render_space_track_with_hint, render_war_result, render_region, render_roll_result, render_scoring_result, render_status_bar_with, render_world_map, Canvas, RollReport, HAND_ROWS,
+    render_event_result, render_event_session, render_final_scoring, render_headline_reveal, render_space_confirm, render_space_result, render_trap_confirm, render_trap_result, render_space_track_with_hint, render_war_result, render_region, render_roll_result, render_scoring_result, render_status_bar_with, render_world_map, Canvas, RollReport, HAND_ROWS,
 };
 use twilight_struggle::events::{PlayAs, EffectResult, ScoringResult, WarResult};
-use twilight_struggle::game::{Trap, TrapResult, Victory};
+use twilight_struggle::game::{Phase, Trap, TrapResult, Victory};
 use twilight_struggle::space::SpaceResult;
 use twilight_struggle::ops::Operation;
 use twilight_struggle::{
@@ -71,6 +71,9 @@ enum Modal {
     /// Final scoring after turn 10: each region's swing, the China Card, the VP at the end and
     /// the game's result.
     FinalScoring(Vec<(ScoringResult, i8)>, Option<Superpower>, i8, Option<Victory>),
+    /// Both headline cards revealed: the USSR's, the US's, who resolves first and whether
+    /// Defectors cancels the USSR's.
+    Headline(Option<CardId>, Option<CardId>, Option<Superpower>, bool),
     /// `D`: the discard, removed and deck piles, for information only — drawn live from the
     /// game's hands. `zoom` shows the highlighted card in full instead of the list.
     Piles { tab: PileTab, cursor: usize, zoom: bool },
@@ -856,6 +859,7 @@ fn queue_turn_modals(modal: &mut VecDeque<Modal>, board: &Board, entries: &[LogE
                 };
                 modal.push_back(Modal::War(result.clone(), *vp_after, winner));
             }
+            Event::Headline { ussr, us, first, cancelled } => modal.push_back(Modal::Headline(*ussr, *us, *first, *cancelled)),
             Event::FinalScoring { results, china, vp_after } => {
                 let winner = match entries.get(i + 1).map(|e| &e.event) {
                     Some(Event::GameOver(victory)) => Some(*victory),
@@ -1051,6 +1055,24 @@ fn handle_hand_key(code: KeyCode, game: &mut Game, map: &WorldMap, cards: &CardC
             modal.push_back(Modal::TrapConfirm(id));
             None
         }
+        KeyCode::Char(' ') if game.phase() == Phase::Headline && !hand_selected.peek => {
+            let id = selected_hand_card(game, hand_selected)?;
+            let side = game.active();
+            let before = game.log().len();
+            Some(match game.headline(cards, id) {
+                Ok(()) => {
+                    *zoomed = false;
+                    let new_entries = &game.log().entries()[before..];
+                    queue_turn_modals(modal, game.board(), new_entries);
+                    if new_entries.iter().any(|e| matches!(e.event, Event::Headline { .. })) {
+                        format!("{side} chooses {} — both headlines are in", cards.card(id).name)
+                    } else {
+                        format!("{side} has chosen a headline card — {} to choose", game.active())
+                    }
+                }
+                Err(e) => e.to_string(),
+            })
+        }
         KeyCode::Char(' ') if game.awaiting_discard().is_some() => {
             let id = selected_hand_card(game, hand_selected)?;
             let side = game.active();
@@ -1154,7 +1176,12 @@ fn draw(
         PlayAs::Ops => format!("{} puts {} in play — an opponent's event, so use its operations (i/a/o)", cards.card(host).name, cards.card(card).name),
     });
     let held = game.awaiting_discard().map(|side| format!("Eagle/Bear has Landed — {side} may discard one card: Space discards the selected card · p keeps them all"));
-    let reminder = pending_choice_reminder(game, cards).or(held).or(forced).or_else(|| {
+    let headline = game.picking_headline().then(|| match (game.headline_pick_seen(), game.headline_other_has_chosen()) {
+        (Some((other, card)), _) => format!("Man in Earth Orbit — {other} headlined {}; choose yours (space)", cards.card(card).name),
+        (None, true) => format!("{} has chosen a headline card (hidden) — now {}: [ ] select, space choose", game.active().opponent(), game.active()),
+        (None, false) => format!("{}: choose your headline card — [ ] select, space choose", game.active()),
+    });
+    let reminder = pending_choice_reminder(game, cards).or(held).or(headline).or(forced).or_else(|| {
         (hand_selected.peek && peeking_allowed(game) && !discard_gate_open(game))
             .then(|| format!("showing the {} hand (revealed) — v to return to your own", game.active().opponent()))
     });
@@ -1192,6 +1219,7 @@ fn draw(
         let modal_canvas = match front {
             Modal::Roll(report) => render_roll_result(map, report, queue_pos),
             Modal::Score(result, vp_after) => render_scoring_result(map, cards, result, *vp_after, queue_pos),
+            Modal::Headline(ussr, us, first, cancelled) => render_headline_reveal(cards, *ussr, *us, *first, *cancelled, queue_pos),
             Modal::FinalScoring(results, china, vp_after, winner) => render_final_scoring(results, *china, *vp_after, *winner, queue_pos),
             Modal::Event(result, vp_after, winner) => render_event_result(map, cards, result, *vp_after, *winner, queue_pos),
             Modal::War(result, vp_after, winner) => render_war_result(map, cards, result, *vp_after, *winner, queue_pos),

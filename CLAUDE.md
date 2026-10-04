@@ -16,8 +16,8 @@ the 110 cards have their event implemented (`tests/cards_progress.rs`
 keeps it honest). The end of a turn (Military Operations, held scoring
 cards, DEFCON +1, the Mid/Late War deck additions and the redeal) is
 implemented (`Game::settle`, below), as is final scoring after turn 10; the
-headline phase, new-game setup and an opponent's card's ops-and-event dual
-use are still out of scope. A first AI opponent plays
+headline phase (below) is too; new-game setup and an opponent's card's
+ops-and-event dual use are still out of scope. A first AI opponent plays
 uniformly random legal moves.
 
 ## Architecture
@@ -221,9 +221,10 @@ uniformly random legal moves.
   Space (`attempts_allowed` 2) and Space Station (`GameStatus::rounds_for`
   gives the holder 8 action rounds; `Game::advance`/`begin_round` skip a side
   with no round left, so the holder plays the extra rounds alone — North Sea
-  Oil goes through the same path). Man in Earth Orbit (headline first) and
-  Eagle/Bear has Landed (discard a held card) are derived and shown but have
-  no effect, since there's no headline phase or end-of-turn hand step. Cards
+  Oil goes through the same path). Man in Earth Orbit (the opponent
+  headlines first, `game::headline_order`) and Eagle/Bear has Landed (discard
+  a held card at the end of the turn, `Game::discard_held`) are derived from
+  the markers and enforced. Cards
   #18 Captured Nazi Scientist and #80 One Small Step use `Ctx::advance_space`
   and report `EffectResult::space`. Views: `render/space.rs`
   (`render_space_track`, `render_space_result`), a `Space n-m` label and perk
@@ -478,7 +479,30 @@ uniformly random legal moves.
   (turn 4) or Late (turn 8) War cards shuffled into the deck
   (`Hands::shuffle_into_deck`; the China Card never), and both hands dealt up
   to `status::hand_size_for_turn` (8, then 9), USSR first, alternating,
-  reshuffling the discard pile when the deck runs out. **Eagle/Bear has Landed** (`Perk::DiscardHeld`) is the one step of the
+  reshuffling the discard pile when the deck runs out, and opens the **headline
+  phase**.
+  **The headline phase** (rule 4.4) is `Phase::Headline`, where `status.action_round`
+  is 0 (`GameStatus::in_headline`; `validate` accepts it, `Game::from_scenario`
+  starts a scenario with round 0 there, the status bar and the REPL prompt say
+  "Headline", the log's AR column `HL`): `status.active` is whoever has to choose
+  — the USSR first, the US second, or the other way round while the USSR holds
+  the Man in Earth Orbit perk, whose holder then sees the first card
+  (`Game::headline_pick_seen`; otherwise the first choice stays hidden and
+  nothing is logged until the reveal). `Game::headline(cards, card)`
+  (`Action::Headline`, REPL `headline <card>`, Space in the map; UN Intervention
+  refused) records a choice, and a side with nothing to headline is skipped by
+  `settle`. The second choice logs `Event::Headline` (the reveal; interactive
+  mode queues a `Modal::Headline`) and fixes the order: the higher printed
+  Operations value first, the US on a tie, and the US's Defectors always first
+  — it cancels the USSR's headline (the card is discarded unplayed). Then
+  `settle` (`headline_step`) plays each card through the ordinary
+  `take_card` + `play_event_with` path with `active` set to its owner (so
+  choices, wars, nested events and DEFCON-1's "phasing player" all work), an
+  unplayable one (unimplemented, prevented) is just discarded, `advance` does
+  nothing during the phase, `finish_effect` drops any ops grant (a headline is
+  its event only), and `begin`/`space`/`pass`/`return_card`/`abandon` and a
+  plain `play_card` are refused; `finish_headline` opens AR 1.
+  **Eagle/Bear has Landed** (`Perk::DiscardHeld`) is the one step of the
   end of the turn that waits on a player: after the scoring check, if its
   holder has any card, `Game::awaiting_discard` names them (and `status.active`
   becomes them, so `decider`, the status bar and the hand strip all follow),
@@ -1280,7 +1304,7 @@ deliberate exception, for debug-mode test states specifically.
 - `backup/` — earlier full snapshots of the world map, kept in case a
   future change needs to compare against or revert to an earlier version.
 - `states/` — named test states (`src/states.rs`'s own `StateLibrary`),
-  one JSON file per topic (`scoring.json` is the first, then `events.json` for the fixed-effect cards, `choices.json` for the choice cards, `turn-effects.json` for the turn-long ones and `lasting.json` for the game-long ones, `coups.json` for Military Ops and the DEFCON region limits, `piles.json` for the deck and pile views, `turn-end.json` for the end of a turn, `final.json` for final scoring — each card's own event, plus `*-active` states with an effect already in force), each holding a
+  one JSON file per topic (`scoring.json` is the first, then `events.json` for the fixed-effect cards, `choices.json` for the choice cards, `turn-effects.json` for the turn-long ones and `lasting.json` for the game-long ones, `coups.json` for Military Ops and the DEFCON region limits, `piles.json` for the deck and pile views, `turn-end.json` for the end of a turn, `final.json` for final scoring, `headline.json` for the headline phase — each card's own event, plus `*-active` states with an effect already in force), each holding a
   `{"states": [...]}` array of several named `Scenario` snapshots. Read
   from disk at runtime, not `include_str!`-embedded — see `states.rs`'s
   own doc above for why.

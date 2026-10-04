@@ -833,10 +833,11 @@ fn the_cambridge_five(c: &mut Ctx) {
     c.reveal_hand(Superpower::Us);
 }
 
-/// #103 Defectors: played in an action round by the USSR, the US gets 1 VP. (The headline
-/// half — cancelling the USSR's headline event — waits for a headline phase.)
+/// #103 Defectors: played in an action round by the USSR, the US gets 1 VP. (Headlined by the
+/// US it cancels the USSR's headline event — `Game::headline_step` does that, so the event
+/// itself pays nothing in the headline phase.)
 fn defectors(c: &mut Ctx) {
-    if c.player() == Superpower::Ussr {
+    if c.player() == Superpower::Ussr && !c.status.in_headline() {
         c.award_vp(Superpower::Us, 1);
     }
 }

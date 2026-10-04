@@ -362,6 +362,7 @@ pub struct Game {
     turn_end: TurnEndProgress,
     /// The Eagle/Bear has Landed holder who has yet to decide whether to discard.
     held_discard: Option<Superpower>,
+    headline: HeadlineState,
 }
 
 /// What [`Game::end_turn`] has already done, kept while it waits for the perk holder's decision.
@@ -380,16 +381,63 @@ const FINAL_SCORING: [CardId; 6] = [CardId(2), CardId(1), CardId(3), CardId(37),
 /// catalog and dice, which the rest of turn handling (`advance`) deliberately doesn't have.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Phase {
+    /// Each side chooses a headline card, then the two are revealed and played as events.
+    Headline,
     ActionRounds,
     TurnEnd,
 }
+
+/// The headline phase's progress (rule 4.4).
+#[derive(Debug, Clone, Copy, Default)]
+struct HeadlineState {
+    /// Each side's pick, `[US, USSR]`: the outer `None` until it has chosen, the inner `None`
+    /// for a side that had no card to headline.
+    picks: [Option<Option<CardId>>; 2],
+    revealed: bool,
+    /// Who resolves first and second, once revealed.
+    order: [Option<Superpower>; 2],
+    /// Defectors cancelled the USSR's headline event.
+    cancelled: bool,
+    /// How many of `order` have been dealt with.
+    next: usize,
+}
+
+fn side_slot(side: Superpower) -> usize {
+    match side {
+        Superpower::Us => 0,
+        Superpower::Ussr => 1,
+    }
+}
+
+/// Who chooses their headline card first: the USSR, unless it holds the Man in Earth Orbit
+/// perk, which makes the US show its choice first (the holder sees it before choosing).
+pub fn headline_order(status: &GameStatus) -> [Superpower; 2] {
+    if space::perk_holder(status, space::Perk::OpponentHeadlinesFirst) == Some(Superpower::Ussr) {
+        [Superpower::Us, Superpower::Ussr]
+    } else {
+        [Superpower::Ussr, Superpower::Us]
+    }
+}
+
+/// UN Intervention can't be played in the headline phase.
+const UN_INTERVENTION: CardId = CardId(32);
+/// Defectors: as a US headline it cancels the USSR's headline event.
+const DEFECTORS: CardId = CardId(103);
 
 impl Game {
     /// Starts from a scenario's status, board, and hands, with no card
     /// played, no operation open, no winner, and an empty history.
     pub fn from_scenario(scenario: &Scenario) -> Self {
+        let mut status = scenario.status;
+        // Round 0 is the headline phase: the first picker is the one to act.
+        let phase = if status.in_headline() {
+            status.active = headline_order(&status)[0];
+            Phase::Headline
+        } else {
+            Phase::ActionRounds
+        };
         Game {
-            status: scenario.status,
+            status,
             board: scenario.board.clone(),
             card: None,
             op: None,
@@ -398,9 +446,10 @@ impl Game {
             winner: None,
             round_defcon: scenario.status.defcon,
             norad_due: false,
-            phase: Phase::ActionRounds,
+            phase,
             turn_end: TurnEndProgress::default(),
             held_discard: None,
+            headline: HeadlineState::default(),
         }
     }
 
@@ -466,6 +515,7 @@ impl Game {
             phase: self.phase,
             turn_end: self.turn_end,
             held_discard: self.held_discard,
+            headline: self.headline,
         }
     }
 
@@ -690,6 +740,13 @@ impl Game {
                 Trap::PlayScoring | Trap::Skip => {}
             }
         }
+        self.take_card(cards, id)
+    }
+
+    /// Takes `id` from the active side's hand (or the China Card, if theirs and face up) and
+    /// makes it the card in play — the part of [`Game::play_card`] after its action-round
+    /// guards, which the headline phase's own resolution shares.
+    fn take_card(&mut self, cards: &CardCatalog, id: CardId) -> Result<(), GameError> {
         let side = self.status.active;
         let card = cards.card(id);
         let hand_index = if id == CHINA_CARD {
@@ -713,6 +770,7 @@ impl Game {
     /// [`Game::play_card`]. Refused while an operation is open (abandon it
     /// first via [`Game::abandon`]) or with no card in play.
     pub fn return_card(&mut self) -> Result<CardId, GameError> {
+        self.headline_guard()?;
         if let Some(op) = &self.op {
             return Err(GameError::OperationOpen { verb: op.verb(), remaining: op.remaining(), total: op.ops_total() });
         }
@@ -739,6 +797,7 @@ impl Game {
     /// no ops to spend; [`Game::play_event`] is the only thing it can
     /// fund).
     pub fn begin(&mut self, kind: OperationKind) -> Result<(), GameError> {
+        self.headline_guard()?;
         if let Some(op) = &self.op {
             return Err(GameError::OperationOpen { verb: op.verb(), remaining: op.remaining(), total: op.ops_total() });
         }
@@ -1088,6 +1147,9 @@ impl Game {
     /// Leaves no trace in the log either way: as far as the history is
     /// concerned, an abandoned operation never happened.
     pub fn abandon(&mut self) -> Result<Operation, GameError> {
+        if self.phase == Phase::Headline && self.op.is_some() {
+            return Err(GameError::Trap("a headline event has to be played out — it can't be backed out of".into()));
+        }
         match &self.op {
             None => Err(GameError::NoOperation),
             // Placement never rolls dice, so there's nothing it could
@@ -1188,6 +1250,7 @@ impl Game {
         if self.winner.is_some() {
             return Err(GameError::GameOver);
         }
+        self.headline_guard()?;
         if let Some(op) = &self.op {
             return Err(GameError::OperationOpen { verb: op.verb(), remaining: op.remaining(), total: op.ops_total() });
         }
@@ -1292,13 +1355,22 @@ impl Game {
         if self.phase == Phase::TurnEnd {
             return Err(GameError::Trap("the turn is over — settle its end first".into()));
         }
+        if self.phase == Phase::Headline {
+            return Err(GameError::Trap("this is the headline phase — choose your headline card (headline <card>)".into()));
+        }
         Ok(())
     }
 
     /// Whether [`Game::settle`] has something to do: NORAD's trigger, or the end of the turn
     /// (unless an event it opened — NORAD's — is still waiting on its player).
     pub fn settlement_due(&self) -> bool {
-        self.norad_due || (self.phase == Phase::TurnEnd && self.op.is_none() && self.winner.is_none() && self.held_discard.is_none())
+        self.norad_due
+            || (self.phase == Phase::TurnEnd && self.op.is_none() && self.winner.is_none() && self.held_discard.is_none())
+            || (self.phase == Phase::Headline
+                && self.op.is_none()
+                && self.card.is_none()
+                && self.winner.is_none()
+                && (self.headline.revealed || self.headline_candidates(self.status.active).is_empty()))
     }
 
     /// The Eagle/Bear has Landed holder, while the end of the turn waits on whether they
@@ -1327,19 +1399,153 @@ impl Game {
     /// (opened as an event for the US, if it holds Canada and has influence to add to). Callers
     /// run it after anything that can end an action round.
     pub fn settle(&mut self, map: &WorldMap, cards: &CardCatalog, dice: &mut Dice) {
-        if self.winner.is_some() || self.op.is_some() {
-            return;
-        }
-        if std::mem::take(&mut self.norad_due) {
-            let canada_held = map.id_by_name("Canada").is_some_and(|c| self.board.is_controlled_by(map, c, Superpower::Us));
-            if canada_held && let Some(e) = EventChoice::norad(map, &self.board, &self.status) {
-                self.op = Some(Operation::Event(Box::new(e)));
+        // Each step can lead straight to the next (the end of a turn into the headline phase).
+        for _ in 0..8 {
+            if self.winner.is_some() || self.op.is_some() || !self.settlement_due() {
                 return;
             }
+            if std::mem::take(&mut self.norad_due) {
+                let canada_held = map.id_by_name("Canada").is_some_and(|c| self.board.is_controlled_by(map, c, Superpower::Us));
+                if canada_held && let Some(e) = EventChoice::norad(map, &self.board, &self.status) {
+                    self.op = Some(Operation::Event(Box::new(e)));
+                    return;
+                }
+            } else if self.phase == Phase::TurnEnd {
+                self.end_turn(map, cards, dice);
+            } else if self.phase == Phase::Headline {
+                self.headline_step(map, cards, dice);
+            }
         }
-        if self.phase == Phase::TurnEnd && self.held_discard.is_none() {
-            self.end_turn(map, cards, dice);
+    }
+
+    /// Refuses what only an action round allows (operations, space attempts, taking a card
+    /// back) during the headline phase, where a card is played for its event alone.
+    fn headline_guard(&self) -> Result<(), GameError> {
+        if self.phase == Phase::Headline {
+            return Err(GameError::Trap("headline cards are played for their events only".into()));
         }
+        Ok(())
+    }
+
+    /// Whether the side to act is choosing its headline card right now.
+    pub fn picking_headline(&self) -> bool {
+        self.phase == Phase::Headline
+            && !self.headline.revealed
+            && self.op.is_none()
+            && self.card.is_none()
+            && self.winner.is_none()
+            && !self.headline_candidates(self.status.active).is_empty()
+    }
+
+    /// The cards `side` may headline: anything in its hand except UN Intervention (the China
+    /// Card is never in a hand, so can't be one).
+    pub fn headline_candidates(&self, side: Superpower) -> Vec<CardId> {
+        self.hands.hand(side).iter().copied().filter(|&c| c != UN_INTERVENTION).collect()
+    }
+
+    /// What the side now choosing may see of the other's headline: the Man in Earth Orbit holder
+    /// picks second and sees the opponent's card.
+    pub fn headline_pick_seen(&self) -> Option<(Superpower, CardId)> {
+        let me = self.status.active;
+        if self.phase != Phase::Headline || self.headline.revealed || space::perk_holder(&self.status, space::Perk::OpponentHeadlinesFirst) != Some(me) {
+            return None;
+        }
+        self.headline.picks[side_slot(me.opponent())].flatten().map(|c| (me.opponent(), c))
+    }
+
+    /// Whether the other side has already chosen its headline card (not saying which).
+    pub fn headline_other_has_chosen(&self) -> bool {
+        self.phase == Phase::Headline && !self.headline.revealed && self.headline.picks[side_slot(self.status.active.opponent())].is_some()
+    }
+
+    /// Chooses `card` from the active side's hand as its headline for the turn (rule 4.4). The
+    /// USSR chooses first and the US second, the first choice hidden until both are in — or
+    /// the other way round while the USSR holds the Man in Earth Orbit perk. Once both have
+    /// chosen the cards are revealed and played by [`Game::settle`].
+    pub fn headline(&mut self, cards: &CardCatalog, card: CardId) -> Result<(), GameError> {
+        if self.winner.is_some() {
+            return Err(GameError::GameOver);
+        }
+        if self.phase != Phase::Headline || self.headline.revealed {
+            return Err(GameError::Trap("it isn't time to choose a headline card".into()));
+        }
+        if self.card.is_some() || self.op.is_some() {
+            return Err(GameError::Trap("a headline event is still being played".into()));
+        }
+        let side = self.status.active;
+        if card == UN_INTERVENTION && self.hands.hand(side).contains(&card) {
+            return Err(GameError::Trap("UN Intervention can't be played in the headline phase".into()));
+        }
+        if !self.hands.hand(side).contains(&card) {
+            return Err(GameError::NotInHand);
+        }
+        self.record_headline_pick(cards, side, Some(card));
+        Ok(())
+    }
+
+    fn record_headline_pick(&mut self, cards: &CardCatalog, side: Superpower, pick: Option<CardId>) {
+        self.headline.picks[side_slot(side)] = Some(pick);
+        let (Some(us), Some(ussr)) = (self.headline.picks[0], self.headline.picks[1]) else {
+            self.status.active = side.opponent();
+            return;
+        };
+        // Both are in: reveal. The higher Operations value resolves first, the US on a tie;
+        // Defectors always goes first, to cancel the USSR's card.
+        let ops = |c: Option<CardId>| c.map_or(-1, |c| cards.card(c).ops as i8);
+        let cancelled = us == Some(DEFECTORS) && ussr.is_some();
+        let us_first = cancelled || ops(us) >= ops(ussr);
+        let order = if us_first { [Superpower::Us, Superpower::Ussr] } else { [Superpower::Ussr, Superpower::Us] };
+        self.headline.revealed = true;
+        self.headline.cancelled = cancelled;
+        self.headline.order = order.map(Some);
+        self.headline.next = 0;
+        let first = (us.is_some() || ussr.is_some()).then_some(order[0]);
+        self.log.push(LogEntry { turn: self.status.turn, action_round: 0, side: None, event: Event::Headline { ussr, us, first, cancelled } });
+    }
+
+    /// One step of the headline phase: a side with nothing to headline passes it up; once both
+    /// have chosen, the cards are played as events in order — each by its own side, each
+    /// through the ordinary event path (choices, wars and all), whose end leaves the next
+    /// step to the following call. A card whose event can't be played is simply discarded.
+    fn headline_step(&mut self, map: &WorldMap, cards: &CardCatalog, dice: &mut Dice) {
+        if !self.headline.revealed {
+            let side = self.status.active;
+            if self.headline_candidates(side).is_empty() {
+                self.record_headline_pick(cards, side, None);
+            }
+            return;
+        }
+        while self.winner.is_none() && self.op.is_none() && self.card.is_none() {
+            let Some(side) = self.headline.order.get(self.headline.next).copied().flatten() else {
+                self.finish_headline();
+                return;
+            };
+            self.headline.next += 1;
+            self.status.active = side;
+            let Some(card) = self.headline.picks[side_slot(side)].flatten() else { continue };
+            if self.headline.cancelled && side == Superpower::Ussr {
+                if self.hands.remove(side, card).is_some() {
+                    self.hands.discard(card);
+                }
+                continue;
+            }
+            if self.take_card(cards, card).is_err() {
+                continue;
+            }
+            if self.play_event_with(map, cards, dice).is_err() {
+                // Not implemented, prevented, too late…: the card is spent with no effect.
+                self.discard_played_card();
+            }
+        }
+    }
+
+    /// Both headline events are done: the first action round begins.
+    fn finish_headline(&mut self) {
+        self.headline = HeadlineState::default();
+        self.phase = Phase::ActionRounds;
+        self.status.action_round = 1;
+        self.status.active = Superpower::Ussr;
+        self.round_defcon = self.status.defcon;
     }
 
     /// The end of a turn (rule 4.5), in order: Military Operations against DEFCON, a held scoring
@@ -1404,9 +1610,11 @@ impl Game {
         self.status.turn += 1;
         let turn = self.status.turn;
         self.status.action_rounds_per_turn = rounds_for_turn(turn);
-        self.status.action_round = 1;
-        self.status.active = Superpower::Ussr;
-        self.phase = Phase::ActionRounds;
+        // Round 0 is the headline phase; its first chooser is the one to act.
+        self.status.action_round = 0;
+        self.status.active = headline_order(&self.status)[0];
+        self.phase = Phase::Headline;
+        self.headline = HeadlineState::default();
         if self.status.defcon < 5 {
             report.defcon_change = Some((self.status.defcon, self.status.defcon + 1));
             self.status.defcon += 1;
@@ -1851,6 +2059,8 @@ impl Game {
             return;
         }
         // A card whose event allows an operation stays in play for it.
+        // (not a headline card: that is its event only)
+        let grant = grant.filter(|_| self.phase != Phase::Headline);
         if let (None, Some(grant), Some(card)) = (self.winner, grant, self.card.as_mut()) {
             card.ops_after_event = Some(grant);
             return;
@@ -2158,6 +2368,10 @@ impl Game {
     /// `action_round`, called from `confirm`, `cancel`, `pass` and
     /// `space` — nowhere else.
     fn advance(&mut self) {
+        // A headline event ends with no turn to hand over: `settle` carries on to the next one.
+        if self.phase == Phase::Headline {
+            return;
+        }
         // NORAD: the round that just ended moved DEFCON to 2.
         if self.status.lasting.norad && self.status.defcon == 2 && self.round_defcon != 2 {
             self.norad_due = true;
@@ -2340,7 +2554,7 @@ mod tests {
         assert_eq!(game.status().turn, 1);
         settle(&mut game, &map, &cards);
         assert_eq!(game.status().turn, 2);
-        assert_eq!(game.status().action_round, 1);
+        assert_eq!((game.phase(), game.status().action_round), (Phase::Headline, 0), "the new turn opens with the headline phase");
     }
 
     #[test]

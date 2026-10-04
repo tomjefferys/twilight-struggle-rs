@@ -34,7 +34,7 @@ pub fn log_entry_line(map: &WorldMap, cards: &CardCatalog, entry: &LogEntry) -> 
     let line = format!(
         "{:<STAMP_WIDTH$}{:<AR_WIDTH$}{:<SIDE_WIDTH$}{:<ACTION_WIDTH$}{detail}",
         format!("T{}", entry.turn),
-        format!("AR{}", entry.action_round),
+        ar_tag(entry.action_round),
         side_label(entry.side),
         action,
     );
@@ -84,7 +84,7 @@ pub fn render_log(map: &WorldMap, cards: &CardCatalog, log: &GameLog, tail: Opti
         let prefix = format!(
             "{:<STAMP_WIDTH$}{:<AR_WIDTH$}{:<SIDE_WIDTH$}{:<ACTION_WIDTH$}",
             format!("T{}", entry.turn),
-            format!("AR{}", entry.action_round),
+            ar_tag(entry.action_round),
             side_label(entry.side),
             action,
         );
@@ -143,12 +143,30 @@ fn action_and_detail(map: &WorldMap, cards: &CardCatalog, entry: &LogEntry) -> (
         Event::Defused { side, country } => ("defuse", format!("{side} removes 2 influence from {} — Cuban Missile Crisis ends", map.country(*country).name)),
         Event::GameOver(victory) => ("gameover", game_over_detail(*victory)),
         Event::TurnEnd(report) => ("turnend", turn_end_detail(report)),
+        Event::Headline { ussr, us, first, cancelled } => ("headline", headline_detail(cards, *ussr, *us, *first, *cancelled)),
         Event::FinalScoring { results, china, vp_after } => ("final", final_scoring_detail(results, *china, *vp_after)),
         Event::HeldDiscard { card } => match card {
             Some(card) => ("discard", format!("Eagle/Bear has Landed: discards {}", cards.card(*card).name)),
             None => ("discard", "Eagle/Bear has Landed: keeps every card".to_string()),
         },
     }
+}
+
+/// `AR3`, or `HL` for the headline phase (round 0).
+fn ar_tag(action_round: u8) -> String {
+    if action_round == 0 { "HL".to_string() } else { format!("AR{action_round}") }
+}
+
+/// `USSR Fidel · US Containment — US resolves first`, or Defectors' cancellation.
+fn headline_detail(cards: &CardCatalog, ussr: Option<CardId>, us: Option<CardId>, first: Option<Superpower>, cancelled: bool) -> String {
+    let name = |c: Option<CardId>| c.map_or("no card".to_string(), |c| format!("{} ({})", cards.card(c).name, cards.card(c).ops));
+    let mut text = format!("USSR {} · US {}", name(ussr), name(us));
+    if cancelled {
+        text.push_str(" — Defectors cancels the USSR headline");
+    } else if let Some(side) = first {
+        text.push_str(&format!(" — {side} resolves first"));
+    }
+    text
 }
 
 /// `Europe +3, Asia -2, … · China Card +1 USSR · final -4`.

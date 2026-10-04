@@ -96,6 +96,54 @@ pub fn render_scoring_result(
     canvas
 }
 
+/// The headline reveal: both chosen cards side by side with the order they resolve in. `first`
+/// resolves first; `cancelled` means Defectors cancels the USSR's.
+pub fn render_headline_reveal(
+    cards: &CardCatalog,
+    ussr: Option<crate::cards::CardId>,
+    us: Option<crate::cards::CardId>,
+    first: Option<Superpower>,
+    cancelled: bool,
+    queue_pos: Option<(usize, usize)>,
+) -> Canvas {
+    let text_width = SCORE_WIDTH - 2 - 2 * PADDING;
+    let mut lines: Vec<(String, Style)> = Vec::new();
+    let describe = |card: Option<crate::cards::CardId>| match card {
+        Some(c) => {
+            let c = cards.card(c);
+            let ops = if c.scoring { "scoring".to_string() } else { format!("{} ops", c.ops) };
+            format!("{} ({ops})", c.name)
+        }
+        None => "no card to headline".to_string(),
+    };
+    for (side, card) in [(Superpower::Ussr, ussr), (Superpower::Us, us)] {
+        let struck = cancelled && side == Superpower::Ussr;
+        let label = if struck { format!("{side:<5} {} — cancelled", describe(card)) } else { format!("{side:<5} {}", describe(card)) };
+        push_text(&mut lines, &label, Style::color(side_color(side)).bold(), text_width);
+    }
+    lines.push((String::new(), Style::default()));
+    let order = match (first, cancelled) {
+        (Some(side), true) => format!("{side}'s Defectors resolves first and cancels the USSR's headline event"),
+        (Some(side), false) => format!("{side} resolves first — the higher Operations value, the US on a tie"),
+        (None, _) => "neither side has a headline event".to_string(),
+    };
+    push_text(&mut lines, &order, Style::color(Color::Muted), text_width);
+    lines.push((String::new(), Style::default()));
+    let hint = match queue_pos {
+        Some((n, total)) => format!("Enter to continue · {n} of {total}"),
+        None => "Enter to continue".to_string(),
+    };
+    lines.push((format!("{hint:>text_width$}"), Style::color(Color::Muted)));
+    let height = 2 + lines.len();
+    let mut canvas = Canvas::new(SCORE_WIDTH, height);
+    canvas.draw_thick_box(0, 0, SCORE_WIDTH, height, Style::color(first.map_or(Color::Muted, side_color)));
+    put_border_title(&mut canvas, 0, 0, "Headlines", Style::default().bold(), "", Style::default(), SCORE_WIDTH);
+    for (i, (line, style)) in lines.iter().enumerate() {
+        canvas.put(1 + i, 1 + PADDING, line, *style);
+    }
+    canvas
+}
+
 /// The summary modal for final scoring after turn 10: each region's swing in the order it
 /// was scored, the China Card's point, the VP track at the end and, once decided, the result.
 /// `results` pair each region's [`ScoringResult`] with the track after it; `winner` is the

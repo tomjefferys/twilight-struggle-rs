@@ -21,8 +21,8 @@ pub const MAX_BOX: u8 = 8;
 pub enum Perk {
     /// Box 2: two space attempts a turn instead of one.
     TwoAttempts,
-    /// Box 4: the opponent must choose and show their headline card first.
-    /// Tracked only — there is no headline phase yet.
+    /// Box 4: the opponent must choose and show their headline card first
+    /// ([`crate::game::headline_order`]).
     OpponentHeadlinesFirst,
     /// Box 6: may discard one held card at the end of the turn
     /// ([`crate::game::Game::discard_held`]).
@@ -55,7 +55,7 @@ impl Perk {
 
     /// Whether the crate acts on this perk, or only displays it.
     pub fn is_enforced(self) -> bool {
-        matches!(self, Perk::TwoAttempts | Perk::EightRounds | Perk::DiscardHeld)
+        matches!(self, Perk::TwoAttempts | Perk::OpponentHeadlinesFirst | Perk::EightRounds | Perk::DiscardHeld)
     }
 }
 

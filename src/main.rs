@@ -33,7 +33,7 @@ const COMMANDS: &[&str] = &[
     "map", "world", "worldmap", "wm", "region", "country", "set", "add", "remove", "clear", "blank", "load", "save", "states", "play",
     "influence", "realign", "coup", "event", "place", "roll", "undo", "confirm", "cancel", "abandon", "status", "pass", "ai", "hand",
     "card", "log", "history", "export", "seed", "width", "color", "debug", "vp", "defcon", "turn", "ar", "active", "china", "give",
-    "discard", "exile", "help", "+", "-", "take", "mode", "space", "spacerace", "track", "escape", "defuse", "piles",
+    "discard", "exile", "help", "+", "-", "take", "mode", "space", "spacerace", "track", "escape", "defuse", "piles", "headline",
 ];
 
 struct Session {
@@ -311,7 +311,8 @@ fn prompt(session: &Session) -> String {
         Some(Operation::Event(e)) => format!("{} choosing ", e.chooser()),
         _ => String::new(),
     };
-    format!("{debug}{} AR {}/{} {card}{choosing}> ", session.game.active(), status.action_round, status.action_rounds_per_turn)
+    let round = if status.in_headline() { "headline".to_string() } else { format!("AR {}/{}", status.action_round, status.action_rounds_per_turn) };
+    format!("{debug}{} {round} {card}{choosing}> ", session.game.active())
 }
 
 fn detect_width() -> usize {
@@ -696,6 +697,7 @@ fn run_command(session: &mut Session, line: &str) {
         "abandon" => run_abandon_command(session),
         "status" => run_status_command(session),
         "pass" => run_pass_command(session),
+        "headline" => run_headline_command(session, &words),
         "escape" => run_escape_command(session, &words),
         "defuse" => run_defuse_command(session, &words),
         "ai" => run_ai_command(session, &words),
@@ -1506,7 +1508,8 @@ fn run_status_command(session: &Session) {
     } else {
         format!("{}/{}", status.action_round, status.action_rounds_per_turn)
     };
-    println!("TURN {}   AR {ar}   {} to act   {card}   {} ops available", status.turn, session.game.active(), session.game.ops_available());
+    let round = if status.in_headline() { "Headline".to_string() } else { format!("AR {ar}") };
+    println!("TURN {}   {round}   {} to act   {card}   {} ops available", status.turn, session.game.active(), session.game.ops_available());
     for effect in status.lasting.active() {
         println!("in effect: {}", twilight_struggle::render::lasting_effect_line(&effect));
     }
@@ -1516,6 +1519,30 @@ fn run_status_command(session: &Session) {
     print_operation_banner(session);
     if let Some(victory) = session.game.winner() {
         println!("{}", game_over_line(victory));
+    }
+}
+
+/// `headline <card>` chooses the active side's headline card for the turn (rule 4.4). The
+/// first choice stays hidden; once both are in, the cards are revealed and played — each as
+/// its event only — by the settle step that runs after every command.
+fn run_headline_command(session: &mut Session, words: &[&str]) {
+    let Some(query) = words.get(1..).map(|w| w.join(" ")).filter(|q| !q.is_empty()) else {
+        println!("usage: headline <card>");
+        return;
+    };
+    let Some(id) = find_card_or_report(session, &query) else { return };
+    let side = session.game.active();
+    let before = session.game.log().len();
+    match session.game.headline(&session.cards, id) {
+        Ok(()) => {
+            for entry in &session.game.log().entries()[before..] {
+                println!("{}", log_entry_line(&session.map, &session.cards, entry));
+            }
+            if session.game.log().len() == before {
+                println!("{side} has chosen a headline card — {} to choose", session.game.active());
+            }
+        }
+        Err(e) => println!("{e}"),
     }
 }
 
@@ -1803,6 +1830,15 @@ Commands:
                           status bar's own row says so and every further
                           action is refused)
 
+  headline <card>         the headline phase that opens every turn: choose
+                          the active side's headline card (USSR first, US
+                          second — the first choice stays hidden; a side
+                          holding the Man in Earth Orbit space perk goes
+                          second and sees it). Both cards are then
+                          revealed and played as events, the higher
+                          Operations value first (the US on a tie); the
+                          US's Defectors cancels the USSR's. Or press
+                          space on a card in the interactive map
   hand [us|ussr]          the named side's hand (default: active side),
                           as a strip of mini-card boxes — or see it drawn
                           under every screen inside the interactive map
