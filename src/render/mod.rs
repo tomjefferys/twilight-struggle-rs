@@ -551,6 +551,7 @@ pub fn ongoing_effect_line(effect: &crate::ongoing::OngoingEffect) -> String {
         E::IranContra => "Iran-Contra: US realignment rolls -1".to_string(),
         E::Chernobyl { region } => format!("Chernobyl: USSR can't add influence in {region} with ops"),
         E::YuriSamantha => "Yuri and Samantha: USSR +1 VP per US coup".to_string(),
+        E::Salt => "SALT Negotiations: all coup rolls -1".to_string(),
         E::CubanMissileCrisis { by } => format!("Cuban Missile Crisis: a {} coup loses the game (d to defuse)", by.opponent()),
         E::HandRevealed { side, .. } => format!("{side} hand revealed to {} (v to view it)", side.opponent()),
     }

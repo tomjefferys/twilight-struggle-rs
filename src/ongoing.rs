@@ -83,6 +83,8 @@ pub enum OngoingEffect {
     HandRevealed { side: Superpower, card: u8 },
     /// #40: DEFCON 2; a coup by the opponent of `by` this turn loses them the game, unless the crisis is defused.
     CubanMissileCrisis { by: Superpower },
+    /// #43: both sides' coup rolls get -1.
+    Salt,
 }
 
 impl OngoingEffect {
@@ -101,6 +103,7 @@ impl OngoingEffect {
             OngoingEffect::YuriSamantha => 109,
             OngoingEffect::HandRevealed { card, .. } => *card,
             OngoingEffect::CubanMissileCrisis { .. } => 40,
+            OngoingEffect::Salt => 43,
         })
     }
 
@@ -116,6 +119,7 @@ impl OngoingEffect {
             // The side that gets to look.
             OngoingEffect::HandRevealed { side, .. } => side.opponent(),
             OngoingEffect::CubanMissileCrisis { by } => *by,
+            OngoingEffect::Salt => Superpower::Us,
         }
     }
 }
@@ -141,6 +145,7 @@ pub struct TurnEffects {
     pub ussr_hand_revealed: Option<u8>,
     /// Cuban Missile Crisis, and which side played it.
     pub cuban_missile_crisis: Option<Superpower>,
+    pub salt: bool,
 }
 
 impl TurnEffects {
@@ -162,6 +167,7 @@ impl TurnEffects {
             OngoingEffect::Chernobyl { region } => self.chernobyl = Some(region),
             OngoingEffect::YuriSamantha => self.yuri_samantha = true,
             OngoingEffect::CubanMissileCrisis { by } => self.cuban_missile_crisis = Some(by),
+            OngoingEffect::Salt => self.salt = true,
             OngoingEffect::HandRevealed { side: Superpower::Us, card } => self.us_hand_revealed = Some(card),
             OngoingEffect::HandRevealed { side: Superpower::Ussr, card } => self.ussr_hand_revealed = Some(card),
         }
@@ -199,6 +205,9 @@ impl TurnEffects {
         }
         if self.yuri_samantha {
             v.push(OngoingEffect::YuriSamantha);
+        }
+        if self.salt {
+            v.push(OngoingEffect::Salt);
         }
         if let Some(by) = self.cuban_missile_crisis {
             v.push(OngoingEffect::CubanMissileCrisis { by });
@@ -246,11 +255,13 @@ impl TurnEffects {
     /// The modifier to `side`'s coup die roll in `region`, with the card
     /// responsible: Latin American Death Squads.
     pub fn coup_roll_mod(&self, side: Superpower, region: Region) -> Option<(CardId, i8)> {
-        let beneficiary = self.death_squads?;
-        if !matches!(region, Region::CentralAmerica | Region::SouthAmerica) {
-            return None;
+        let squads = self.death_squads.filter(|_| matches!(region, Region::CentralAmerica | Region::SouthAmerica)).map(|b| if side == b { 1 } else { -1 });
+        let salt = if self.salt { -1 } else { 0 };
+        match (squads, salt) {
+            (None, 0) => None,
+            (Some(m), s) => Some((CardId(69), m + s)),
+            (None, s) => Some((CardId(43), s)),
         }
-        Some((CardId(69), if side == beneficiary { 1 } else { -1 }))
     }
 
     /// The modifier to `side`'s realignment die rolls: Iran-Contra.

@@ -310,6 +310,7 @@ const EFFECTS: &[(u8, Effect)] = &[
     (40, cuban_missile_crisis),
     (41, nuclear_subs),
     (42, quagmire),
+    (43, salt_negotiations),
     (44, bear_trap),
     (45, summit),
     (48, kitchen_debates),
@@ -681,6 +682,13 @@ fn cuban_missile_crisis(c: &mut Ctx) {
 fn quagmire(c: &mut Ctx) {
     c.persist(LastingEffect::Quagmire);
     c.cancel(LastingEffect::Norad);
+}
+
+/// #43 SALT Negotiations: DEFCON +2 and -1 on every coup roll this turn. (Taking a card back from
+/// the discard pile isn't modelled yet.)
+fn salt_negotiations(c: &mut Ctx) {
+    c.set_defcon(c.status.defcon + 2);
+    c.start(OngoingEffect::Salt);
 }
 
 /// #44 Bear Trap: the USSR's action rounds become escape attempts.

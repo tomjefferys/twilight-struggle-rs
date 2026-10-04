@@ -3428,3 +3428,53 @@ mod rounds {
         assert_eq!(game.status().effects.cuban_missile_crisis, None);
     }
 }
+
+mod salt {
+    use super::*;
+    use twilight_struggle::{Dice, OperationKind};
+
+    fn load(state: &str) -> (WorldMap, CardCatalog, Game) {
+        let (map, cards, lib) = fixtures();
+        let (scenario, _) = lib.load(&map, &cards, &format!("events/{state}")).unwrap();
+        (map, cards, Game::from_scenario(&scenario))
+    }
+
+    #[test]
+    fn the_event_improves_defcon_by_two_and_starts_the_coup_penalty() {
+        let (map, cards, mut game) = load("salt-negotiations");
+        game.play_card(&cards, cards.id_by_name("SALT Negotiations").unwrap()).unwrap();
+        game.play_event(&map, &cards).unwrap();
+        assert_eq!(game.status().defcon, 4);
+        assert!(game.status().effects.salt);
+    }
+
+    #[test]
+    fn defcon_stops_at_five() {
+        let (map, cards, mut game) = load("salt-negotiations-near-top");
+        game.play_card(&cards, cards.id_by_name("SALT Negotiations").unwrap()).unwrap();
+        game.play_event(&map, &cards).unwrap();
+        assert_eq!(game.status().defcon, 5);
+    }
+
+    #[test]
+    fn every_coup_roll_gets_minus_one_for_both_sides() {
+        let (map, cards, mut game) = load("salt-active");
+        game.play_card(&cards, cards.id_by_name("Socialist Governments").unwrap()).unwrap();
+        game.begin(OperationKind::Coup).unwrap();
+        let honduras = map.id_by_name("Honduras").unwrap();
+        game.roll(&map, honduras, &mut Dice::from_seed(1)).unwrap();
+        let twilight_struggle::Event::Coup(result) = &game.log().entries().iter().rev().find(|e| matches!(e.event, twilight_struggle::Event::Coup(_))).unwrap().event else { unreachable!() };
+        assert_eq!(result.modifier, -1);
+        assert!(!game.status().effects.coup_forbidden(Superpower::Us) && game.status().effects.salt);
+    }
+
+    #[test]
+    fn it_ends_with_the_turn() {
+        let (_, _, mut game) = load("salt-active");
+        for _ in 0..12 {
+            game.pass().unwrap();
+        }
+        assert!(!game.status().effects.salt);
+        assert_eq!(game.status().turn, 2);
+    }
+}
