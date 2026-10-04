@@ -49,6 +49,9 @@ pub fn render_event_result(
     if result.mil_ops != 0 {
         lines.push((format!("{} Military Operations {:+}", result.player, result.mil_ops), Style::color(side_color(result.player))));
     }
+    if let Some((side, card)) = result.discards {
+        lines.push((format!("{side} discards {}", cards.card(card).name), Style::color(side_color(side))));
+    }
     if let Some(reveal) = &result.reveals {
         let names: Vec<&str> = reveal.cards.iter().map(|&c| cards.card(c).name.as_str()).collect();
         let shown = if names.is_empty() { "(empty)".to_string() } else { names.join(", ") };
@@ -123,7 +126,7 @@ mod tests {
     use crate::render::ColorMode;
 
     fn result(ongoing: Option<OngoingEffect>, vp_delta: i8) -> EffectResult {
-        EffectResult { card: CardId(25), player: Superpower::Us, influence: Vec::new(), vp_delta, defcon: None, ongoing, lasting: None, cancels: None, china: None, space: None, mil_ops: 0, ends_game: false, reveals: None }
+        EffectResult { card: CardId(25), player: Superpower::Us, influence: Vec::new(), vp_delta, defcon: None, ongoing, lasting: None, cancels: None, china: None, space: None, mil_ops: 0, ends_game: false, reveals: None, discards: None }
     }
 
     #[test]

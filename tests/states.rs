@@ -2398,3 +2398,193 @@ mod scoped_ops {
         assert!(!rolls.contains(&id(&map, "Mexico")));
     }
 }
+
+mod discard_or_suffer {
+    use super::*;
+    use twilight_struggle::game::GameError;
+    use twilight_struggle::ops::Operation;
+    use twilight_struggle::CountryId;
+
+    fn id(map: &WorldMap, name: &str) -> CountryId {
+        map.id_by_name(name).unwrap_or_else(|| panic!("no country {name}"))
+    }
+
+    /// Loads `choices/<state>` and plays the USSR's only card as an event.
+    fn play(state: &str, card: &str) -> (WorldMap, CardCatalog, Game, EventOutcome) {
+        let (map, cards, lib) = fixtures();
+        let (scenario, _) = lib.load(&map, &cards, &format!("choices/{state}")).unwrap_or_else(|e| panic!("{state}: {e}"));
+        let mut game = Game::from_scenario(&scenario);
+        game.play_card(&cards, cards.id_by_name(card).unwrap()).unwrap();
+        let outcome = game.play_event(&map, &cards).unwrap();
+        (map, cards, game, outcome)
+    }
+
+    fn us(game: &Game, map: &WorldMap, name: &str) -> u8 {
+        game.board().influence(id(map, name), Superpower::Us)
+    }
+
+    fn ussr(game: &Game, map: &WorldMap, name: &str) -> u8 {
+        game.board().influence(id(map, name), Superpower::Ussr)
+    }
+
+    fn mode_labels(game: &Game) -> Vec<String> {
+        let Some(Operation::Event(e)) = game.operation() else { panic!("an event is open") };
+        e.modes().iter().map(|m| m.label.clone()).collect()
+    }
+
+    #[test]
+    fn blockade_asks_the_us_which_3_plus_ops_card_to_discard_or_to_keep_them() {
+        let (_, _, game, outcome) = play("blockade", "Blockade");
+        assert!(matches!(outcome, EventOutcome::Pending { chooser: Superpower::Us, .. }));
+        assert_eq!(game.decider(), Superpower::Us, "the US decides, though the USSR is phasing");
+        let labels = mode_labels(&game);
+        assert_eq!(labels.len(), 3, "keep, or discard one of the two 3+ ops cards: {labels:?}");
+        assert!(labels[0].contains("West Germany") && labels[1].contains("Marshall Plan") && labels[2].contains("Containment"));
+        assert!(!labels.iter().any(|l| l.contains("Truman")), "a 1-op card doesn't qualify");
+    }
+
+    #[test]
+    fn discarding_a_big_card_saves_west_germany_and_loses_the_card() {
+        let (map, cards, mut game, _) = play("blockade", "Blockade");
+        game.choose_mode(&map, 2).unwrap();
+        game.confirm().unwrap();
+        assert_eq!(us(&game, &map, "West Germany"), 4);
+        let contain = cards.id_by_name("Containment").unwrap();
+        assert!(game.discards().contains(&contain) && !game.hand(Superpower::Us).contains(&contain));
+        assert!(game.removed_from_game().contains(&cards.id_by_name("Blockade").unwrap()), "Blockade is removed after its event");
+        assert_eq!(game.active(), Superpower::Us, "the turn passes");
+    }
+
+    #[test]
+    fn declining_blockade_clears_us_influence_from_west_germany_and_keeps_every_card() {
+        let (map, _, mut game, _) = play("blockade", "Blockade");
+        game.choose_mode(&map, 0).unwrap();
+        game.confirm().unwrap();
+        assert_eq!(us(&game, &map, "West Germany"), 0);
+        assert_eq!(game.hand(Superpower::Us).len(), 3);
+    }
+
+    #[test]
+    fn the_blockade_decision_cannot_be_confirmed_unchosen_or_abandoned_by_the_phasing_player() {
+        let (map, _, mut game, _) = play("blockade", "Blockade");
+        assert!(matches!(game.confirm(), Err(GameError::EventIncomplete { .. })), "a choice has to be made");
+        assert!(matches!(game.abandon(), Err(GameError::CannotAbandonEvent)), "the USSR can't take the card back once the US must decide");
+        game.choose_mode(&map, 0).unwrap();
+        game.choose_mode(&map, 1).unwrap();
+        game.choose_mode(&map, 0).unwrap();
+    }
+
+    #[test]
+    fn the_victim_can_clear_their_choice_before_confirming() {
+        let (map, _, mut game, _) = play("blockade", "Blockade");
+        assert!(!game.clear_event_mode(&map), "nothing chosen yet");
+        game.choose_mode(&map, 1).unwrap();
+        assert_eq!(game.active(), Superpower::Ussr, "the USSR is still the phasing side");
+        assert!(game.clear_event_mode(&map), "the US can take back its pick");
+        let Some(Operation::Event(e)) = game.operation() else { panic!("still open") };
+        assert_eq!(e.mode(), None);
+        assert!(matches!(game.confirm(), Err(GameError::EventIncomplete { .. })));
+    }
+
+    #[test]
+    fn a_discard_decision_leaves_the_map_alone() {
+        use twilight_struggle::render::{render_region, render_world_map};
+        use twilight_struggle::{ColorMode, MapLayout, Region};
+        let (map, _, game, _) = play("blockade", "Blockade");
+        let layout = MapLayout::standard(&map).unwrap();
+        let op = game.operation();
+        let region = render_region(&map, &layout, game.board(), Region::Europe, None, op).render(ColorMode::Never);
+        let world = render_world_map(&map, &layout, game.board(), None, op).render(ColorMode::Never);
+        for text in [&region, &world] {
+            assert!(!text.contains("not eligible") && !text.contains("can act here"), "no target legend:\n{text}");
+            assert!(!text.contains('║'), "no chip is marked as live:\n{text}");
+        }
+        assert!(region.contains("look around") && region.contains("space discard it"), "the hint names the card keys:\n{region}");
+        assert!(!region.contains("+ add"));
+    }
+
+    #[test]
+    fn blockade_with_no_big_card_to_discard_just_applies() {
+        let (map, _, game, outcome) = play("blockade-nothing-to-discard", "Blockade");
+        assert!(matches!(outcome, EventOutcome::Effect(_)));
+        assert_eq!(us(&game, &map, "West Germany"), 0);
+        assert_eq!(game.active(), Superpower::Us);
+    }
+
+    #[test]
+    fn declining_debt_crisis_hands_the_ussr_a_doubling_of_two_south_american_countries() {
+        let (map, cards, mut game, _) = play("debt-crisis", "Latin American Debt Crisis");
+        game.choose_mode(&map, 0).unwrap();
+        game.confirm().unwrap();
+        assert_eq!(game.decider(), Superpower::Ussr, "now the USSR chooses");
+        assert!(matches!(game.abandon(), Err(GameError::CannotAbandonEvent)), "the US has already answered: no taking the card back");
+        game.place(&map, id(&map, "Chile")).unwrap();
+        assert_eq!(game.operation().and_then(|op| op.board()).map(|b| b.influence(id(&map, "Chile"), Superpower::Ussr)), Some(6), "3 doubled, staged");
+        assert!(game.place(&map, id(&map, "Chile")).is_err(), "once per country");
+        assert!(game.place(&map, id(&map, "Peru")).is_err(), "nothing there to double");
+        assert!(game.place(&map, id(&map, "Egypt")).is_err(), "not in South America");
+        game.place(&map, id(&map, "Brazil")).unwrap();
+        assert!(game.place(&map, id(&map, "Argentina")).is_err(), "only two countries");
+        game.confirm().unwrap();
+        assert_eq!((ussr(&game, &map, "Brazil"), ussr(&game, &map, "Chile"), ussr(&game, &map, "Argentina")), (4, 6, 1));
+        assert_eq!(game.hand(Superpower::Us).len(), 3, "the US kept its cards");
+        assert!(game.discards().contains(&cards.id_by_name("Latin American Debt Crisis").unwrap()), "not removed after its event");
+        assert_eq!(game.active(), Superpower::Us);
+    }
+
+    #[test]
+    fn a_doubling_can_be_taken_back() {
+        let (map, _, mut game, _) = play("debt-crisis-nothing-to-discard", "Latin American Debt Crisis");
+        game.place(&map, id(&map, "Chile")).unwrap();
+        game.unplace(&map, id(&map, "Chile")).unwrap();
+        assert_eq!(ussr(&game, &map, "Chile"), 3);
+        game.place(&map, id(&map, "Brazil")).unwrap();
+        game.confirm().unwrap();
+        assert_eq!((ussr(&game, &map, "Brazil"), ussr(&game, &map, "Chile")), (4, 3));
+    }
+
+    #[test]
+    fn discarding_to_debt_crisis_costs_the_card_and_spares_south_america() {
+        let (map, cards, mut game, _) = play("debt-crisis", "Latin American Debt Crisis");
+        game.choose_mode(&map, 1).unwrap();
+        game.confirm().unwrap();
+        assert!(game.operation().is_none(), "no second stage");
+        assert_eq!(ussr(&game, &map, "Chile"), 3);
+        assert!(game.discards().contains(&cards.id_by_name("Marshall Plan").unwrap()));
+        assert_eq!(game.active(), Superpower::Us);
+    }
+
+    #[test]
+    fn debt_crisis_with_nothing_to_discard_goes_straight_to_the_ussr() {
+        let (_, _, game, outcome) = play("debt-crisis-nothing-to-discard", "Latin American Debt Crisis");
+        assert!(matches!(outcome, EventOutcome::Pending { chooser: Superpower::Ussr, .. }));
+        assert_eq!(game.decider(), Superpower::Ussr);
+    }
+
+    #[test]
+    fn the_discard_decision_is_logged() {
+        let (map, cards, mut game, _) = play("blockade", "Blockade");
+        game.choose_mode(&map, 1).unwrap();
+        game.confirm().unwrap();
+        let text = twilight_struggle::render::log_text(&map, &cards, game.log());
+        assert!(text.contains("USA discards Marshall Plan"), "{text}");
+    }
+
+    #[test]
+    fn the_ai_can_always_finish_a_discard_decision() {
+        use twilight_struggle::{play_turn, Dice, RandomAi};
+        for seed in 0..12 {
+            for (state, card) in [("blockade", "Blockade"), ("debt-crisis", "Latin American Debt Crisis")] {
+                let (map, cards, mut game, _) = play(state, card);
+                let mut ai = RandomAi::from_seed(seed);
+                let mut dice = Dice::from_seed(seed);
+                for _ in 0..4 {
+                    if game.operation().is_some() {
+                        play_turn(&mut ai, &mut game, &map, &cards, &mut dice).unwrap();
+                    }
+                }
+                assert!(game.operation().is_none() && game.active() == Superpower::Us, "{state} seed {seed}");
+            }
+        }
+    }
+}

@@ -1332,6 +1332,11 @@ fn run_confirm_command(session: &mut Session) {
                 );
             }
         }
+        Ok(Operation::Event(_)) if matches!(session.game.operation(), Some(Operation::Event(_))) => {
+            // A declined discard-or-suffer card hands on to a second decision.
+            print_event_prompt(session);
+            return;
+        }
         Ok(Operation::Event(_)) => print_last_event_result(session),
         Ok(Operation::War(_)) => unreachable!("Game::confirm refuses a war"),
         Ok(Operation::Coup(coup)) => {

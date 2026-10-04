@@ -478,6 +478,17 @@ pub fn operation_balance_line(layout: &crate::layout::MapLayout, board: &crate::
     format!("{} · {}", operation_header(op), operation_touched_line(layout, board, op))
 }
 
+/// The key hint under a map screen while an event settled by its mode alone
+/// is open (a discard decision, a DEFCON level): browsing the map is still
+/// fine, but nothing on it is the event's business.
+pub(crate) fn mode_only_hint(e: &crate::events::EventChoice) -> String {
+    if e.gate_cards().is_empty() {
+        format!("←→↑↓ look around · 1-{} choose · ⌫ undo · c done", e.modes().len().min(9))
+    } else {
+        "←→↑↓ look around · [ ] pick a card · space discard it · 1 keep your cards · ⌫ undo · c done".to_string()
+    }
+}
+
 /// `GAME OVER — USSR wins (VP)` — [`statusbar::render_status_bar`]'s own
 /// winner row, shared so `main.rs`'s `status`/`event` commands print the
 /// exact same wording when there's no screen to draw it on.

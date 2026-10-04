@@ -104,10 +104,26 @@ pub fn render_status_bar_with(
         (game_over_line(victory), side_style(victory.side).bold())
     } else {
         match (card, op) {
+            // A discard-or-suffer decision gets its own compact line: the keys
+            // first and the (long) consequence of the current choice last, so a
+            // narrow terminal clips the least important part.
+            (_, Some(Operation::Event(e))) if !e.gate_cards().is_empty() => {
+                let name = card.map(|c| c.name.as_str()).unwrap_or("?");
+                let line = match e.mode() {
+                    None => format!(
+                        "{name} · {} must discard a card worth 3+ ops or suffer · [ ] pick a card · space discard it · 1 keep your cards · then c",
+                        e.chooser()
+                    ),
+                    Some(i) => format!("{name} · {} · c confirm · ⌫ undo · [ ] space 1 change → {}", e.chooser(), e.modes()[i].label),
+                };
+                (line, side_style(e.chooser()).bold())
+            }
             (_, Some(operation @ Operation::Event(e))) => {
                 let name = card.map(|c| c.name.as_str()).unwrap_or("?");
                 let n = e.modes().len();
                 let keys = match (e.mode(), e.is_designation()) {
+                    (None, false) if !e.gate_cards().is_empty() => "[ ] pick a card · space discard it · 1 keep your cards".to_string(),
+                    (Some(_), false) if !e.gate_cards().is_empty() => "[ ] pick a card · space discard it · 1 keep · c done".to_string(),
                     (None, true) => format!("Enter on world map or 1-{n} to choose region"),
                     (None, false) => format!("1-{n} choose mode"),
                     (Some(_), true) => format!("Enter/1-{n} change region · ⌫ clear · c done"),

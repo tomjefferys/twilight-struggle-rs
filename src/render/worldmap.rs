@@ -6,6 +6,7 @@ use crate::layout::MapLayout;
 use crate::map::WorldMap;
 use crate::ops::Operation;
 
+use super::mode_only_hint;
 use super::{operation_balance_line, region_color, region_tally, Canvas, Color, Style, BEGIN_HINT};
 
 /// Shown below the legend when a region is selected but no operation is
@@ -157,7 +158,9 @@ fn footer_lines(
     if let Some(operation) = op {
         lines.push((operation_balance_line(layout, board, operation), Style::color(Color::Selected)));
     }
-    if let Some(Operation::Event(e)) = op {
+    if let Some(Operation::Event(e)) = op
+        && !e.is_mode_only()
+    {
         let legend = if e.is_designation() {
             "Enter (or a digit): designate the region · bold: designated · dim: not designated"
         } else {
@@ -172,6 +175,7 @@ fn footer_lines(
             Some(Operation::Coup(_)) => WORLD_COUP_HINT.to_string(),
             Some(Operation::War(_)) => WORLD_WAR_HINT.to_string(),
             Some(Operation::Event(e)) if e.is_designation() => WORLD_DESIGNATE_HINT.to_string(),
+            Some(Operation::Event(e)) if e.is_mode_only() => mode_only_hint(e),
             Some(Operation::Event(_)) => WORLD_EVENT_HINT.to_string(),
             None => format!("{WORLD_HINT} · {BEGIN_HINT}"),
         };
@@ -345,7 +349,7 @@ fn draw_chip(
     // An open event: a country its chooser can act on is bold, anything
     // else is muted, so the live ones stand out on the overview.
     let event_eligible = match op {
-        Some(operation @ (Operation::Event(_) | Operation::War(_))) => Some(operation.is_legal_target(map, board, id)),
+        Some(operation @ (Operation::Event(_) | Operation::War(_))) if operation.marks_targets() => Some(operation.is_legal_target(map, board, id)),
         _ => None,
     };
     match event_eligible {

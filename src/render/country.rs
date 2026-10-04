@@ -6,6 +6,7 @@ use crate::layout::{Cell, GuestEntity, MapLayout};
 use crate::map::WorldMap;
 use crate::ops::Operation;
 
+use super::mode_only_hint;
 use super::chip::{ChipGrid, ChipRole, CHIP_H, REGION_CHIP_W};
 use super::{
     war_line,
@@ -256,6 +257,7 @@ pub fn render_country(map: &WorldMap, layout: &MapLayout, board: &Board, id: Cou
         Some(Operation::Influence(_)) => PLACEMENT_HINT.to_string(),
         Some(Operation::Realign(_)) => REALIGN_HINT.to_string(),
         Some(Operation::Coup(_)) => COUP_HINT.to_string(),
+        Some(Operation::Event(e)) if e.is_mode_only() => mode_only_hint(e),
         Some(Operation::Event(_)) => EVENT_HINT.to_string(),
         Some(Operation::War(_)) => WAR_HINT.to_string(),
         None => hint(),

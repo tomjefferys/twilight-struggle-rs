@@ -6,6 +6,7 @@ use crate::layout::{GuestEntity, LinkTarget, MapLayout};
 use crate::map::WorldMap;
 use crate::ops::Operation;
 
+use super::mode_only_hint;
 use super::chip::{ChipGrid, ChipRole, REGION_CHIP_W};
 use super::{coup_odds_line, coup_target_line_with, modifier_line, odds_line, operation_balance_line, war_line, Canvas, Color, Style, BEGIN_HINT};
 
@@ -261,10 +262,14 @@ fn build_footer_lines(
     if let Some(Operation::War(_)) = op {
         lines.push((WAR_LEGEND.to_string(), Style::color(Color::Muted)));
     }
-    if let Some(Operation::Event(_)) = op {
+    if let Some(Operation::Event(e)) = op
+        && !e.is_mode_only()
+    {
         lines.push((EVENT_LEGEND.to_string(), Style::color(Color::Muted)));
     }
-    if let (Some(Operation::Event(e)), Some(id)) = (op, selected) {
+    if let (Some(Operation::Event(e)), Some(id)) = (op, selected)
+        && !e.is_mode_only()
+    {
         lines.push((e.hint(map, id), Style::color(Color::Selected)));
     }
     if selected.is_some() || op.is_some() {
@@ -272,6 +277,7 @@ fn build_footer_lines(
             Some(Operation::Influence(_)) => PLACEMENT_HINT.to_string(),
             Some(Operation::Realign(_)) => REALIGN_HINT.to_string(),
             Some(Operation::Coup(_)) => COUP_HINT.to_string(),
+            Some(Operation::Event(e)) if e.is_mode_only() => mode_only_hint(e),
             Some(Operation::Event(_)) => EVENT_HINT.to_string(),
             Some(Operation::War(_)) => WAR_HINT.to_string(),
             None => format!("{SELECTION_HINT} · {BEGIN_HINT}"),

@@ -105,7 +105,7 @@ impl ChipGrid {
         // footer and status bar already), an ineligible one is muted all
         // over (frame, name, numbers) so the live ones stand out at a glance.
         let event = match op {
-            Some(operation @ (Operation::Event(_) | Operation::War(_))) => Some(operation.is_legal_target(map, board, id)),
+            Some(operation @ (Operation::Event(_) | Operation::War(_))) if operation.marks_targets() => Some(operation.is_legal_target(map, board, id)),
             _ => None,
         };
         let ineligible = event == Some(false);

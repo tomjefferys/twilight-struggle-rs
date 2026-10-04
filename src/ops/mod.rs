@@ -139,6 +139,14 @@ impl Operation {
         }
     }
 
+    /// Whether a view should mark which countries this operation can act on
+    /// (double borders, dimming the rest). False for an event settled by its
+    /// mode alone — a discard decision, a DEFCON level — which has nothing to
+    /// do with the map, so the map is left as it is.
+    pub fn marks_targets(&self) -> bool {
+        !matches!(self, Operation::Event(e) if e.is_mode_only())
+    }
+
     /// Whether `id` is a legal target for the *next* action this
     /// operation would take: the next point placed, the next realignment
     /// roll, or the coup attempt. `board` is the caller's real board —
@@ -154,6 +162,7 @@ impl Operation {
             // A designation (Chernobyl) has no countries to pick: every
             // region is a candidate until one is chosen, then only it.
             Operation::Event(e) if e.is_designation() => e.designated_region().is_none_or(|r| map.country(id).region == r),
+            Operation::Event(e) if e.is_mode_only() => true,
             Operation::Event(e) => {
                 e.can_forward(map, id, Sign::Plus).is_some()
                     || e.can_forward(map, id, Sign::Minus).is_some()

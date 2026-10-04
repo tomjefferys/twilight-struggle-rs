@@ -797,8 +797,13 @@ impl Game {
             if !e.is_complete() {
                 return Err(GameError::EventIncomplete { left: e.progress_left() });
             }
-            let op = self.op.take().expect("checked Some above");
-            let Operation::Event(e) = &op else { unreachable!() };
+            let mut op = self.op.take().expect("checked Some above");
+            let Operation::Event(e) = &mut op else { unreachable!() };
+            // A declined gate hands the card on to its follow-up session.
+            if let Some(next) = e.take_follow_up() {
+                self.op = Some(Operation::Event(next));
+                return Ok(op);
+            }
             let result = e.into_result(&self.status);
             self.finish_effect(result, e.grant());
             return Ok(op);
@@ -885,7 +890,7 @@ impl Game {
             // An event can be backed out of only by the side that chose to
             // play it, and only before anything has been picked.
             Some(Operation::Event(e)) => {
-                if e.is_pristine() && e.chooser() == self.status.active {
+                if e.is_pristine() && e.chooser() == self.status.active && !e.is_second_stage() {
                     Ok(self.op.take().expect("checked Some above"))
                 } else {
                     Err(GameError::CannotAbandonEvent)
@@ -910,7 +915,10 @@ impl Game {
     pub fn clear_event_mode(&mut self, map: &WorldMap) -> bool {
         let active = self.status.active;
         match &mut self.op {
-            Some(Operation::Event(e)) if e.modes().len() > 1 && e.mode().is_some() && e.is_pristine() && e.chooser() == active => {
+            // The victim of a discard-or-suffer card may change their mind too, though they aren't the phasing side.
+            Some(Operation::Event(e))
+                if e.modes().len() > 1 && e.mode().is_some() && e.is_pristine() && (e.chooser() == active || !e.gate_cards().is_empty()) =>
+            {
                 e.clear_mode(map).is_ok()
             }
             _ => false,
@@ -1033,7 +1041,7 @@ impl Game {
     /// `removed_after_event` card, removes it from the game entirely —
     /// see [`crate::cards::Hands::remove_from_game`]) and hands the turn
     /// to the other side, same as [`Game::confirm`]/[`Game::cancel`].
-    pub fn play_event(&mut self, map: &WorldMap, _cards: &CardCatalog) -> Result<EventOutcome, GameError> {
+    pub fn play_event(&mut self, map: &WorldMap, cards: &CardCatalog) -> Result<EventOutcome, GameError> {
         if self.winner.is_some() {
             return Err(GameError::GameOver);
         }
@@ -1051,6 +1059,23 @@ impl Game {
             Some(events::Blocked::Prevented { by }) => return Err(GameError::EventPrevented { card: card.id, by }),
             Some(events::Blocked::Requires { any_of }) => return Err(GameError::EventRequires { card: card.id, any_of }),
             None => {}
+        }
+
+        // Blockade and Debt Crisis first ask the US to discard a 3+ ops card
+        // or suffer: it decides, whoever played the card. With nothing to
+        // discard the penalty simply applies, through the card's own event.
+        if let Some(decider) = events::choice::gate_decider(card.id) {
+            let candidates: Vec<(CardId, String)> = self
+                .hands
+                .hand(decider)
+                .iter()
+                .filter(|&&c| cards.card(c).ops >= events::choice::GATE_MIN_OPS)
+                .map(|&c| (c, cards.card(c).name.clone()))
+                .collect();
+            if let Some(gate) = EventChoice::discard_gate(map, &self.board, &self.status, card.id, &candidates) {
+                self.op = Some(Operation::Event(gate));
+                return Ok(EventOutcome::Pending { card: card.id, chooser: decider });
+            }
         }
 
         // A war opens a session; `Game::roll` on a target (the only one, for
@@ -1128,6 +1153,11 @@ impl Game {
         self.log_card_selected();
         if let Some(reveal) = &mut result.reveals {
             reveal.cards = self.hands.hand(reveal.side).to_vec();
+        }
+        if let Some((side, card)) = result.discards
+            && self.hands.remove(side, card).is_some()
+        {
+            self.hands.discard(card);
         }
         for change in &result.influence {
             self.board.set_influence(change.country, change.side, change.after);
@@ -2215,8 +2245,8 @@ mod tests {
     fn play_event_refuses_a_card_whose_event_is_not_implemented_yet() {
         let map = map();
         let cards = cards();
-        let mut game = Game::from_scenario(&scenario_with_extra_card(&map, &cards, Ussr, "Blockade"));
-        let sg = play(&mut game, &cards, "Blockade");
+        let mut game = Game::from_scenario(&scenario_with_extra_card(&map, &cards, Ussr, "Quagmire"));
+        let sg = play(&mut game, &cards, "Quagmire");
         assert!(matches!(
             game.play_event(&map, &cards),
             Err(GameError::EventNotImplemented { card }) if card == sg

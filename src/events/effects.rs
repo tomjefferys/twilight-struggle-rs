@@ -78,6 +78,8 @@ pub struct EffectResult {
     pub ends_game: bool,
     /// A hand the event reveals.
     pub reveals: Option<Reveal>,
+    /// A card a side discards from its hand (declining Blockade's penalty by paying a card).
+    pub discards: Option<(Superpower, CardId)>,
 }
 
 /// What one card's effect function sees and mutates: the board as it was
@@ -235,6 +237,7 @@ const EFFECTS: &[(u8, Effect)] = &[
     (4, duck_and_cover),
     (8, fidel),
     (9, vietnam_revolts),
+    (10, blockade),
     (12, romanian_abdication),
     (15, nasser),
     (17, de_gaulle_leads_france),
@@ -301,7 +304,7 @@ pub fn resolve(map: &WorldMap, board: &Board, status: &GameStatus, card: CardId)
     let effect = effect_for(card)?;
     let mut ctx = Ctx { map, before: board, working: board.clone(), status, changes: Vec::new(), vp_delta: 0, defcon: None, ongoing: None, lasting: None, cancels: None, china: None, space: None, reveals: None };
     effect(&mut ctx);
-    Some(EffectResult { card, player: status.active, influence: ctx.changes, vp_delta: ctx.vp_delta, defcon: ctx.defcon, ongoing: ctx.ongoing, lasting: ctx.lasting, cancels: ctx.cancels, china: ctx.china, space: ctx.space, mil_ops: 0, ends_game: false, reveals: ctx.reveals })
+    Some(EffectResult { card, player: status.active, influence: ctx.changes, vp_delta: ctx.vp_delta, defcon: ctx.defcon, ongoing: ctx.ongoing, lasting: ctx.lasting, cancels: ctx.cancels, china: ctx.china, space: ctx.space, mil_ops: 0, ends_game: false, reveals: ctx.reveals, discards: None })
 }
 
 // ---- the cards, in printed-number order ----
@@ -322,6 +325,12 @@ fn fidel(c: &mut Ctx) {
 fn vietnam_revolts(c: &mut Ctx) {
     c.add("Vietnam", Superpower::Ussr, 2);
     c.start(OngoingEffect::VietnamRevolts);
+}
+
+/// #10 Blockade, once the US has declined (or been unable) to discard a 3+ ops card: all US
+/// influence leaves West Germany. (The decision itself is `EventChoice::discard_gate`.)
+fn blockade(c: &mut Ctx) {
+    c.set("West Germany", Superpower::Us, 0);
 }
 
 /// #12 Romanian Abdication

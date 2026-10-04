@@ -147,6 +147,8 @@ enum Chunk {
     All,
     /// Enough to match the opponent's influence there (add only).
     Match,
+    /// As much as the target side already has there, once per country (add only).
+    Double,
 }
 
 /// One card mode's budgeted add/remove.
@@ -225,10 +227,14 @@ struct Extra {
     mil_ops: i8,
     /// The game ends, the VP leader winning (Wargames).
     ends_game: bool,
+    /// The chooser discards this card from their hand (Blockade, Latin American Debt Crisis).
+    discard: Option<CardId>,
+    /// Choosing this mode hands the event on to its follow-up session (Debt Crisis: the USSR's doubling).
+    then: bool,
 }
 
 impl Extra {
-    const NONE: Extra = Extra { defcon: None, mil_ops: 0, ends_game: false };
+    const NONE: Extra = Extra { defcon: None, mil_ops: 0, ends_game: false, discard: None, then: false };
 }
 
 /// A card's whole choice: who chooses, whether they must finish, and the
@@ -306,6 +312,14 @@ pub struct EventChoice {
     changes: Vec<InfluenceChange>,
     /// The operation this event allows once it's done (Junta), fixed when it opens.
     grant: Option<OpsGrant>,
+    /// The cards a discard-or-suffer decision (Blockade, Debt Crisis) offers
+    /// to discard, in mode order after the first (decline) mode; empty otherwise.
+    gate: Vec<CardId>,
+    /// The session a "declined" gate hands on to (Debt Crisis's doubling).
+    follow_up: Option<Box<EventChoice>>,
+    /// Whether this is such a follow-up: the card has gone irrevocably, so
+    /// its player can't back out of it.
+    second_stage: bool,
 }
 
 impl EventChoice {
@@ -313,6 +327,10 @@ impl EventChoice {
     /// isn't a choice card. A single-mode card has its mode chosen already.
     pub fn new(map: &WorldMap, board: &Board, status: &GameStatus, card: CardId) -> Option<Self> {
         let spec = spec_for(card)?(map, board, status);
+        Some(Self::from_spec(map, board, card, spec))
+    }
+
+    fn from_spec(map: &WorldMap, board: &Board, card: CardId, spec: Spec) -> Self {
         let mut choice = EventChoice {
             card,
             chooser: spec.chooser,
@@ -326,11 +344,69 @@ impl EventChoice {
             complete: false,
             changes: Vec::new(),
             grant: None,
+            gate: Vec::new(),
+            follow_up: None,
+            second_stage: false,
         };
         if choice.modes.len() == 1 {
             choice.select(map, 0);
         }
+        choice
+    }
+
+    /// Opens the discard-or-suffer decision `card` hands `status`'s
+    /// opponent-of-the-card's-side (Blockade, Latin American Debt Crisis):
+    /// mode 1 declines and takes the penalty, every further mode discards
+    /// one of `candidates` (`(card, name)`, the victim's cards that qualify).
+    /// `None` if `card` isn't such a card or nothing qualifies — then the
+    /// penalty simply applies, through the card's ordinary event.
+    pub fn discard_gate(map: &WorldMap, board: &Board, status: &GameStatus, card: CardId, candidates: &[(CardId, String)]) -> Option<Self> {
+        if candidates.is_empty() {
+            return None;
+        }
+        let gate = gate_for(card)?;
+        let decline = Mode { label: gate.decline.to_string(), fixed: gate.fixed(), rule: None, ongoing: None, vp: 0, china: None, extra: Extra { then: gate.then.is_some(), ..Extra::NONE } };
+        let mut modes = vec![decline];
+        modes.extend(candidates.iter().map(|(id, name)| Mode {
+            label: format!("discard {name}"),
+            fixed: Vec::new(),
+            rule: None,
+            ongoing: None,
+            vp: 0,
+            china: None,
+            extra: Extra { discard: Some(*id), ..Extra::NONE },
+        }));
+        let spec = Spec { chooser: gate.decider, optional: false, modes };
+        let mut choice = Self::from_spec(map, board, card, spec);
+        choice.gate = candidates.iter().map(|(id, _)| *id).collect();
+        if let Some(then) = gate.then {
+            let mut next = Self::from_spec(map, board, card, then(map, board, status));
+            next.second_stage = true;
+            choice.follow_up = Some(Box::new(next));
+        }
         Some(choice)
+    }
+
+    /// The cards a discard-or-suffer decision offers, if this is one —
+    /// mode `i + 1` discards `gate_cards()[i]`, mode 0 declines.
+    pub fn gate_cards(&self) -> &[CardId] {
+        &self.gate
+    }
+
+    /// The card the chosen mode discards, if it does.
+    pub fn chosen_discard(&self) -> Option<CardId> {
+        self.mode.and_then(|i| self.modes[i].extra.discard)
+    }
+
+    /// The session to open next, if the chosen mode hands the event on.
+    pub fn take_follow_up(&mut self) -> Option<EventChoice> {
+        if self.mode.is_some_and(|i| self.modes[i].extra.then) { self.follow_up.take().map(|b| *b) } else { None }
+    }
+
+    /// Whether this session is the follow-up to a declined gate, which its
+    /// player can no longer back out of.
+    pub fn is_second_stage(&self) -> bool {
+        self.second_stage
     }
 
     pub fn card(&self) -> CardId {
@@ -479,6 +555,9 @@ impl EventChoice {
             match rule.chunk {
                 Chunk::Fixed(n) => n,
                 Chunk::Match => self.base.influence(id, rule.target.opponent()).saturating_sub(cur),
+                // Once per country, and only where there is something to double.
+                Chunk::Double if net != 0 => return None,
+                Chunk::Double => self.base.influence(id, rule.target),
                 Chunk::One | Chunk::All => 1,
             }
         } else {
@@ -488,7 +567,7 @@ impl EventChoice {
             match rule.chunk {
                 Chunk::Fixed(n) => n.min(cur),
                 Chunk::All => cur,
-                Chunk::One | Chunk::Match => 1.min(cur),
+                Chunk::One | Chunk::Match | Chunk::Double => 1.min(cur),
             }
         };
         if amount == 0 {
@@ -772,6 +851,7 @@ impl EventChoice {
             mil_ops: extra.mil_ops,
             ends_game: extra.ends_game,
             reveals: None,
+            discards: extra.discard.map(|c| (self.chooser, c)),
         }
     }
 
@@ -788,6 +868,13 @@ impl EventChoice {
     /// pick), so the map views have nothing to mark as live.
     pub fn is_designation(&self) -> bool {
         self.modes.iter().all(|m| m.rule.is_none() && m.ongoing.is_some())
+    }
+
+    /// Whether the event is settled by choosing a mode alone: no countries
+    /// to pick and no region to designate (a discard decision, a DEFCON
+    /// level). Views leave the map as it is for these.
+    pub fn is_mode_only(&self) -> bool {
+        !self.picks_countries() && !self.is_designation()
     }
 
     /// Whether any mode has countries to pick — false for an event that
@@ -827,6 +914,7 @@ const CHOICES: &[(u8, SpecFn)] = &[
     (87, the_reformer),
     (88, marine_barracks_bombing),
     (94, chernobyl),
+    (95, latin_american_debt_crisis),
     (99, pershing_ii_deployed),
     (100, wargames),
     (105, special_relationship),
@@ -1143,10 +1231,81 @@ fn how_i_learned_to_stop_worrying(_: &WorldMap, _: &Board, status: &GameStatus) 
                 ongoing: None,
                 vp: 0,
                 china: None,
-                extra: Extra { defcon: Some(level), mil_ops: 5, ends_game: false },
+                extra: Extra { defcon: Some(level), mil_ops: 5, ..Extra::NONE },
             })
             .collect(),
     }
+}
+
+/// #95 Latin American Debt Crisis, once the US has declined to discard: the USSR may double its
+/// influence in each of 2 South American countries. (The discard decision itself is
+/// [`EventChoice::discard_gate`]; with nothing to discard the card comes straight here.)
+fn latin_american_debt_crisis(_: &WorldMap, _: &Board, _: &GameStatus) -> Spec {
+    Spec::single(
+        Ussr,
+        "double USSR influence in each of 2 South American countries",
+        Rule {
+            kind: Kind::Add,
+            target: Ussr,
+            eligible: Eligible::new(Where::Region(Region::SouthAmerica)),
+            points: ANY,
+            per_country: ANY,
+            countries: 2,
+            chunk: Chunk::Double,
+        },
+    )
+    .optional()
+}
+
+/// How a discard-or-suffer card's decision is set up.
+struct GateSpec {
+    /// Who has to discard or suffer.
+    decider: Superpower,
+    /// What declining means, as a mode label.
+    decline: &'static str,
+    /// Influence changes declining makes at once (Blockade).
+    fixed: &'static [Fixed],
+    /// The session declining hands on to (Debt Crisis's doubling).
+    then: Option<SpecFn>,
+}
+
+impl GateSpec {
+    fn fixed(&self) -> Vec<Fixed> {
+        self.fixed.to_vec()
+    }
+}
+
+/// Blockade (#10) and Latin American Debt Crisis (#95): the US discards a card
+/// with 3 or more ops, or suffers the card.
+fn gate_for(card: CardId) -> Option<GateSpec> {
+    match card.0 {
+        10 => Some(GateSpec {
+            decider: Us,
+            decline: "keep your cards → all US influence leaves West Germany",
+            fixed: &[Fixed { country: "West Germany", side: Us, op: FixedOp::Clear }],
+            then: None,
+        }),
+        95 => Some(GateSpec {
+            decider: Us,
+            decline: "keep your cards → the USSR may double its influence in 2 South American countries",
+            fixed: &[],
+            then: Some(latin_american_debt_crisis),
+        }),
+        _ => None,
+    }
+}
+
+/// The ops a card must be worth for a discard-or-suffer card to accept it.
+pub const GATE_MIN_OPS: u8 = 3;
+
+/// Whether `card` is a discard-or-suffer card (Blockade, Latin American Debt Crisis).
+pub fn is_gate_card(card: CardId) -> bool {
+    gate_for(card).is_some()
+}
+
+/// Who decides a discard-or-suffer card, if it is one.
+pub fn gate_decider(card: CardId) -> Option<Superpower> {
+    gate_for(card).map(|g| g.decider)
 }
 
 /// #99 Pershing II Deployed: USSR +1 VP; remove 1 US influence from each of 3 Western European countries.
@@ -1173,7 +1332,7 @@ fn wargames(_: &WorldMap, _: &Board, status: &GameStatus) -> Spec {
             Mode {
                 label: "end the game: the opponent gets 6 VP, then the VP leader wins".into(),
                 vp: -6,
-                extra: Extra { defcon: None, mil_ops: 0, ends_game: true },
+                extra: Extra { ends_game: true, ..Extra::NONE },
                 ..none.clone()
             },
             Mode { label: "play on".into(), ..none },

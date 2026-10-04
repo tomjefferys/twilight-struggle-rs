@@ -284,7 +284,7 @@ pub fn run(
                         KeyCode::Char('q') => return Ok(()),
                         KeyCode::Char('z') => zoomed = false,
                         KeyCode::Char('[') | KeyCode::BackTab | KeyCode::Char(']') | KeyCode::Tab | KeyCode::Char(' ') => {
-                            if let Some(m) = handle_hand_key(key.code, game, cards, &mut hand_selected, &mut zoomed) {
+                            if let Some(m) = handle_hand_key(key.code, game, map, cards, &mut hand_selected, &mut zoomed) {
                                 message = Some(m);
                             }
                         }
@@ -302,7 +302,7 @@ pub fn run(
                         }
                     }
                     KeyCode::Char('[') | KeyCode::BackTab | KeyCode::Char(']') | KeyCode::Tab | KeyCode::Char(' ') => {
-                        if let Some(m) = handle_hand_key(key.code, game, cards, &mut hand_selected, &mut zoomed) {
+                        if let Some(m) = handle_hand_key(key.code, game, map, cards, &mut hand_selected, &mut zoomed) {
                             message = Some(m);
                         }
                     }
@@ -371,10 +371,19 @@ pub fn run(
                         Err(e) => message = Some(e.to_string()),
                     },
                     KeyCode::Char(d @ '1'..='9') => {
-                        if let Some(Operation::Event(_)) = game.operation()
-                            && let Err(e) = game.choose_mode(map, d as usize - '1' as usize)
-                        {
-                            message = Some(e.to_string());
+                        if let Some(Operation::Event(_)) = game.operation() {
+                            match game.choose_mode(map, d as usize - '1' as usize) {
+                                Err(e) => message = Some(e.to_string()),
+                                // A choice with no countries to pick is settled by the mode alone: say what it does.
+                                Ok(()) => {
+                                    if let Some(Operation::Event(e)) = game.operation()
+                                        && !e.picks_countries()
+                                        && let Some(i) = e.mode()
+                                    {
+                                        message = Some(format!("{} — c to confirm, ⌫ to undo", e.modes()[i].label));
+                                    }
+                                }
+                            }
                         }
                     }
                     KeyCode::Char('p') => {
@@ -388,16 +397,19 @@ pub fn run(
                         });
                     }
                     KeyCode::Char('c') => {
+                        let logged = game.log().entries().len();
                         message = Some(match game.confirm() {
                             Ok(op) => {
                                 zoomed = false;
                                 if let Operation::Event(_) = op {
+                                    // Only what this confirm logged: a declined gate hands on to a
+                                    // follow-up and resolves nothing yet.
                                     let entries = game.log().entries();
-                                    if let Some(at) = entries.iter().rposition(|e| matches!(e.event, Event::EventResolved { .. })) {
-                                        queue_turn_modals(&mut modal, game.board(), &entries[at..]);
+                                    if let Some(at) = entries[logged..].iter().rposition(|e| matches!(e.event, Event::EventResolved { .. })) {
+                                        queue_turn_modals(&mut modal, game.board(), &entries[logged + at..]);
                                     }
                                 }
-                                operation_closed_line(&op, true, game.active())
+                                operation_closed_line(&op, true, game.decider())
                             }
                             Err(e) => e.to_string(),
                         });
@@ -416,8 +428,9 @@ pub fn run(
                         // closes first (leaving the card in play), and
                         // only once none is open does the card itself go
                         // back to the hand.
+                        let gate = discard_gate_open(game);
                         message = Some(if game.clear_event_mode(map) {
-                            "mode cleared — choose again, or ⌫ to abandon the event".to_string()
+                            if gate { "choice cleared — pick a card (space) or keep your cards (1)".to_string() } else { "mode cleared — choose again, or ⌫ to abandon the event".to_string() }
                         } else if game.operation().is_some() {
                             match game.abandon() {
                                 Ok(op) => operation_abandoned_line(&op),
@@ -739,7 +752,7 @@ fn hand_item_count(game: &Game, side: Superpower) -> usize {
 /// is always the strip's final slot). `None` on an empty hand, the one
 /// case `Space`/`z` both already treat as a no-op.
 fn selected_hand_card(game: &Game, hand_selected: &[usize; 2]) -> Option<CardId> {
-    let side = game.active();
+    let side = hand_side(game);
     let hand = game.hand(side);
     let count = hand_item_count(game, side);
     if count == 0 {
@@ -753,7 +766,40 @@ fn selected_hand_card(game: &Game, hand_selected: &[usize; 2]) -> Option<CardId>
 /// the hand, so the strip's selection no longer points at it), else the
 /// strip's current selection.
 fn zoom_card(game: &Game, hand_selected: &[usize; 2]) -> Option<CardId> {
+    if discard_gate_open(game) {
+        return selected_hand_card(game, hand_selected);
+    }
     game.card_in_play().or_else(|| selected_hand_card(game, hand_selected))
+}
+
+/// What an open event that is settled by its chosen mode alone (a discard
+/// decision, a DEFCON level) still needs from its player: confirm it, or
+/// undo it. Shown for as long as that is true, whatever else is pressed.
+fn pending_choice_reminder(game: &Game, cards: &CardCatalog) -> Option<String> {
+    let Some(Operation::Event(e)) = game.operation() else { return None };
+    if e.picks_countries() || e.is_designation() {
+        return None;
+    }
+    let i = e.mode()?;
+    Some(match e.chosen_discard() {
+        Some(card) => format!("{} will discard {} — c to confirm, ⌫ to undo", e.chooser(), cards.card(card).name),
+        None => format!("{} — c to confirm, ⌫ to undo", e.modes()[i].label),
+    })
+}
+
+/// Whether an open event is a discard-or-suffer decision (Blockade, Debt
+/// Crisis), whose victim picks a card from their own hand.
+fn discard_gate_open(game: &Game) -> bool {
+    matches!(game.operation(), Some(Operation::Event(e)) if !e.gate_cards().is_empty())
+}
+
+/// Whose hand the strip shows and navigates: the side that has to discard,
+/// while a discard decision is open, else the active side.
+fn hand_side(game: &Game) -> Superpower {
+    match game.operation() {
+        Some(Operation::Event(e)) if !e.gate_cards().is_empty() => e.chooser(),
+        _ => game.active(),
+    }
 }
 
 /// `[`/`]`/`Space` share this handler between the normal keymap and the
@@ -764,7 +810,7 @@ fn zoom_card(game: &Game, hand_selected: &[usize; 2]) -> Option<CardId> {
 /// closes an open zoom, same as selecting it) and returning the status
 /// message either way. A no-op (returning `None`, `*zoomed` untouched) on
 /// an empty hand.
-fn handle_hand_key(code: KeyCode, game: &mut Game, cards: &CardCatalog, hand_selected: &mut [usize; 2], zoomed: &mut bool) -> Option<String> {
+fn handle_hand_key(code: KeyCode, game: &mut Game, map: &WorldMap, cards: &CardCatalog, hand_selected: &mut [usize; 2], zoomed: &mut bool) -> Option<String> {
     match code {
         KeyCode::Char('[') | KeyCode::BackTab => {
             cycle_hand(game, hand_selected, -1);
@@ -773,6 +819,20 @@ fn handle_hand_key(code: KeyCode, game: &mut Game, cards: &CardCatalog, hand_sel
         KeyCode::Char(']') | KeyCode::Tab => {
             cycle_hand(game, hand_selected, 1);
             None
+        }
+        KeyCode::Char(' ') if discard_gate_open(game) => {
+            // Choose to discard the highlighted card (confirm with `c`).
+            let id = selected_hand_card(game, hand_selected)?;
+            let name = &cards.card(id).name;
+            let Some(Operation::Event(e)) = game.operation() else { return None };
+            let Some(slot) = e.gate_cards().iter().position(|&c| c == id) else {
+                return Some(format!("{name} isn't worth {}+ ops — pick another card, or 1 to keep your cards", twilight_struggle::events::choice::GATE_MIN_OPS));
+            };
+            let side = e.chooser();
+            Some(match game.choose_mode(map, slot + 1) {
+                Ok(()) => format!("{side} will discard {name} — c to confirm"),
+                Err(e) => e.to_string(),
+            })
         }
         KeyCode::Char(' ') => {
             let id = selected_hand_card(game, hand_selected)?;
@@ -793,9 +853,9 @@ fn handle_hand_key(code: KeyCode, game: &mut Game, cards: &CardCatalog, hand_sel
 /// `1`), wrapping around either end. A no-op when that side's hand (plus a
 /// possible China Card) is empty — there's nothing to select.
 fn cycle_hand(game: &Game, hand_selected: &mut [usize; 2], delta: i32) {
-    let side = game.active();
+    let side = hand_side(game);
     let count = hand_item_count(game, side);
-    if count == 0 || game.card_in_play().is_some() {
+    if count == 0 || (game.card_in_play().is_some() && !discard_gate_open(game)) {
         return;
     }
     let idx = side_index(side);
@@ -860,6 +920,10 @@ fn draw(
     modal: &VecDeque<Modal>,
     color: ColorMode,
 ) -> io::Result<()> {
+    // A choice waiting only for its confirmation stays on the message row
+    // (unless something more pressing replaced it) until confirmed or undone.
+    let reminder = pending_choice_reminder(game, cards);
+    let message = message.or(reminder.as_deref());
     let board = game.board();
     let op = game.operation();
     let mut canvas = match screen {
@@ -868,13 +932,13 @@ fn draw(
         Screen::Country { selected, .. } => render_country(map, layout, board, *selected, op, ViewMode::Interactive),
     };
 
-    let side = game.active();
+    let side = hand_side(game);
     let status = game.status();
     let china = (status.china_card == side).then_some(status.china_card_face_up);
     let hand = game.hand(side);
     let item_count = hand.len() + china.is_some() as usize;
     let selected_idx = (item_count > 0).then(|| hand_selected[side_index(side)].min(item_count - 1));
-    let hand_canvas = render_hand(cards, hand, china, side, selected_idx, game.card_in_play_slot());
+    let hand_canvas = render_hand(cards, hand, china, side, selected_idx, game.card_in_play_slot().filter(|_| side == game.active()));
 
     if zoomed && let Some(id) = zoom_card(game, hand_selected) {
         let china_face_up = (id == CHINA_CARD).then_some(status.china_card_face_up);

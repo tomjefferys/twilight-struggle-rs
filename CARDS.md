@@ -4,7 +4,7 @@ Which of the 110 cards have their **event** implemented (`events::is_implemented
 Every card can already be played for its ops value; this tracks the event text only.
 `tests/cards_progress.rs` fails if a ✅ here disagrees with the code, so update both together.
 
-**Implemented: 90 / 110**
+**Implemented: 92 / 110**
 
 - `events::scoring` — the seven scoring cards.
 - `events::effects` — fixed influence / VP / DEFCON effects with no choices or die rolls.
@@ -24,7 +24,7 @@ Every card can already be played for its ops value; this tracks the event text o
 | 7 | Socialist Governments | USSR | ✅ | Choice; prevented by #83 (modelled) |
 | 8 | Fidel | USSR | ✅ |  |
 | 9 | Vietnam Revolts | USSR | ✅ | Turn-long: +1 ops for a card spent wholly in Southeast Asia |
-| 10 | Blockade | USSR |  |  |
+| 10 | Blockade | USSR | ✅ | The US discards a 3+ ops card or loses all its West Germany influence (`EventChoice::discard_gate`; no such card → applies at once) |
 | 11 | Korean War | USSR | ✅ | War: roll 4+ (−1 per US-controlled neighbour); +2 VP, replaces US influence |
 | 12 | Romanian Abdication | USSR | ✅ |  |
 | 13 | Arab-Israeli War | USSR | ✅ | War; can't be played after #65 (modelled) |
@@ -109,7 +109,7 @@ Every card can already be played for its ops value; this tracks the event text o
 | 92 | Terrorism | Both |  |  |
 | 93 | Iran-Contra Scandal | USSR | ✅ | Turn-long: US realignment rolls -1 |
 | 94 | Chernobyl | US | ✅ | Choice (region, modes 1-6); turn-long: USSR can't add influence there with ops |
-| 95 | Latin American Debt Crisis | USSR |  |  |
+| 95 | Latin American Debt Crisis | USSR | ✅ | The US discards a 3+ ops card, or the USSR may double its influence in 2 South American countries (a second session) |
 | 96 | Tear Down this Wall | US | ✅ | +3 US East Germany; cancels #55 (and bars it later); then a coup or realignment in Europe |
 | 97 | “An Evil Empire” | US | ✅ | Cancels #59 (modelled) |
 | 98 | Aldrich Ames Remix | USSR |  |  |
