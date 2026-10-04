@@ -169,6 +169,8 @@ pub enum GameError {
     /// [`Game::pass`] refused for the same reason — there's nothing to pass
     /// on once a card's been committed to the turn.
     CardInPlay { card: CardId },
+    /// A round can only be skipped with nothing left to play.
+    MustPlayCard,
     /// [`Game::play_card`] refused: `card` isn't in the active side's hand
     /// (or, for the China Card, the active side doesn't hold it).
     NotInHand,
@@ -237,6 +239,7 @@ impl fmt::Display for GameError {
                 write!(f, "a {verb} session already has {ops_spent} of {ops_total} ops spent on a roll that can't be undone — cancel it instead")
             }
             GameError::NoCard => write!(f, "no card in play — play one first"),
+            GameError::MustPlayCard => write!(f, "you can't pass an action round while you hold a card — play one"),
             GameError::CardInPlay { card } => write!(f, "card #{card} is already in play — play an operation with it, or return it first"),
             GameError::NotInHand => write!(f, "that card isn't in your hand"),
             GameError::ScoringCard => write!(f, "a scoring card can only be played as an event"),
@@ -1849,7 +1852,8 @@ impl Game {
         self.log_game_over();
     }
 
-    /// Forfeits the active side's turn without opening an operation.
+    /// Forfeits the active side's turn without opening an operation — only
+    /// with no card left to play ([`GameError::MustPlayCard`] otherwise).
     /// Refused if one is already open — cancel it first — if a card is
     /// in play (once a card's been taken from the hand, there's nothing
     /// left to "pass" on, so [`Game::return_card`] is the way out instead),
@@ -1878,6 +1882,13 @@ impl Game {
             && trap != Trap::Skip
         {
             return Err(GameError::Trap(format!("{} has {} trapped — escape it, or play your scoring cards, before passing", fx.label(), self.status.active)));
+        }
+        if self.card.is_none() && self.status.forced_play.is_none() {
+            let side = self.status.active;
+            let china = self.status.china_card == side && self.status.china_card_face_up;
+            if self.trap().is_none() && (china || !self.hands.hand(side).is_empty()) {
+                return Err(GameError::MustPlayCard);
+            }
         }
         if let Some(card) = self.card {
             // After its event, a card that allowed an operation can be
@@ -2850,11 +2861,32 @@ mod tests {
         assert_eq!(game.active(), Us);
     }
 
+    /// Passes the active side's round by first emptying its hand.
+    fn skip_round(game: &mut Game) {
+        for id in game.hand(game.active()).to_vec() {
+            game.hands_mut().take(id);
+        }
+        game.status_mut().china_card_face_up = false;
+        game.pass().unwrap();
+    }
+
     #[test]
-    fn pass_advances_with_no_operation_open() {
+    fn pass_is_refused_while_holding_a_card() {
         let map = map();
         let cards = cards();
         let mut game = Game::from_scenario(&scenario(&map, &cards));
+        assert!(matches!(game.pass(), Err(GameError::MustPlayCard)));
+    }
+
+    #[test]
+    fn pass_advances_with_nothing_to_play() {
+        let map = map();
+        let cards = cards();
+        let mut game = Game::from_scenario(&scenario(&map, &cards));
+        for id in game.hand(Ussr).to_vec() {
+            game.hands_mut().take(id);
+        }
+        game.status_mut().china_card = Us;
         game.pass().unwrap();
         assert_eq!(game.active(), Us);
     }
@@ -3130,7 +3162,7 @@ mod tests {
         game.roll(&map, poland, &mut dice).unwrap();
         game.cancel().unwrap(); // -> USSR
 
-        game.pass().unwrap(); // USSR -> US
+        skip_round(&mut game); // USSR -> US
 
         let events: Vec<_> = game.log().entries().iter().map(|e| &e.event).collect();
         assert!(matches!(events[0], Event::Selected { .. }));
@@ -3235,7 +3267,7 @@ mod tests {
         let map = map();
         let cards = cards();
         let mut game = Game::from_scenario(&scenario(&map, &cards));
-        game.pass().unwrap();
+        skip_round(&mut game);
         assert_eq!(game.log().len(), 1);
 
         let ahead = game.lookahead();
@@ -3380,7 +3412,7 @@ mod tests {
         let mut game = Game::from_scenario(&Scenario::from_json(&map, &cards, &json).unwrap());
         assert!(!game.status().china_card_face_up);
 
-        game.pass().unwrap(); // Us -> Ussr, ends the turn
+        skip_round(&mut game); // Us -> Ussr, ends the turn
         settle(&mut game, &map, &cards);
         assert_eq!(game.status().turn, 2);
         assert!(game.status().china_card_face_up, "the turn rollover should flip it back up");

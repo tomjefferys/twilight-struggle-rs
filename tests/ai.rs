@@ -3,6 +3,23 @@
 
 use twilight_struggle::{play_turn, Action, CardCatalog, CardId, Dice, Game, OperationKind, RandomAi, Scenario, Superpower, WorldMap};
 
+/// Test shortcut: passing needs an empty hand, so drop the active side's
+/// cards (and a face-up China Card) first.
+trait SkipRound {
+    fn skip_round(&mut self);
+}
+
+impl SkipRound for Game {
+    fn skip_round(&mut self) {
+        for id in self.hand(self.active()).to_vec() {
+            self.hands_mut().take(id);
+        }
+        self.status_mut().china_card_face_up = false;
+        self.pass().unwrap();
+    }
+}
+
+
 fn started_game() -> (WorldMap, CardCatalog, Game) {
     let map = WorldMap::standard().unwrap();
     let cards = CardCatalog::standard().unwrap();
@@ -119,7 +136,7 @@ fn legal_actions_matches_game_methods_at_every_phase_of_a_turn() {
     }
 }
 
-/// `Pass` is only ever offered with no card in play, and `Begin` only ever
+/// `Pass` is never offered with a card in play (nor while a hand is held), and `Begin` only ever
 /// with one in play and no operation open yet — the two states
 /// `legal_actions`'s own doc says are mutually exclusive.
 #[test]
@@ -127,7 +144,8 @@ fn pass_and_begin_are_mutually_exclusive_with_each_other() {
     let (map, cards, mut game) = started_game();
 
     let legal = game.legal_actions(&map, &cards);
-    assert!(legal.contains(&Action::Pass));
+    // A hand to play from means no passing.
+    assert!(!legal.contains(&Action::Pass));
     assert!(!legal.iter().any(|a| matches!(a, Action::Begin(_))));
 
     let play_id = game.hand(Superpower::Ussr)[0];
@@ -299,7 +317,7 @@ fn the_ai_makes_the_choices_for_its_own_card_when_the_human_is_phasing() {
     assert!(game.operation().is_none(), "the AI finished the event");
     // Comecon is the USSR's card, played by the US for its event: the US may now use its operations.
     assert!(game.ops_after_event().is_some(), "the US's operations follow the opponent's event");
-    game.pass().unwrap();
+    game.skip_round();
     assert_eq!(game.active(), Superpower::Ussr, "the US's action round is over");
     let placed = ["East Germany", "Czechoslovakia", "Hungary", "Romania", "Bulgaria", "Yugoslavia", "Finland", "Austria"]
         .iter()

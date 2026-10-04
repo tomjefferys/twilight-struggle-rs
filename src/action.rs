@@ -237,7 +237,9 @@ impl Game {
                     if self.status().china_card == side && self.status().china_card_face_up {
                         actions.push(Action::PlayCard(CHINA_CARD));
                     }
-                    actions.push(Action::Pass);
+                    if actions.is_empty() {
+                        actions.push(Action::Pass);
+                    }
                 }
             }
         }

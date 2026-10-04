@@ -1,6 +1,23 @@
 use twilight_struggle::render::{log_text, render_log};
 use twilight_struggle::{CardCatalog, ColorMode, Dice, Game, OperationKind, Scenario, Superpower, WorldMap};
 
+/// Test shortcut: passing needs an empty hand, so drop the active side's
+/// cards (and a face-up China Card) first.
+trait SkipRound {
+    fn skip_round(&mut self);
+}
+
+impl SkipRound for Game {
+    fn skip_round(&mut self) {
+        for id in self.hand(self.active()).to_vec() {
+            self.hands_mut().take(id);
+        }
+        self.status_mut().china_card_face_up = false;
+        self.pass().unwrap();
+    }
+}
+
+
 fn started_game() -> (WorldMap, CardCatalog, Game) {
     let map = WorldMap::standard().unwrap();
     let cards = CardCatalog::standard().unwrap();
@@ -59,7 +76,7 @@ fn scripted_game() -> (WorldMap, CardCatalog, Game) {
     game.confirm().unwrap();
 
     // US passes — no card needed.
-    game.pass().unwrap();
+    game.skip_round();
 
     // A debug edit, exactly as `main.rs`'s `set` command records one.
     let before = game.board().influence(iran, Superpower::Us);

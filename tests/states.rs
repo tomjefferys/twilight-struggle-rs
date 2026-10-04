@@ -10,6 +10,33 @@ use twilight_struggle::game::{Victory, VictoryReason};
 use twilight_struggle::scoring::{ScoringKind, Tier};
 use twilight_struggle::{CardCatalog, EventOutcome, Game, StateLibrary, Superpower, WorldMap};
 
+/// Test shortcut: passing needs an empty hand, so drop the active side's
+/// cards (and a face-up China Card) first.
+trait SkipRound {
+    fn skip_round(&mut self);
+}
+
+impl SkipRound for Game {
+    fn skip_round(&mut self) {
+        if self.awaiting_discard().is_some() {
+            return self.pass().unwrap();
+        }
+        let side = self.active();
+        let held = self.hand(side).to_vec();
+        let china = self.status().china_card_face_up;
+        for &id in &held {
+            self.hands_mut().take(id);
+        }
+        self.status_mut().china_card_face_up = false;
+        self.pass().unwrap();
+        for id in held {
+            self.hands_mut().push_to_hand(side, id);
+        }
+        self.status_mut().china_card_face_up = china;
+    }
+}
+
+
 fn fixtures() -> (WorldMap, CardCatalog, StateLibrary) {
     (WorldMap::standard().unwrap(), CardCatalog::standard().unwrap(), StateLibrary::standard())
 }
@@ -437,6 +464,8 @@ fn every_implemented_event_plays_through_game() {
 // ---------------------------------------------------------------------
 
 mod choices {
+    #[allow(unused_imports)]
+    use crate::SkipRound as _;
     use super::*;
     use twilight_struggle::game::GameError;
     use twilight_struggle::ops::Operation;
@@ -826,7 +855,7 @@ mod choices {
         game.confirm().unwrap();
         // The US played the USSR's card for its event, so it may now spend the card's operations.
         assert!(game.ops_after_event().is_some() && game.active() == Superpower::Us);
-        game.pass().unwrap();
+        game.skip_round();
         assert_eq!(game.active(), Superpower::Ussr, "after the US's action round the turn passes on");
     }
 
@@ -982,6 +1011,8 @@ mod choices {
 // already in force, as it would be in a later action round.
 
 mod turn_effects {
+    #[allow(unused_imports)]
+    use crate::SkipRound as _;
     use super::*;
     use twilight_struggle::game::GameError;
     use twilight_struggle::ops::Operation;
@@ -1310,6 +1341,8 @@ mod turn_effects {
 
 // The five war cards (`data/states/wars.json`): the first events that roll.
 mod wars {
+    #[allow(unused_imports)]
+    use crate::SkipRound as _;
     use super::fixtures;
     use twilight_struggle::events::WarResult;
     use twilight_struggle::{CardCatalog, CountryId, Dice, EventOutcome, Game, GameError, Operation, RollOutcome, Superpower, WorldMap};
@@ -1475,6 +1508,8 @@ mod wars {
 // ---------------------------------------------------------------------
 
 mod lasting {
+    #[allow(unused_imports)]
+    use crate::SkipRound as _;
     use super::*;
     use twilight_struggle::game::GameError;
     use twilight_struggle::ops::{CoupError, Operation, RealignError};
@@ -1727,6 +1762,8 @@ mod lasting {
 }
 
 mod china {
+    #[allow(unused_imports)]
+    use crate::SkipRound as _;
     use super::*;
     use twilight_struggle::game::GameError;
     use twilight_struggle::{OperationKind, CHINA_CARD};
@@ -1828,6 +1865,8 @@ mod china {
 }
 
 mod space {
+    #[allow(unused_imports)]
+    use crate::SkipRound as _;
     use super::*;
     use twilight_struggle::game::GameError;
     use twilight_struggle::space::{SpaceError, SpaceResult};
@@ -1906,15 +1945,15 @@ mod space {
     #[test]
     fn the_space_station_holder_plays_the_extra_rounds_alone_then_the_turn_rolls_over() {
         let (map, cards, mut game) = load("space-station-ussr");
-        game.pass().unwrap(); // US finishes AR 6
+        game.skip_round(); // US finishes AR 6
         assert_eq!((game.status().active, game.status().action_round), (Superpower::Ussr, 7));
-        game.pass().unwrap();
+        game.skip_round();
         assert_eq!((game.status().active, game.status().action_round), (Superpower::Ussr, 8), "the US has no AR 7");
-        game.pass().unwrap();
+        game.skip_round();
         end_turn(&mut game, &map, &cards);
         // The Space Station holder is also past box 6: Eagle/Bear has Landed asks it about a discard.
         assert_eq!(game.awaiting_discard(), Some(Superpower::Ussr));
-        game.pass().unwrap();
+        game.skip_round();
         end_turn(&mut game, &map, &cards);
         // …and past box 4: the Man in Earth Orbit perk makes the US choose its headline first.
         assert_eq!((game.status().active, game.status().action_round, game.status().turn), (Superpower::Us, 0, 2));
@@ -1923,7 +1962,7 @@ mod space {
     #[test]
     fn nobody_gets_extra_rounds_once_both_reach_the_space_station() {
         let (map, cards, mut game) = load("space-station-cancelled");
-        game.pass().unwrap();
+        game.skip_round();
         end_turn(&mut game, &map, &cards);
         assert_eq!((game.status().active, game.status().action_round, game.status().turn), (Superpower::Ussr, 0, 2), "the headline phase opens the turn");
     }
@@ -1980,6 +2019,8 @@ mod space {
 }
 
 mod batch_one {
+    #[allow(unused_imports)]
+    use crate::SkipRound as _;
     use super::*;
     use twilight_struggle::ops::Operation;
     use twilight_struggle::CountryId;
@@ -2128,6 +2169,8 @@ mod batch_one {
 }
 
 mod event_then_ops {
+    #[allow(unused_imports)]
+    use crate::SkipRound as _;
     use super::*;
     use twilight_struggle::game::GameError;
     use twilight_struggle::{Action, CountryId, OperationKind};
@@ -2164,7 +2207,7 @@ mod event_then_ops {
     #[test]
     fn the_ops_of_a_played_event_can_be_skipped_with_pass() {
         let (_, cards, mut game) = played("abm-treaty", "ABM Treaty");
-        game.pass().unwrap();
+        game.skip_round();
         assert_eq!(game.active(), Superpower::Us);
         assert!(game.card_in_play().is_none());
         assert!(game.discards().contains(&cards.id_by_name("ABM Treaty").unwrap()));
@@ -2282,6 +2325,8 @@ mod event_then_ops {
 }
 
 mod scoped_ops {
+    #[allow(unused_imports)]
+    use crate::SkipRound as _;
     use super::*;
     use twilight_struggle::game::GameError;
     use twilight_struggle::ops::{CoupError, RealignError};
@@ -2422,7 +2467,7 @@ mod scoped_ops {
         game.begin(OperationKind::Coup).unwrap();
         game.roll(&map, id(&map, "Honduras"), &mut Dice::from_seed(seed_for(6))).unwrap();
         game.confirm().unwrap();
-        game.pass().unwrap();
+        game.skip_round();
         assert_eq!(game.active(), Superpower::Us);
     }
 
@@ -2439,6 +2484,8 @@ mod scoped_ops {
 }
 
 mod discard_or_suffer {
+    #[allow(unused_imports)]
+    use crate::SkipRound as _;
     use super::*;
     use twilight_struggle::game::GameError;
     use twilight_struggle::ops::Operation;
@@ -2629,6 +2676,8 @@ mod discard_or_suffer {
 }
 
 mod hands {
+    #[allow(unused_imports)]
+    use crate::SkipRound as _;
     use super::*;
     use twilight_struggle::game::GameError;
     use twilight_struggle::ops::Operation;
@@ -2745,7 +2794,7 @@ mod hands {
             if game.status().turn > 8 || game.winner().is_some() {
                 break;
             }
-            game.pass().unwrap();
+            game.skip_round();
             end_turn(&mut game, &map, &cards);
         }
         assert!(!game.status().effects.hand_revealed(Superpower::Us));
@@ -2831,6 +2880,8 @@ mod hands {
 }
 
 mod contests {
+    #[allow(unused_imports)]
+    use crate::SkipRound as _;
     use super::*;
     use twilight_struggle::events::Contest;
     use twilight_struggle::game::GameError;
@@ -3122,7 +3173,7 @@ mod contests {
         game.play_event(&map, &cards).unwrap();
         game.choose_mode(&map, 1).unwrap();
         game.confirm().unwrap();
-        game.pass().unwrap();
+        game.skip_round();
         assert_eq!(game.active(), Superpower::Us);
     }
 
@@ -3191,6 +3242,8 @@ mod contests {
 
 /// Bear Trap / Quagmire (escape attempts), NORAD (an end-of-round trigger) and Cuban Missile Crisis.
 mod rounds {
+    #[allow(unused_imports)]
+    use crate::SkipRound as _;
     use super::*;
     use twilight_struggle::game::{GameError, Trap};
     use twilight_struggle::ops::Operation;
@@ -3283,7 +3336,7 @@ mod rounds {
         game.confirm().unwrap();
         assert!(matches!(game.trap(), Some((_, Trap::Skip))));
         assert_eq!(game.legal_actions(&map, &cards), vec![Action::Pass]);
-        game.pass().unwrap();
+        game.skip_round();
         assert_eq!(game.active(), Superpower::Us);
     }
 
@@ -3292,7 +3345,7 @@ mod rounds {
         let (map, cards, mut game) = load("bear-trap-nothing-to-play");
         assert!(matches!(game.trap(), Some((_, Trap::Skip))));
         assert_eq!(game.legal_actions(&map, &cards), vec![Action::Pass]);
-        game.pass().unwrap();
+        game.skip_round();
         assert_eq!(game.active(), Superpower::Us);
     }
 
@@ -3339,7 +3392,7 @@ mod rounds {
         game.play_event(&map, &cards).unwrap();
         assert_eq!(game.status().defcon, 2);
         assert!(!game.settlement_due(), "the round isn't over until the card's operations are used or skipped");
-        game.pass().unwrap();
+        game.skip_round();
         assert!(game.settlement_due());
         assert!(matches!(game.legal_actions(&map, &cards).as_slice(), [Action::Settle]));
         assert!(matches!(game.play_card(&cards, card(&cards, "Fidel")), Err(GameError::Trap(_))), "the trigger has to be settled first");
@@ -3472,6 +3525,8 @@ mod rounds {
 }
 
 mod salt {
+    #[allow(unused_imports)]
+    use crate::SkipRound as _;
     use super::*;
     use twilight_struggle::{Dice, OperationKind};
 
@@ -3516,7 +3571,7 @@ mod salt {
     fn it_ends_with_the_turn() {
         let (map, cards, mut game) = load("salt-active");
         for _ in 0..12 {
-            game.pass().unwrap();
+            game.skip_round();
             end_turn(&mut game, &map, &cards);
         }
         assert!(!game.status().effects.salt);
@@ -3525,6 +3580,8 @@ mod salt {
 }
 
 mod discard_pile {
+    #[allow(unused_imports)]
+    use crate::SkipRound as _;
     use super::*;
     use twilight_struggle::ops::Operation;
 
@@ -3638,6 +3695,8 @@ mod discard_pile {
 }
 
 mod discard_pile_reveal {
+    #[allow(unused_imports)]
+    use crate::SkipRound as _;
     use super::*;
     use twilight_struggle::{Dice, Event, RandomAi};
 
@@ -3673,6 +3732,8 @@ mod discard_pile_reveal {
 
 /// Nested events: Five Year Plan and Star Wars put another card's event into play.
 mod nested {
+    #[allow(unused_imports)]
+    use crate::SkipRound as _;
     use super::*;
     use twilight_struggle::game::GameError;
     use twilight_struggle::ops::Operation;
@@ -3826,6 +3887,8 @@ mod nested {
 
 /// Grain Sales to Soviets and Missile Envy: cards swapped across the table.
 mod swaps {
+    #[allow(unused_imports)]
+    use crate::SkipRound as _;
     use super::*;
     use twilight_struggle::events::PlayAs;
     use twilight_struggle::game::GameError;
@@ -4072,6 +4135,8 @@ mod swaps {
 /// Coups: Military Operations (rule 6.3.4) and the DEFCON limits on where a coup or
 /// realignment may go (rule 6.1.3).
 mod coups {
+    #[allow(unused_imports)]
+    use crate::SkipRound as _;
     use super::*;
     use twilight_struggle::ops::{CoupError, RealignError};
     use twilight_struggle::{Action, CountryId, Dice, Event, GameError, OperationKind};
@@ -4139,6 +4204,8 @@ mod coups {
 
 /// The draw deck and the pile views (`data/states/piles.json`).
 mod piles {
+    #[allow(unused_imports)]
+    use crate::SkipRound as _;
     use super::*;
     use twilight_struggle::render::{piles_text, PileTab};
     use twilight_struggle::{CardId, Dice};
@@ -4198,6 +4265,8 @@ mod piles {
 /// The end of a turn (`Game::settle`, rule 4.5): Military Operations, held scoring cards, the
 /// deck and the redeal (`data/states/turn-end.json`).
 mod turn_end {
+    #[allow(unused_imports)]
+    use crate::SkipRound as _;
     use super::*;
     use twilight_struggle::game::Phase;
     use twilight_struggle::{CardPhase, Event, GameError};
@@ -4211,7 +4280,7 @@ mod turn_end {
     /// The US passes the last round of the turn, and the turn is settled.
     fn finish_turn(name: &str) -> (WorldMap, CardCatalog, Game) {
         let (map, cards, mut game) = load(name);
-        game.pass().unwrap();
+        game.skip_round();
         assert_eq!(game.phase(), Phase::TurnEnd);
         assert!(game.settlement_due());
         end_turn(&mut game, &map, &cards);
@@ -4228,7 +4297,7 @@ mod turn_end {
     #[test]
     fn a_turn_does_not_roll_over_until_it_is_settled_and_nothing_can_be_played_meanwhile() {
         let (map, cards, mut game) = load("mil-ops-shortfall");
-        game.pass().unwrap();
+        game.skip_round();
         assert_eq!((game.status().turn, game.phase()), (2, Phase::TurnEnd));
         assert!(matches!(game.play_card(&cards, cards.id_by_name("Fidel").unwrap()), Err(GameError::Trap(_))));
         assert!(matches!(game.pass(), Err(GameError::Trap(_))));
@@ -4293,7 +4362,7 @@ mod turn_end {
         let (map, cards, mut game) = load("mil-ops-shortfall");
         game.status_mut().china_card_face_up = false;
         game.status_mut().effects.salt = true;
-        game.pass().unwrap();
+        game.skip_round();
         end_turn(&mut game, &map, &cards);
         assert!(game.status().china_card_face_up && !game.status().effects.salt);
     }
@@ -4318,6 +4387,8 @@ mod turn_end {
 
 /// The Eagle/Bear has Landed space perk: its holder may discard one held card at the end of the turn.
 mod eagle_bear {
+    #[allow(unused_imports)]
+    use crate::SkipRound as _;
     use super::*;
     use twilight_struggle::game::Phase;
     use twilight_struggle::{Action, Event, GameError};
@@ -4335,7 +4406,7 @@ mod eagle_bear {
     #[test]
     fn the_holder_decides_before_the_deal_and_nothing_else_can_be_done_meanwhile() {
         let (map, cards, mut game) = load("eagle-landed-discard");
-        game.pass().unwrap();
+        game.skip_round();
         end_turn(&mut game, &map, &cards);
         assert_eq!((game.awaiting_discard(), game.active(), game.decider(), game.status().turn), (Some(Superpower::Ussr), Superpower::Ussr, Superpower::Ussr, 2));
         assert!(!game.settlement_due());
@@ -4357,10 +4428,10 @@ mod eagle_bear {
     #[test]
     fn passing_keeps_every_card_and_a_card_not_held_is_refused() {
         let (map, cards, mut game) = load("eagle-landed-discard");
-        game.pass().unwrap();
+        game.skip_round();
         end_turn(&mut game, &map, &cards);
         assert!(matches!(game.discard_held(Some(id(&cards, "Duck and Cover"))), Err(GameError::NotInHand)));
-        game.pass().unwrap();
+        game.skip_round();
         assert!(game.log().entries().iter().any(|e| matches!(e.event, Event::HeldDiscard { card: None })));
         end_turn(&mut game, &map, &cards);
         assert_eq!(game.status().turn, 3);
@@ -4370,7 +4441,7 @@ mod eagle_bear {
     #[test]
     fn once_both_sides_reach_box_six_there_is_nothing_to_decide() {
         let (map, cards, mut game) = load("eagle-landed-cancelled");
-        game.pass().unwrap();
+        game.skip_round();
         end_turn(&mut game, &map, &cards);
         assert_eq!((game.awaiting_discard(), game.status().turn), (None, 3));
     }
@@ -4394,6 +4465,8 @@ mod eagle_bear {
 
 /// Final scoring after turn 10 (`data/states/final.json`).
 mod final_scoring {
+    #[allow(unused_imports)]
+    use crate::SkipRound as _;
     use super::*;
     use twilight_struggle::game::Phase;
     use twilight_struggle::scoring::resolve;
@@ -4407,7 +4480,7 @@ mod final_scoring {
 
     fn finish(name: &str) -> (WorldMap, CardCatalog, Game) {
         let (map, cards, mut game) = load(name);
-        game.pass().unwrap();
+        game.skip_round();
         end_turn(&mut game, &map, &cards);
         (map, cards, game)
     }
@@ -4429,7 +4502,7 @@ mod final_scoring {
             resolve(&map, game.board(), &game.status().lasting, id).unwrap().vp_delta
         }).sum();
         assert_ne!(expected, 0, "the state has a board worth scoring");
-        game.pass().unwrap();
+        game.skip_round();
         end_turn(&mut game, &map, &cards);
         let (results, china, vp_after) = final_entry(&game);
         assert_eq!(results.len(), 6);
@@ -4501,6 +4574,8 @@ mod final_scoring {
 
 /// The headline phase that opens every turn (`data/states/headline.json`).
 mod headline {
+    #[allow(unused_imports)]
+    use crate::SkipRound as _;
     use super::*;
     use twilight_struggle::game::Phase;
     use twilight_struggle::{play_turn, Action, CountryId, Dice, Event, GameError, RandomAi};
@@ -4670,6 +4745,8 @@ mod headline {
 /// Playing an opponent's card for operations: its event happens too, in either order
 /// (`data/states/dual-use.json`).
 mod dual_use {
+    #[allow(unused_imports)]
+    use crate::SkipRound as _;
     use super::*;
     use twilight_struggle::events::{OpsGrant, PlayAs};
     use twilight_struggle::{play_turn, Action, CountryId, Dice, Event, GameError, OperationKind, RandomAi};
@@ -4737,7 +4814,7 @@ mod dual_use {
         let (map, cards, mut game) = load("ussr-plays-us-cards");
         play(&mut game, &cards, "Duck and Cover");
         game.play_event_with(&map, &cards, &mut Dice::from_seed(1)).unwrap();
-        game.pass().unwrap();
+        game.skip_round();
         assert_eq!(game.active(), Superpower::Us);
     }
 
@@ -4807,6 +4884,8 @@ mod dual_use {
 
 /// UN Intervention, Ask Not What Your Country…, Our Man in Tehran (`data/states/last-cards.json`).
 mod last_cards {
+    #[allow(unused_imports)]
+    use crate::SkipRound as _;
     use super::*;
     use twilight_struggle::events::PlayAs;
     use twilight_struggle::{play_turn, Action, Dice, GameError, OperationKind, RandomAi};

@@ -547,7 +547,7 @@ over many seeded whole games.
   **`Game::decider()`** is who has to act next — the open event's chooser,
   else `active()` — and is what every AI hook and the status bar read
   instead of `active()`. `pass` is the same handover with no operation
-  opened, refused with `CardInPlay` if a card's already been taken from
+  opened, refused with `MustPlayCard` while the active side holds any card (or a face-up China Card) — a round can only be skipped with nothing to play — and with `CardInPlay` if a card's already been taken from
   the hand — there's nothing left to "pass" on at that point, so
   `return_card` is the way out instead. Ending a turn with ops unspent is
   allowed and simply forfeits them, the same as `InfluencePlacement` never
