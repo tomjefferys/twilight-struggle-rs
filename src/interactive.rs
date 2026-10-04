@@ -14,7 +14,7 @@ use crossterm::{execute, queue};
 
 use twilight_struggle::render::{
     log_entry_line, operation_abandoned_line, pile_cards, render_piles, PileTab, operation_closed_line, operation_header, render_card, render_country, render_forced_card, render_hand,
-    render_event_result, render_event_session, render_space_confirm, render_space_result, render_trap_confirm, render_trap_result, render_space_track_with_hint, render_war_result, render_region, render_roll_result, render_scoring_result, render_status_bar_with, render_world_map, Canvas, RollReport, HAND_ROWS,
+    render_event_result, render_event_session, render_final_scoring, render_space_confirm, render_space_result, render_trap_confirm, render_trap_result, render_space_track_with_hint, render_war_result, render_region, render_roll_result, render_scoring_result, render_status_bar_with, render_world_map, Canvas, RollReport, HAND_ROWS,
 };
 use twilight_struggle::events::{PlayAs, EffectResult, ScoringResult, WarResult};
 use twilight_struggle::game::{Trap, TrapResult, Victory};
@@ -68,6 +68,9 @@ enum Modal {
     /// `t`: the space race track, for information only — drawn live from
     /// the status, dismissed with Enter, Esc or `t` again.
     SpaceTrack,
+    /// Final scoring after turn 10: each region's swing, the China Card, the VP at the end and
+    /// the game's result.
+    FinalScoring(Vec<(ScoringResult, i8)>, Option<Superpower>, i8, Option<Victory>),
     /// `D`: the discard, removed and deck piles, for information only — drawn live from the
     /// game's hands. `zoom` shows the highlighted card in full instead of the list.
     Piles { tab: PileTab, cursor: usize, zoom: bool },
@@ -723,6 +726,7 @@ fn maybe_run_ai_turn(
     game.settle(map, cards, dice);
     let settled: Vec<String> = game.log().entries()[before..].iter().map(|e| log_entry_line(map, cards, e)).collect();
     if !settled.is_empty() {
+        queue_turn_modals(modal, game.board(), &game.log().entries()[before..]);
         *message = Some(settled.join(" · "));
         *sticky = true;
         *zoomed = false;
@@ -851,6 +855,13 @@ fn queue_turn_modals(modal: &mut VecDeque<Modal>, board: &Board, entries: &[LogE
                     _ => None,
                 };
                 modal.push_back(Modal::War(result.clone(), *vp_after, winner));
+            }
+            Event::FinalScoring { results, china, vp_after } => {
+                let winner = match entries.get(i + 1).map(|e| &e.event) {
+                    Some(Event::GameOver(victory)) => Some(*victory),
+                    _ => None,
+                };
+                modal.push_back(Modal::FinalScoring(results.clone(), *china, *vp_after, winner));
             }
             Event::Trap(result) => modal.push_back(Modal::Trap(*result)),
             Event::Space { result, vp_after } => {
@@ -1181,6 +1192,7 @@ fn draw(
         let modal_canvas = match front {
             Modal::Roll(report) => render_roll_result(map, report, queue_pos),
             Modal::Score(result, vp_after) => render_scoring_result(map, cards, result, *vp_after, queue_pos),
+            Modal::FinalScoring(results, china, vp_after, winner) => render_final_scoring(results, *china, *vp_after, *winner, queue_pos),
             Modal::Event(result, vp_after, winner) => render_event_result(map, cards, result, *vp_after, *winner, queue_pos),
             Modal::War(result, vp_after, winner) => render_war_result(map, cards, result, *vp_after, *winner, queue_pos),
             Modal::Space(result, vp_after, winner) => render_space_result(cards, result, *vp_after, *winner, queue_pos),

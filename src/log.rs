@@ -122,6 +122,9 @@ pub enum Event {
     /// A free-text annotation — e.g. reloading the demo scenario — with no
     /// side and no board effect of its own.
     Note(String),
+    /// Final scoring after turn 10: every region scored in turn (each result with the VP track
+    /// after it), then the China Card holder's point, and the track at the end.
+    FinalScoring { results: Vec<(crate::events::ScoringResult, i8)>, china: Option<Superpower>, vp_after: i8 },
     /// The Eagle/Bear has Landed perk's holder, at the end of the turn: the card discarded, or
     /// `None` for keeping every card.
     HeldDiscard { card: Option<CardId> },

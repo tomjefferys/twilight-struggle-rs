@@ -52,7 +52,7 @@ use crate::dice::Dice;
 use crate::cards::CardSide;
 use crate::events::choice::{EventChoiceError, PileCard, Sign};
 use crate::events::EventChoice;
-use crate::events::{self, war, EffectResult, EventOutcome, OpsGrant, PlayAs, PlayCard, WarResult};
+use crate::events::{self, scoring, war, EffectResult, EventOutcome, OpsGrant, PlayAs, PlayCard, WarResult};
 use crate::log::{CoupAftermath, Event, GameLog, LogEntry, TurnEndReport};
 use crate::map::WorldMap;
 use crate::ongoing::{LastingEffect, TurnEffects};
@@ -371,6 +371,9 @@ struct TurnEndProgress {
     perk_done: bool,
     report: TurnEndReport,
 }
+
+/// The region cards final scoring plays, Europe first (its Control wins outright).
+const FINAL_SCORING: [CardId; 6] = [CardId(2), CardId(1), CardId(3), CardId(37), CardId(79), CardId(81)];
 
 /// Where in a turn the game is. Only `ActionRounds` lets a card be played; `TurnEnd` is the
 /// moment after the last action round that [`Game::settle`] resolves — it needs the map, the
@@ -1335,7 +1338,7 @@ impl Game {
             }
         }
         if self.phase == Phase::TurnEnd && self.held_discard.is_none() {
-            self.end_turn(cards, dice);
+            self.end_turn(map, cards, dice);
         }
     }
 
@@ -1343,7 +1346,7 @@ impl Game {
     /// card, the China Card and every "remainder of the turn" effect, then — after turn 10, the
     /// end of the game — the next turn: DEFCON improves by 1, Mid/Late War cards join the deck
     /// when their turn comes, and both hands are dealt back up.
-    fn end_turn(&mut self, cards: &CardCatalog, dice: &mut Dice) {
+    fn end_turn(&mut self, map: &WorldMap, cards: &CardCatalog, dice: &mut Dice) {
         let (turn, round) = (self.status.turn, self.status.action_round);
         if !self.turn_end.scored {
             let mut report = TurnEndReport { mil_ops: (self.status.military_ops_us, self.status.military_ops_ussr), defcon: self.status.defcon, ..Default::default() };
@@ -1381,7 +1384,7 @@ impl Game {
         self.status.effects = TurnEffects::default();
         if self.winner.is_none() && turn >= *TURN_RANGE.end() {
             self.push_turn_end(turn, round, report);
-            self.finish_game();
+            self.finish_game(map);
             return;
         }
         if self.winner.is_none() {
@@ -1445,8 +1448,33 @@ impl Game {
         report.reshuffled = discards_before > 0 && self.hands.discards().is_empty();
     }
 
-    /// After turn 10: the game is over; the side ahead on VP wins, level is a draw.
-    fn finish_game(&mut self) {
+    /// After turn 10 (rule 10.2): every region is scored as if its card had been played —
+    /// Europe first, since its Control still wins outright — then whoever holds the China
+    /// Card gets 1 VP. Unless that ended the game early (the track reaching ±20), the side
+    /// ahead on VP wins and level is a draw.
+    fn finish_game(&mut self, map: &WorldMap) {
+        let mut results = Vec::new();
+        for card in FINAL_SCORING {
+            if self.winner.is_some() {
+                break;
+            }
+            let result = scoring::resolve(map, &self.board, &self.status.lasting, card).expect("every region card resolves");
+            self.apply_vp(result.vp_delta);
+            if let Some(side) = result.automatic_victory {
+                self.set_winner(side, VictoryReason::EuropeControl);
+            }
+            results.push((result, self.status.vp));
+        }
+        let china = self.winner.is_none().then_some(self.status.china_card);
+        if let Some(holder) = china {
+            self.apply_vp(if holder == Superpower::Us { 1 } else { -1 });
+        }
+        self.log.push(LogEntry {
+            turn: self.status.turn,
+            action_round: self.status.action_round,
+            side: None,
+            event: Event::FinalScoring { results, china, vp_after: self.status.vp },
+        });
         if self.winner.is_none() {
             let side = match self.status.vp.signum() {
                 1 => Some(Superpower::Us),

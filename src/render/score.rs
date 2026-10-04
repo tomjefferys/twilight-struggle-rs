@@ -96,6 +96,67 @@ pub fn render_scoring_result(
     canvas
 }
 
+/// The summary modal for final scoring after turn 10: each region's swing in the order it
+/// was scored, the China Card's point, the VP track at the end and, once decided, the result.
+/// `results` pair each region's [`ScoringResult`] with the track after it; `winner` is the
+/// game's outcome (`None` while unknown), bordering the box in the winner's colour.
+pub fn render_final_scoring(
+    results: &[(ScoringResult, i8)],
+    china: Option<Superpower>,
+    vp_after: i8,
+    winner: Option<crate::game::Victory>,
+    queue_pos: Option<(usize, usize)>,
+) -> Canvas {
+    let text_width = SCORE_WIDTH - 2 - 2 * PADDING;
+    let mut lines: Vec<(String, Style)> = Vec::new();
+    let swing = |delta: i8| match delta.signum() {
+        1 => (format!("US +{delta}"), Color::Us),
+        -1 => (format!("USSR +{}", -delta), Color::Ussr),
+        _ => ("no change".to_string(), Color::Muted),
+    };
+    for (result, _) in results {
+        let name = match &result.kind {
+            ScoringKind::Region { region, .. } => region.to_string(),
+            ScoringKind::SoutheastAsia { .. } => "Southeast Asia".to_string(),
+        };
+        let (text, color) = swing(result.vp_delta);
+        lines.push((format!("{name:<16} {text}"), Style::color(color)));
+        if let Some(side) = result.automatic_victory {
+            lines.push((format!("  {side} controls Europe"), Style::color(side_color(side)).bold()));
+        }
+    }
+    if let Some(side) = china {
+        lines.push((format!("{:<16} {side} +1", "China Card"), Style::color(side_color(side))));
+    }
+    lines.push((String::new(), Style::default()));
+    let (total, color) = match vp_after.signum() {
+        1 => (format!("final: US ahead by {vp_after} VP"), Color::Us),
+        -1 => (format!("final: USSR ahead by {} VP", -vp_after), Color::Ussr),
+        _ => ("final: level at 0 VP".to_string(), Color::Muted),
+    };
+    push_text(&mut lines, &total, Style::color(color).bold(), text_width);
+    let mut border = color;
+    if let Some(victory) = winner {
+        push_text(&mut lines, &crate::render::game_over_line(victory), Style::color(victory.side.map_or(Color::Muted, side_color)).bold(), text_width);
+        border = victory.side.map_or(Color::Muted, side_color);
+    }
+    lines.push((String::new(), Style::default()));
+    let hint = match queue_pos {
+        Some((n, total)) => format!("Enter to continue · {n} of {total}"),
+        None => "Enter to continue".to_string(),
+    };
+    lines.push((format!("{hint:>text_width$}"), Style::color(Color::Muted)));
+
+    let height = 2 + lines.len();
+    let mut canvas = Canvas::new(SCORE_WIDTH, height);
+    canvas.draw_thick_box(0, 0, SCORE_WIDTH, height, Style::color(border));
+    put_border_title(&mut canvas, 0, 0, "Final scoring", Style::default().bold(), "", Style::default(), SCORE_WIDTH);
+    for (i, (line, style)) in lines.iter().enumerate() {
+        canvas.put(1 + i, 1 + PADDING, line, *style);
+    }
+    canvas
+}
+
 /// One side's own breakdown: a bold header line (tier, country/
 /// battleground counts) followed by an indented, word-wrapped line
 /// itemising the VP contributions that summed to its own total — the

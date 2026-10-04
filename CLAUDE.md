@@ -15,9 +15,9 @@ reaching 1, or Europe Scoring's Control tier), and the *Space Race* (`src/space.
 the 110 cards have their event implemented (`tests/cards_progress.rs`
 keeps it honest). The end of a turn (Military Operations, held scoring
 cards, DEFCON +1, the Mid/Late War deck additions and the redeal) is
-implemented (`Game::settle`, below); the headline phase, new-game setup,
-final scoring and an opponent's card's ops-and-event dual use are still
-out of scope. A first AI opponent plays
+implemented (`Game::settle`, below), as is final scoring after turn 10; the
+headline phase, new-game setup and an opponent's card's ops-and-event dual
+use are still out of scope. A first AI opponent plays
 uniformly random legal moves.
 
 ## Architecture
@@ -463,8 +463,16 @@ uniformly random legal moves.
   side still holding a scoring card loses (`VictoryReason::HeldScoringCard`, the
   USSR checked first), the China Card flips face up, `GameStatus::effects`
   clears (every "remainder of the turn" event ends there) and space attempts
-  reset; after turn 10 `finish_game` ends it by VP (`Victory::side` is an
-  `Option` — `None` is a draw, `VictoryReason::FinalScoring`), else
+  reset; after turn 10 `finish_game(map)` plays final scoring (rule 10.2:
+  Europe first, since its Control still wins outright, then Asia, the Middle
+  East, Central America, Africa and South America via `scoring::resolve`, one
+  `apply_vp` each — the track reaching ±20 ends it at once — then the China
+  Card holder's 1 VP, face up or down), logs one `Event::FinalScoring`
+  (`final` line; each region's result paired with the track after it) and the
+  side ahead on VP wins (`Victory::side` is an `Option` — `None` is a draw,
+  `VictoryReason::FinalScoring`); the interactive map queues a
+  `Modal::FinalScoring` (`render_final_scoring`) and the REPL prints the same
+  box; otherwise
   `start_next_turn`: turn +1, DEFCON +1 (max 5), `action_rounds_per_turn`
   from `status::rounds_for_turn` (6, then 7 from turn 4), the *unseen* Mid
   (turn 4) or Late (turn 8) War cards shuffled into the deck
@@ -1272,7 +1280,7 @@ deliberate exception, for debug-mode test states specifically.
 - `backup/` — earlier full snapshots of the world map, kept in case a
   future change needs to compare against or revert to an earlier version.
 - `states/` — named test states (`src/states.rs`'s own `StateLibrary`),
-  one JSON file per topic (`scoring.json` is the first, then `events.json` for the fixed-effect cards, `choices.json` for the choice cards, `turn-effects.json` for the turn-long ones and `lasting.json` for the game-long ones, `coups.json` for Military Ops and the DEFCON region limits, `piles.json` for the deck and pile views, `turn-end.json` for the end of a turn — each card's own event, plus `*-active` states with an effect already in force), each holding a
+  one JSON file per topic (`scoring.json` is the first, then `events.json` for the fixed-effect cards, `choices.json` for the choice cards, `turn-effects.json` for the turn-long ones and `lasting.json` for the game-long ones, `coups.json` for Military Ops and the DEFCON region limits, `piles.json` for the deck and pile views, `turn-end.json` for the end of a turn, `final.json` for final scoring — each card's own event, plus `*-active` states with an effect already in force), each holding a
   `{"states": [...]}` array of several named `Scenario` snapshots. Read
   from disk at runtime, not `include_str!`-embedded — see `states.rs`'s
   own doc above for why.

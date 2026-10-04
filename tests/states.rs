@@ -4363,3 +4363,110 @@ mod eagle_bear {
         }
     }
 }
+
+/// Final scoring after turn 10 (`data/states/final.json`).
+mod final_scoring {
+    use super::*;
+    use twilight_struggle::game::Phase;
+    use twilight_struggle::scoring::resolve;
+    use twilight_struggle::Event;
+
+    fn load(name: &str) -> (WorldMap, CardCatalog, Game) {
+        let (map, cards, lib) = fixtures();
+        let (scenario, _) = lib.load(&map, &cards, &format!("final/{name}")).unwrap_or_else(|e| panic!("{name}: {e}"));
+        (map, cards, Game::from_scenario(&scenario))
+    }
+
+    fn finish(name: &str) -> (WorldMap, CardCatalog, Game) {
+        let (map, cards, mut game) = load(name);
+        game.pass().unwrap();
+        end_turn(&mut game, &map, &cards);
+        (map, cards, game)
+    }
+
+    fn final_entry(game: &Game) -> (Vec<(twilight_struggle::events::ScoringResult, i8)>, Option<Superpower>, i8) {
+        game.log().entries().iter().find_map(|e| match &e.event {
+            Event::FinalScoring { results, china, vp_after } => Some((results.clone(), *china, *vp_after)),
+            _ => None,
+        }).expect("a final scoring entry")
+    }
+
+    #[test]
+    fn every_region_is_scored_in_turn_and_the_china_card_pays_a_point() {
+        let (map, cards, mut game) = load("final-us-ahead");
+        // What each region card is worth on this board, scored the way playing it would.
+        let region_cards = [2u8, 1, 3, 37, 79, 81];
+        let expected: i8 = region_cards.iter().map(|&n| {
+            let id = cards.ids().find(|c| c.number() == n).unwrap();
+            resolve(&map, game.board(), &game.status().lasting, id).unwrap().vp_delta
+        }).sum();
+        assert_ne!(expected, 0, "the state has a board worth scoring");
+        game.pass().unwrap();
+        end_turn(&mut game, &map, &cards);
+        let (results, china, vp_after) = final_entry(&game);
+        assert_eq!(results.len(), 6);
+        assert_eq!(china, Some(Superpower::Ussr));
+        assert_eq!(vp_after, 2 + expected - 1, "start 2, every region, then the USSR's China Card point");
+        assert_eq!(results.last().unwrap().1, 2 + expected, "each result carries the track after it");
+        let want = match vp_after.signum() { 1 => Some(Superpower::Us), -1 => Some(Superpower::Ussr), _ => None };
+        assert_eq!(game.winner(), Some(Victory { side: want, reason: VictoryReason::FinalScoring }));
+        assert_eq!(game.status().turn, 10, "there is no turn 11");
+        assert!(game.legal_actions(&map, &cards).is_empty());
+    }
+
+    #[test]
+    fn level_on_vp_after_the_china_card_is_a_draw() {
+        let (_, _, game) = finish("final-draw");
+        assert_eq!(game.status().vp, 0);
+        assert_eq!(game.winner(), Some(Victory { side: None, reason: VictoryReason::FinalScoring }));
+    }
+
+    #[test]
+    fn the_china_card_can_decide_the_game_face_down_too() {
+        let (_, _, game) = finish("final-china-card-decides");
+        assert_eq!(game.status().vp, -1);
+        assert_eq!(game.winner(), Some(Victory { side: Some(Superpower::Ussr), reason: VictoryReason::FinalScoring }));
+    }
+
+    #[test]
+    fn europe_control_still_wins_outright_whatever_the_vp() {
+        let (_, _, game) = finish("final-europe-control");
+        assert_eq!(game.winner(), Some(Victory { side: Some(Superpower::Ussr), reason: VictoryReason::EuropeControl }));
+        let (results, china, _) = final_entry(&game);
+        assert_eq!(results.len(), 1, "Europe is scored first and nothing after it");
+        assert_eq!(china, None);
+    }
+
+    #[test]
+    fn reaching_twenty_vp_while_scoring_ends_it_at_once() {
+        let (_, _, game) = finish("final-vp-cap");
+        assert_eq!(game.status().vp, 20);
+        assert_eq!(game.winner(), Some(Victory { side: Some(Superpower::Us), reason: VictoryReason::Vp }));
+        let (results, china, _) = final_entry(&game);
+        assert!(results.len() < 6 && china.is_none());
+    }
+
+    #[test]
+    fn the_phase_stays_at_turn_end_and_the_game_log_names_the_result() {
+        let (map, cards, game) = finish("final-draw");
+        assert_eq!(game.phase(), Phase::TurnEnd);
+        let text = twilight_struggle::render::log_text(&map, &cards, game.log());
+        assert!(text.contains("final") && text.contains("a draw (final scoring)"), "{text}");
+    }
+
+    #[test]
+    fn the_ai_finishes_a_game_from_the_last_round() {
+        use twilight_struggle::{play_turn, Dice, RandomAi};
+        for seed in 0..10 {
+            let (map, cards, mut game) = load("final-us-ahead");
+            let mut ai = RandomAi::from_seed(seed);
+            let mut dice = Dice::from_seed(seed);
+            for _ in 0..6 {
+                if game.winner().is_none() {
+                    play_turn(&mut ai, &mut game, &map, &cards, &mut dice).unwrap();
+                }
+            }
+            assert!(game.winner().is_some(), "seed {seed}");
+        }
+    }
+}

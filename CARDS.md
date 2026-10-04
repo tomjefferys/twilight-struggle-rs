@@ -21,7 +21,7 @@ Every card can already be played for its ops value; this tracks the event text o
 | 3 | Middle East Scoring | Both | ✅ |  |
 | 4 | Duck and Cover | US | ✅ |  |
 | 5 | Five Year Plan | US | ✅ | The USSR discards a random card (needs dice); a US-side non-scoring event it names is then played (`PlayedCard::forced_event`) before the turn ends; USSR/neutral cards are just discarded |
-| 6 | The China Card | Both |  | Ops only; +1 op if all spent in Asia (`OpsBonus`); passes face down; end-of-Turn-10 VP pending (no final scoring yet) |
+| 6 | The China Card | Both |  | Ops only; +1 op if all spent in Asia (`OpsBonus`); passes face down; the holder scores 1 VP in final scoring after turn 10 (`Game::finish_game`) |
 | 7 | Socialist Governments | USSR | ✅ | Choice; prevented by #83 (modelled) |
 | 8 | Fidel | USSR | ✅ |  |
 | 9 | Vietnam Revolts | USSR | ✅ | Turn-long: +1 ops for a card spent wholly in Southeast Asia |

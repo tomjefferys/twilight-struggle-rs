@@ -6,7 +6,7 @@ use rustyline::history::DefaultHistory;
 use rustyline::Editor;
 
 use twilight_struggle::render::{
-    coup_result_line, game_over_line, log_entry_line, log_text, piles_text, PileTab, ongoing_effect_line, operation_abandoned_line, operation_balance_line, render_card,
+    coup_result_line, game_over_line, log_entry_line, log_text, piles_text, render_final_scoring, PileTab, ongoing_effect_line, operation_abandoned_line, operation_balance_line, render_card,
     render_country, render_event_result, render_space_result, render_space_track, render_war_result, render_hand, render_log, render_region, render_scoring_result, render_world, render_world_map, roll_result_line,
 };
 use twilight_struggle::{
@@ -231,8 +231,16 @@ fn maybe_run_ai_turn(session: &mut Session) {
     if session.game.settlement_due() {
         let before = session.game.log().len();
         session.game.settle(&session.map, &session.cards, &mut session.dice);
-        for entry in &session.game.log().entries()[before..] {
+        let entries = &session.game.log().entries()[before..];
+        for (i, entry) in entries.iter().enumerate() {
             println!("{}", log_entry_line(&session.map, &session.cards, entry));
+            if let twilight_struggle::Event::FinalScoring { results, china, vp_after } = &entry.event {
+                let winner = match entries.get(i + 1).map(|e| &e.event) {
+                    Some(twilight_struggle::Event::GameOver(victory)) => Some(*victory),
+                    _ => None,
+                };
+                println!("{}", render_final_scoring(results, *china, *vp_after, winner, None).render(session.color));
+            }
         }
         if session.game.operation().is_some() {
             println!("NORAD: the US adds 1 influence to a country where it has some");

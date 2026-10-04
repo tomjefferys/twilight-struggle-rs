@@ -143,11 +143,28 @@ fn action_and_detail(map: &WorldMap, cards: &CardCatalog, entry: &LogEntry) -> (
         Event::Defused { side, country } => ("defuse", format!("{side} removes 2 influence from {} — Cuban Missile Crisis ends", map.country(*country).name)),
         Event::GameOver(victory) => ("gameover", game_over_detail(*victory)),
         Event::TurnEnd(report) => ("turnend", turn_end_detail(report)),
+        Event::FinalScoring { results, china, vp_after } => ("final", final_scoring_detail(results, *china, *vp_after)),
         Event::HeldDiscard { card } => match card {
             Some(card) => ("discard", format!("Eagle/Bear has Landed: discards {}", cards.card(*card).name)),
             None => ("discard", "Eagle/Bear has Landed: keeps every card".to_string()),
         },
     }
+}
+
+/// `Europe +3, Asia -2, … · China Card +1 USSR · final -4`.
+fn final_scoring_detail(results: &[(crate::events::ScoringResult, i8)], china: Option<Superpower>, vp_after: i8) -> String {
+    let mut parts: Vec<String> = results
+        .iter()
+        .map(|(r, _)| match &r.kind {
+            crate::events::scoring::ScoringKind::Region { region, .. } => format!("{region} {:+}", r.vp_delta),
+            crate::events::scoring::ScoringKind::SoutheastAsia { .. } => format!("Southeast Asia {:+}", r.vp_delta),
+        })
+        .collect();
+    if let Some(side) = china {
+        parts.push(format!("China Card {side}"));
+    }
+    parts.push(format!("VP now {vp_after}"));
+    parts.join(" · ")
 }
 
 /// `mil ops US 2 USSR 4 vs DEFCON 3 → +1 VP (now 3) · DEFCON 3→4 · 14 cards join · dealt US 5, USSR 4`.
