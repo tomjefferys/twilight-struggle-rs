@@ -947,7 +947,7 @@ fn run_space_command(session: &mut Session) {
 }
 
 fn run_event_command(session: &mut Session) {
-    match session.game.play_event(&session.map, &session.cards) {
+    match session.game.play_event_with(&session.map, &session.cards, &mut session.dice) {
         Ok(EventOutcome::Scoring(result)) => {
             let vp_after = session.game.status().vp;
             let canvas = render_scoring_result(&session.map, &session.cards, &result, vp_after, None);

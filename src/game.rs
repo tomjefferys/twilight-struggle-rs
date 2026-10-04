@@ -167,6 +167,11 @@ pub enum GameError {
     /// waiting for the operation that event allows — it can't be played as
     /// an event again, returned to the hand, or spent on a space attempt.
     EventPlayed { card: CardId },
+    /// [`Game::play_event`] refused: the card's event draws on chance, so it needs
+    /// [`Game::play_event_with`]'s dice.
+    NeedsDice { card: CardId },
+    /// [`Game::play_event`] refused: this card's event can't be played in the Late War.
+    EventTooLate { card: CardId },
     /// [`Game::begin`] refused: the card's event only allows `allowed`.
     OpsNotGranted { allowed: String },
     /// [`Game::confirm`]/[`Game::cancel`] refused a war: it ends only by
@@ -209,6 +214,8 @@ impl fmt::Display for GameError {
                 write!(f, "card #{card}'s event needs {}'s to have happened first", names.join(" or "))
             }
             GameError::EventPlayed { card } => write!(f, "card #{card}'s event has already been played — conduct its operation, or pass to skip it"),
+            GameError::NeedsDice { card } => write!(f, "card #{card}'s event draws on chance — play it with dice"),
+            GameError::EventTooLate { card } => write!(f, "card #{card}'s event can't be played in the Late War"),
             GameError::OpsNotGranted { allowed } => write!(f, "this card's event only allows {allowed}"),
             GameError::WarNotRolled => write!(f, "a war ends when it's rolled on a target (roll <country>), or abandoned"),
             GameError::War(e) => write!(f, "{e}"),
@@ -1042,6 +1049,17 @@ impl Game {
     /// see [`crate::cards::Hands::remove_from_game`]) and hands the turn
     /// to the other side, same as [`Game::confirm`]/[`Game::cancel`].
     pub fn play_event(&mut self, map: &WorldMap, cards: &CardCatalog) -> Result<EventOutcome, GameError> {
+        if let Some(card) = self.card
+            && events::needs_dice(card.id)
+        {
+            return Err(GameError::NeedsDice { card: card.id });
+        }
+        self.play_event_with(map, cards, &mut Dice::from_seed(0))
+    }
+
+    /// [`Game::play_event`] for every card, including the ones whose event draws on
+    /// chance (Terrorism's random discard). Draws nothing for any other card.
+    pub fn play_event_with(&mut self, map: &WorldMap, cards: &CardCatalog, dice: &mut Dice) -> Result<EventOutcome, GameError> {
         if self.winner.is_some() {
             return Err(GameError::GameOver);
         }
@@ -1055,10 +1073,34 @@ impl Game {
         if !events::is_implemented(card.id) {
             return Err(GameError::EventNotImplemented { card: card.id });
         }
-        match events::blocked(card.id, self.hands.removed()) {
+        match events::blocked_at(card.id, self.hands.removed(), self.status.turn) {
             Some(events::Blocked::Prevented { by }) => return Err(GameError::EventPrevented { card: card.id, by }),
             Some(events::Blocked::Requires { any_of }) => return Err(GameError::EventRequires { card: card.id, any_of }),
+            Some(events::Blocked::LateWar) => return Err(GameError::EventTooLate { card: card.id }),
             None => {}
+        }
+
+        // Aldrich Ames Remix: the USSR picks a card out of the (revealed) US hand to
+        // discard. With nothing there, only the reveal happens, through the ordinary event.
+        if card.id == CardId(98) {
+            let us_hand: Vec<(CardId, String)> = self.hands.hand(Superpower::Us).iter().map(|&c| (c, cards.card(c).name.clone())).collect();
+            if let Some(pick) = EventChoice::pick_from_hand(map, &self.board, card.id, Superpower::Ussr, &us_hand) {
+                self.op = Some(Operation::Event(pick));
+                return Ok(EventOutcome::Pending { card: card.id, chooser: Superpower::Ussr });
+            }
+        }
+
+        // The Cambridge Five: the USSR may add 1 influence in a region named by a scoring
+        // card in the US hand (Southeast Asia isn't a region, so its card names none).
+        if card.id == CardId(104) {
+            let scoring: Vec<CardId> = self.hands.hand(Superpower::Us).iter().copied().filter(|&c| cards.card(c).scoring).collect();
+            let mut regions: Vec<Region> = scoring.iter().filter_map(|&c| events::scoring::region_of(c)).collect();
+            regions.dedup();
+            let reveal = events::Reveal { side: Superpower::Us, cards: scoring };
+            if let Some(choice) = EventChoice::in_named_regions(map, &self.board, card.id, &regions, reveal) {
+                self.op = Some(Operation::Event(choice));
+                return Ok(EventOutcome::Pending { card: card.id, chooser: Superpower::Ussr });
+            }
         }
 
         // Blockade and Debt Crisis first ask the US to discard a 3+ ops card
@@ -1103,11 +1145,23 @@ impl Game {
         }
 
         let mut outcome = events::resolve(map, &self.board, &self.status, card.id).expect("is_implemented checked above");
-        // Fill in a revealed hand now, so the result handed back to the caller (and its modal) lists the cards too.
-        if let EventOutcome::Effect(result) = &mut outcome
-            && let Some(reveal) = &mut result.reveals
-        {
-            reveal.cards = self.hands.hand(reveal.side).to_vec();
+        // Fill in what depends on the hands now, so the result handed back to the caller
+        // (and its modal) carries it as well as the log.
+        if let EventOutcome::Effect(result) = &mut outcome {
+            if let Some(reveal) = &mut result.reveals {
+                // The Cambridge Five shows only the scoring cards.
+                reveal.cards = self.hands.hand(reveal.side).iter().copied().filter(|&c| card.id != CardId(104) || cards.card(c).scoring).collect();
+            }
+            if card.id == CardId(92) {
+                // Terrorism: the opponent loses cards at random (two for the US once #82 is out).
+                let victim = self.status.active.opponent();
+                let n = if victim == Superpower::Us && self.hands.removed().contains(&CardId(82)) { 2 } else { 1 };
+                let mut hand = self.hands.hand(victim).to_vec();
+                for _ in 0..n.min(hand.len()) {
+                    let i = dice.index(hand.len());
+                    result.discards.push((victim, hand.remove(i)));
+                }
+            }
         }
 
         match &outcome {
@@ -1149,15 +1203,12 @@ impl Game {
     /// hands the turn over unless that ended the game. The one path both
     /// [`Game::play_event`] (fixed effects) and [`Game::confirm`] (a
     /// finished choice) use.
-    fn finish_effect(&mut self, mut result: EffectResult, grant: Option<OpsGrant>) {
+    fn finish_effect(&mut self, result: EffectResult, grant: Option<OpsGrant>) {
         self.log_card_selected();
-        if let Some(reveal) = &mut result.reveals {
-            reveal.cards = self.hands.hand(reveal.side).to_vec();
-        }
-        if let Some((side, card)) = result.discards
-            && self.hands.remove(side, card).is_some()
-        {
-            self.hands.discard(card);
+        for &(side, card) in &result.discards {
+            if self.hands.remove(side, card).is_some() {
+                self.hands.discard(card);
+            }
         }
         for change in &result.influence {
             self.board.set_influence(change.country, change.side, change.after);

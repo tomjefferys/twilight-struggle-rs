@@ -110,11 +110,11 @@ pub fn render_status_bar_with(
             (_, Some(Operation::Event(e))) if !e.gate_cards().is_empty() => {
                 let name = card.map(|c| c.name.as_str()).unwrap_or("?");
                 let line = match e.mode() {
-                    None => format!(
-                        "{name} · {} must discard a card worth 3+ ops or suffer · [ ] pick a card · space discard it · 1 keep your cards · then c",
-                        e.chooser()
-                    ),
-                    Some(i) => format!("{name} · {} · c confirm · ⌫ undo · [ ] space 1 change → {}", e.chooser(), e.modes()[i].label),
+                    None if e.gate_offset() == 0 => {
+                        format!("{name} · {} {} · [ ] pick a card · space discard it · then c", e.chooser(), e.gate_prompt())
+                    }
+                    None => format!("{name} · {} {} · [ ] pick a card · space discard it · 1 keep your cards · then c", e.chooser(), e.gate_prompt()),
+                    Some(i) => format!("{name} · {} · c confirm · ⌫ undo · [ ] space change → {}", e.chooser(), e.modes()[i].label),
                 };
                 (line, side_style(e.chooser()).bold())
             }

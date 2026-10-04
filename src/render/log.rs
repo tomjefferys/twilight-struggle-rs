@@ -299,7 +299,7 @@ fn event_detail(map: &WorldMap, cards: &CardCatalog, result: &EffectResult, vp_a
     if result.mil_ops != 0 {
         parts.push(format!("{} Mil Ops {:+}", result.player, result.mil_ops));
     }
-    if let Some((side, card)) = result.discards {
+    for &(side, card) in &result.discards {
         parts.push(format!("{side} discards {}", cards.card(card).name));
     }
     if let Some(reveal) = &result.reveals {

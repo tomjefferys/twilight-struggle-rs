@@ -32,7 +32,7 @@
 
 use std::fmt;
 
-use super::effects::{ChinaTransfer, EffectResult, InfluenceChange};
+use super::effects::{ChinaTransfer, EffectResult, InfluenceChange, Reveal};
 use super::OpsGrant;
 use crate::board::Board;
 use crate::cards::CardId;
@@ -64,6 +64,27 @@ pub enum Where {
     Any(&'static [Where]),
     /// Those of the inner set that aren't battlegrounds.
     NonBattleground(&'static Where),
+    /// Any country in one of these regions (a set only known at play time, e.g. the regions
+    /// the scoring cards in a hand name).
+    Regions(RegionSet),
+}
+
+/// A set of regions, as one bit per [`Region::ALL`] entry.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct RegionSet(u8);
+
+impl RegionSet {
+    pub fn of(regions: &[Region]) -> Self {
+        RegionSet(regions.iter().fold(0, |m, r| m | 1 << Self::bit(*r)))
+    }
+
+    fn bit(region: Region) -> usize {
+        Region::ALL.iter().position(|&r| r == region).expect("every region is in ALL")
+    }
+
+    pub fn contains(self, region: Region) -> bool {
+        self.0 & (1 << Self::bit(region)) != 0
+    }
 }
 
 impl Where {
@@ -77,6 +98,7 @@ impl Where {
             Where::AdjacentTo(name) => map.id_by_name(name).is_some_and(|n| c.adjacent.contains(&n)),
             Where::Any(parts) => parts.iter().any(|w| w.contains(map, id)),
             Where::NonBattleground(inner) => !c.battleground && inner.contains(map, id),
+            Where::Regions(set) => set.contains(c.region),
         }
     }
 }
@@ -227,8 +249,8 @@ struct Extra {
     mil_ops: i8,
     /// The game ends, the VP leader winning (Wargames).
     ends_game: bool,
-    /// The chooser discards this card from their hand (Blockade, Latin American Debt Crisis).
-    discard: Option<CardId>,
+    /// This side loses this card from its hand (Blockade, Latin American Debt Crisis, Aldrich Ames).
+    discard: Option<(Superpower, CardId)>,
     /// Choosing this mode hands the event on to its follow-up session (Debt Crisis: the USSR's doubling).
     then: bool,
 }
@@ -312,9 +334,17 @@ pub struct EventChoice {
     changes: Vec<InfluenceChange>,
     /// The operation this event allows once it's done (Junta), fixed when it opens.
     grant: Option<OpsGrant>,
-    /// The cards a discard-or-suffer decision (Blockade, Debt Crisis) offers
-    /// to discard, in mode order after the first (decline) mode; empty otherwise.
+    /// The cards a pick-a-card decision (Blockade, Debt Crisis, Aldrich Ames) offers
+    /// to discard, in mode order after `gate_offset` leading modes; empty otherwise.
     gate: Vec<CardId>,
+    /// Whose hand `gate` is in.
+    gate_side: Superpower,
+    /// How many modes come before the first card (1 for a decline mode, else 0).
+    gate_offset: usize,
+    /// What the decision asks, for the status bar.
+    gate_prompt: String,
+    /// A hand the event shows (Aldrich Ames, Cambridge Five), reported in the result.
+    reveal: Option<Reveal>,
     /// The session a "declined" gate hands on to (Debt Crisis's doubling).
     follow_up: Option<Box<EventChoice>>,
     /// Whether this is such a follow-up: the card has gone irrevocably, so
@@ -345,6 +375,10 @@ impl EventChoice {
             changes: Vec::new(),
             grant: None,
             gate: Vec::new(),
+            gate_side: Superpower::Us,
+            gate_offset: 0,
+            gate_prompt: String::new(),
+            reveal: None,
             follow_up: None,
             second_stage: false,
         };
@@ -374,11 +408,14 @@ impl EventChoice {
             ongoing: None,
             vp: 0,
             china: None,
-            extra: Extra { discard: Some(*id), ..Extra::NONE },
+            extra: Extra { discard: Some((gate.decider, *id)), ..Extra::NONE },
         }));
         let spec = Spec { chooser: gate.decider, optional: false, modes };
         let mut choice = Self::from_spec(map, board, card, spec);
         choice.gate = candidates.iter().map(|(id, _)| *id).collect();
+        choice.gate_side = gate.decider;
+        choice.gate_offset = 1;
+        choice.gate_prompt = format!("must discard a card worth {GATE_MIN_OPS}+ ops or suffer");
         if let Some(then) = gate.then {
             let mut next = Self::from_spec(map, board, card, then(map, board, status));
             next.second_stage = true;
@@ -387,15 +424,78 @@ impl EventChoice {
         Some(choice)
     }
 
-    /// The cards a discard-or-suffer decision offers, if this is one —
-    /// mode `i + 1` discards `gate_cards()[i]`, mode 0 declines.
+    /// Aldrich Ames Remix (#98): the USSR discards one card of its choice from the US `hand`
+    /// (`(card, name)`), and the whole hand is open to it for the rest of the turn. `None` if
+    /// the hand is empty — then only the reveal happens, through the card's ordinary event.
+    pub fn pick_from_hand(map: &WorldMap, board: &Board, card: CardId, picker: Superpower, hand: &[(CardId, String)]) -> Option<Self> {
+        if hand.is_empty() {
+            return None;
+        }
+        let victim = picker.opponent();
+        let modes = hand
+            .iter()
+            .map(|(id, name)| Mode {
+                label: format!("discard {name}"),
+                fixed: Vec::new(),
+                rule: None,
+                ongoing: Some(OngoingEffect::HandRevealed { side: victim, card: card.0 }),
+                vp: 0,
+                china: None,
+                extra: Extra { discard: Some((victim, *id)), ..Extra::NONE },
+            })
+            .collect();
+        let mut choice = Self::from_spec(map, board, card, Spec { chooser: picker, optional: false, modes });
+        choice.gate = hand.iter().map(|(id, _)| *id).collect();
+        choice.gate_side = victim;
+        choice.gate_offset = 0;
+        choice.gate_prompt = format!("picks a card from the {victim} hand to discard");
+        choice.reveal = Some(Reveal { side: victim, cards: choice.gate.clone() });
+        Some(choice)
+    }
+
+    /// The Cambridge Five (#104): the USSR may add 1 influence to a single country in one of
+    /// `regions` (those the scoring cards in the US hand name). `reveal` is that hand's scoring
+    /// cards, reported in the result. `None` if no region qualifies.
+    pub fn in_named_regions(map: &WorldMap, board: &Board, card: CardId, regions: &[Region], reveal: Reveal) -> Option<Self> {
+        if regions.is_empty() {
+            return None;
+        }
+        let names: Vec<String> = regions.iter().map(|r| r.to_string()).collect();
+        let spec = Spec::single(
+            Ussr,
+            format!("add 1 USSR influence to one country in {}", names.join(" or ")),
+            Rule::add(Ussr, Eligible::new(Where::Regions(RegionSet::of(regions))), 1, 1, 1),
+        )
+        .optional();
+        let mut choice = Self::from_spec(map, board, card, spec);
+        choice.reveal = Some(reveal);
+        Some(choice)
+    }
+
+    /// The cards a pick-a-card decision offers, if this is one — mode
+    /// `gate_offset() + i` discards `gate_cards()[i]`.
     pub fn gate_cards(&self) -> &[CardId] {
         &self.gate
     }
 
+    /// Whose hand [`EventChoice::gate_cards`] are in.
+    pub fn gate_side(&self) -> Superpower {
+        self.gate_side
+    }
+
+    /// How many modes precede the first card (Blockade's "keep your cards" is one).
+    pub fn gate_offset(&self) -> usize {
+        self.gate_offset
+    }
+
+    /// What the decision asks of its chooser.
+    pub fn gate_prompt(&self) -> &str {
+        &self.gate_prompt
+    }
+
     /// The card the chosen mode discards, if it does.
     pub fn chosen_discard(&self) -> Option<CardId> {
-        self.mode.and_then(|i| self.modes[i].extra.discard)
+        self.mode.and_then(|i| self.modes[i].extra.discard).map(|(_, card)| card)
     }
 
     /// The session to open next, if the chosen mode hands the event on.
@@ -850,8 +950,8 @@ impl EventChoice {
             space: None,
             mil_ops: extra.mil_ops,
             ends_game: extra.ends_game,
-            reveals: None,
-            discards: extra.discard.map(|c| (self.chooser, c)),
+            reveals: self.reveal.clone(),
+            discards: extra.discard.into_iter().collect(),
         }
     }
 
@@ -867,7 +967,7 @@ impl EventChoice {
     /// Whether this event only designates something (no countries to
     /// pick), so the map views have nothing to mark as live.
     pub fn is_designation(&self) -> bool {
-        self.modes.iter().all(|m| m.rule.is_none() && m.ongoing.is_some())
+        self.modes.iter().all(|m| m.rule.is_none() && matches!(m.ongoing, Some(OngoingEffect::Chernobyl { .. })))
     }
 
     /// Whether the event is settled by choosing a mode alone: no countries

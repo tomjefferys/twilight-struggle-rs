@@ -78,6 +78,9 @@ pub enum OngoingEffect {
     Chernobyl { region: Region },
     /// #109: the USSR gets 1 VP per US coup.
     YuriSamantha,
+    /// #26 CIA Created / #62 "Lone Gunman" / #98 Aldrich Ames Remix: `side`'s hand is
+    /// shown to its opponent for the rest of the turn. `card` is the card that revealed it.
+    HandRevealed { side: Superpower, card: u8 },
 }
 
 impl OngoingEffect {
@@ -94,6 +97,7 @@ impl OngoingEffect {
             OngoingEffect::IranContra => 93,
             OngoingEffect::Chernobyl { .. } => 94,
             OngoingEffect::YuriSamantha => 109,
+            OngoingEffect::HandRevealed { card, .. } => *card,
         })
     }
 
@@ -106,6 +110,8 @@ impl OngoingEffect {
             OngoingEffect::Chernobyl { .. } => Superpower::Us,
             OngoingEffect::RedScare { penalised } => penalised.opponent(),
             OngoingEffect::DeathSquads { beneficiary } => *beneficiary,
+            // The side that gets to look.
+            OngoingEffect::HandRevealed { side, .. } => side.opponent(),
         }
     }
 }
@@ -125,6 +131,10 @@ pub struct TurnEffects {
     pub iran_contra: bool,
     pub chernobyl: Option<Region>,
     pub yuri_samantha: bool,
+    /// The card that has revealed the US hand to the USSR, if any.
+    pub us_hand_revealed: Option<u8>,
+    /// The card that has revealed the USSR hand to the US, if any.
+    pub ussr_hand_revealed: Option<u8>,
 }
 
 impl TurnEffects {
@@ -145,6 +155,8 @@ impl TurnEffects {
             OngoingEffect::IranContra => self.iran_contra = true,
             OngoingEffect::Chernobyl { region } => self.chernobyl = Some(region),
             OngoingEffect::YuriSamantha => self.yuri_samantha = true,
+            OngoingEffect::HandRevealed { side: Superpower::Us, card } => self.us_hand_revealed = Some(card),
+            OngoingEffect::HandRevealed { side: Superpower::Ussr, card } => self.ussr_hand_revealed = Some(card),
         }
     }
 
@@ -181,7 +193,21 @@ impl TurnEffects {
         if self.yuri_samantha {
             v.push(OngoingEffect::YuriSamantha);
         }
+        if let Some(card) = self.us_hand_revealed {
+            v.push(OngoingEffect::HandRevealed { side: Superpower::Us, card });
+        }
+        if let Some(card) = self.ussr_hand_revealed {
+            v.push(OngoingEffect::HandRevealed { side: Superpower::Ussr, card });
+        }
         v
+    }
+
+    /// Whether `side`'s hand is open to its opponent this turn.
+    pub fn hand_revealed(&self, side: Superpower) -> bool {
+        match side {
+            Superpower::Us => self.us_hand_revealed.is_some(),
+            Superpower::Ussr => self.ussr_hand_revealed.is_some(),
+        }
     }
 
     /// The ops value `side`'s card of printed value `base` is worth right

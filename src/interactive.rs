@@ -213,7 +213,7 @@ pub fn run(
     // Each side's selected index into its own hand (China Card appended
     // last, when it holds it) — kept per side, indexed via `side_index`,
     // so passing the turn back and forth doesn't lose either side's place.
-    let mut hand_selected: [usize; 2] = [0, 0];
+    let mut hand_selected = HandUi::default();
     // Whether the selected card's full detail is overlaid on the current
     // screen. Survives ordinary navigation (the hand and its overlay
     // aren't tied to any one screen) but is always closed by an `Esc`
@@ -274,7 +274,10 @@ pub fn run(
                 if !std::mem::take(&mut sticky) {
                     message = None;
                 }
-                if zoomed {
+                // `c` still confirms a choice that's waiting for it (a discard decision, say)
+                // while a card is zoomed: the player is usually looking at the card they picked.
+                let confirming = key.code == KeyCode::Char('c') && pending_choice_reminder(game, cards).is_some();
+                if zoomed && !confirming {
                     // The zoomed card is modal: it obscures the map, so
                     // only hand navigation/selection and the keys that
                     // close the overlay do anything here — no operation or
@@ -296,6 +299,16 @@ pub fn run(
                 match key.code {
                     KeyCode::Esc if matches!(screen, Screen::World { .. }) => return Ok(()),
                     KeyCode::Char('q') => return Ok(()),
+                    KeyCode::Char('v') => {
+                        let opponent = game.active().opponent();
+                        if peeking_allowed(game) {
+                            hand_selected.peek = !hand_selected.peek;
+                            zoomed = false;
+                        } else {
+                            hand_selected.peek = false;
+                            message = Some(format!("the {opponent} hand isn't revealed this turn"));
+                        }
+                    }
                     KeyCode::Char('z') => {
                         if zoom_card(game, &hand_selected).is_some() {
                             zoomed = !zoomed;
@@ -324,7 +337,7 @@ pub fn run(
                         }
                         Err(e) => message = Some(e.to_string()),
                     },
-                    KeyCode::Char('e') => match game.play_event(map, cards) {
+                    KeyCode::Char('e') => match game.play_event_with(map, cards, dice) {
                         Ok(EventOutcome::Scoring(result)) => {
                             let vp_after = game.status().vp;
                             zoomed = false;
@@ -727,6 +740,14 @@ fn begin(game: &mut Game, kind: OperationKind) -> Option<String> {
     }
 }
 
+/// The hand strip's state: each side's selected slot, and whether it is
+/// showing the opponent's (revealed) hand instead of the active side's own.
+#[derive(Debug, Default)]
+struct HandUi {
+    selected: [usize; 2],
+    peek: bool,
+}
+
 /// Indexes `hand_selected` by side — `Us` and `Ussr` each get their own
 /// slot, so swapping the active side never loses the other side's place
 /// in its own hand.
@@ -751,22 +772,22 @@ fn hand_item_count(game: &Game, side: Superpower) -> usize {
 /// index runs past the held hand (`render_hand`'s own doc: the China Card
 /// is always the strip's final slot). `None` on an empty hand, the one
 /// case `Space`/`z` both already treat as a no-op.
-fn selected_hand_card(game: &Game, hand_selected: &[usize; 2]) -> Option<CardId> {
-    let side = hand_side(game);
+fn selected_hand_card(game: &Game, hand_selected: &HandUi) -> Option<CardId> {
+    let side = hand_side(game, hand_selected.peek);
     let hand = game.hand(side);
     let count = hand_item_count(game, side);
     if count == 0 {
         return None;
     }
-    let idx = hand_selected[side_index(side)].min(count - 1);
+    let idx = hand_selected.selected[side_index(side)].min(count - 1);
     Some(if idx < hand.len() { hand[idx] } else { CHINA_CARD })
 }
 
 /// The card `z` zooms on: whichever card is in play, if any (it has left
 /// the hand, so the strip's selection no longer points at it), else the
 /// strip's current selection.
-fn zoom_card(game: &Game, hand_selected: &[usize; 2]) -> Option<CardId> {
-    if discard_gate_open(game) {
+fn zoom_card(game: &Game, hand_selected: &HandUi) -> Option<CardId> {
+    if discard_gate_open(game) || hand_selected.peek {
         return selected_hand_card(game, hand_selected);
     }
     game.card_in_play().or_else(|| selected_hand_card(game, hand_selected))
@@ -782,6 +803,9 @@ fn pending_choice_reminder(game: &Game, cards: &CardCatalog) -> Option<String> {
     }
     let i = e.mode()?;
     Some(match e.chosen_discard() {
+        Some(card) if e.gate_side() != e.chooser() => {
+            format!("{} will discard {} from the {} hand — c to confirm, ⌫ to undo", e.chooser(), cards.card(card).name, e.gate_side())
+        }
         Some(card) => format!("{} will discard {} — c to confirm, ⌫ to undo", e.chooser(), cards.card(card).name),
         None => format!("{} — c to confirm, ⌫ to undo", e.modes()[i].label),
     })
@@ -795,11 +819,19 @@ fn discard_gate_open(game: &Game) -> bool {
 
 /// Whose hand the strip shows and navigates: the side that has to discard,
 /// while a discard decision is open, else the active side.
-fn hand_side(game: &Game) -> Superpower {
+fn hand_side(game: &Game, peek: bool) -> Superpower {
     match game.operation() {
-        Some(Operation::Event(e)) if !e.gate_cards().is_empty() => e.chooser(),
+        Some(Operation::Event(e)) if !e.gate_cards().is_empty() => e.gate_side(),
+        _ if peek && peeking_allowed(game) => game.active().opponent(),
         _ => game.active(),
     }
+}
+
+/// Whether the active side may look at its opponent's hand right now: only
+/// while an event (CIA Created, "Lone Gunman", Aldrich Ames Remix) has
+/// revealed it for the turn.
+fn peeking_allowed(game: &Game) -> bool {
+    game.status().effects.hand_revealed(game.active().opponent())
 }
 
 /// `[`/`]`/`Space` share this handler between the normal keymap and the
@@ -810,7 +842,7 @@ fn hand_side(game: &Game) -> Superpower {
 /// closes an open zoom, same as selecting it) and returning the status
 /// message either way. A no-op (returning `None`, `*zoomed` untouched) on
 /// an empty hand.
-fn handle_hand_key(code: KeyCode, game: &mut Game, map: &WorldMap, cards: &CardCatalog, hand_selected: &mut [usize; 2], zoomed: &mut bool) -> Option<String> {
+fn handle_hand_key(code: KeyCode, game: &mut Game, map: &WorldMap, cards: &CardCatalog, hand_selected: &mut HandUi, zoomed: &mut bool) -> Option<String> {
     match code {
         KeyCode::Char('[') | KeyCode::BackTab => {
             cycle_hand(game, hand_selected, -1);
@@ -826,13 +858,17 @@ fn handle_hand_key(code: KeyCode, game: &mut Game, map: &WorldMap, cards: &CardC
             let name = &cards.card(id).name;
             let Some(Operation::Event(e)) = game.operation() else { return None };
             let Some(slot) = e.gate_cards().iter().position(|&c| c == id) else {
-                return Some(format!("{name} isn't worth {}+ ops — pick another card, or 1 to keep your cards", twilight_struggle::events::choice::GATE_MIN_OPS));
+                return Some(format!("{name} can't be discarded for this — pick another card"));
             };
             let side = e.chooser();
-            Some(match game.choose_mode(map, slot + 1) {
+            let mode = slot + e.gate_offset();
+            Some(match game.choose_mode(map, mode) {
                 Ok(()) => format!("{side} will discard {name} — c to confirm"),
                 Err(e) => e.to_string(),
             })
+        }
+        KeyCode::Char(' ') if hand_selected.peek && peeking_allowed(game) => {
+            Some(format!("that's the {} hand — v to go back to your own", game.active().opponent()))
         }
         KeyCode::Char(' ') => {
             let id = selected_hand_card(game, hand_selected)?;
@@ -852,15 +888,15 @@ fn handle_hand_key(code: KeyCode, game: &mut Game, map: &WorldMap, cards: &CardC
 /// `[`/`]`: moves the active side's own hand selection by `delta` (`-1` or
 /// `1`), wrapping around either end. A no-op when that side's hand (plus a
 /// possible China Card) is empty — there's nothing to select.
-fn cycle_hand(game: &Game, hand_selected: &mut [usize; 2], delta: i32) {
-    let side = hand_side(game);
+fn cycle_hand(game: &Game, hand_selected: &mut HandUi, delta: i32) {
+    let side = hand_side(game, hand_selected.peek);
     let count = hand_item_count(game, side);
-    if count == 0 || (game.card_in_play().is_some() && !discard_gate_open(game)) {
+    if count == 0 || (game.card_in_play().is_some() && !discard_gate_open(game) && !hand_selected.peek) {
         return;
     }
     let idx = side_index(side);
-    let current = hand_selected[idx].min(count - 1) as i32;
-    hand_selected[idx] = (current + delta).rem_euclid(count as i32) as usize;
+    let current = hand_selected.selected[idx].min(count - 1) as i32;
+    hand_selected.selected[idx] = (current + delta).rem_euclid(count as i32) as usize;
 }
 
 /// Moves `selected` one step within `region`'s display grid via
@@ -915,14 +951,17 @@ fn draw(
     cards: &CardCatalog,
     game: &Game,
     message: Option<&str>,
-    hand_selected: &[usize; 2],
+    hand_selected: &HandUi,
     zoomed: bool,
     modal: &VecDeque<Modal>,
     color: ColorMode,
 ) -> io::Result<()> {
     // A choice waiting only for its confirmation stays on the message row
     // (unless something more pressing replaced it) until confirmed or undone.
-    let reminder = pending_choice_reminder(game, cards);
+    let reminder = pending_choice_reminder(game, cards).or_else(|| {
+        (hand_selected.peek && peeking_allowed(game) && !discard_gate_open(game))
+            .then(|| format!("showing the {} hand (revealed) — v to return to your own", game.active().opponent()))
+    });
     let message = message.or(reminder.as_deref());
     let board = game.board();
     let op = game.operation();
@@ -932,12 +971,12 @@ fn draw(
         Screen::Country { selected, .. } => render_country(map, layout, board, *selected, op, ViewMode::Interactive),
     };
 
-    let side = hand_side(game);
+    let side = hand_side(game, hand_selected.peek);
     let status = game.status();
     let china = (status.china_card == side).then_some(status.china_card_face_up);
     let hand = game.hand(side);
     let item_count = hand.len() + china.is_some() as usize;
-    let selected_idx = (item_count > 0).then(|| hand_selected[side_index(side)].min(item_count - 1));
+    let selected_idx = (item_count > 0).then(|| hand_selected.selected[side_index(side)].min(item_count - 1));
     let hand_canvas = render_hand(cards, hand, china, side, selected_idx, game.card_in_play_slot().filter(|_| side == game.active()));
 
     if zoomed && let Some(id) = zoom_card(game, hand_selected) {

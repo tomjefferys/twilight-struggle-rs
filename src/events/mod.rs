@@ -165,6 +165,28 @@ pub enum Blocked {
     Prevented { by: CardId },
     /// It needs one of these cards' events to have happened first.
     Requires { any_of: &'static [CardId] },
+    /// The card's event can't be played in the Late War (turn 8 on).
+    LateWar,
+}
+
+/// The first turn of the Late War.
+pub const LATE_WAR_TURN: u8 = 8;
+
+/// Cards whose event can't be played in the Late War (The Cambridge Five).
+const NOT_IN_LATE_WAR: &[u8] = &[104];
+
+/// [`blocked`], plus the clauses that depend on the turn.
+pub fn blocked_at(card: CardId, removed: &[CardId], turn: u8) -> Option<Blocked> {
+    if NOT_IN_LATE_WAR.contains(&card.0) && turn >= LATE_WAR_TURN {
+        return Some(Blocked::LateWar);
+    }
+    blocked(card, removed)
+}
+
+/// Whether resolving `card`'s event draws on chance (Terrorism's random discard), and so
+/// needs `Game::play_event_with`'s dice.
+pub fn needs_dice(card: CardId) -> bool {
+    card.0 == 92
 }
 
 /// Cards whose event is barred once another card's event has happened.

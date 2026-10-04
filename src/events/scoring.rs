@@ -57,6 +57,12 @@ const REGION_SCORING: &[(CardId, RegionScoring)] = &[
 /// marks removed).
 pub const SOUTHEAST_ASIA: CardId = CardId(38);
 
+/// The region a regional scoring card is named for — `None` for Southeast Asia
+/// Scoring (a sub-region, not a region) and for any other card.
+pub fn region_of(card: CardId) -> Option<Region> {
+    REGION_SCORING.iter().find(|&&(id, _)| id == card).map(|(_, r)| r.region)
+}
+
 /// Whether `card` is one of the seven scoring cards this module knows how
 /// to resolve — every `scoring` card in the catalog, once this stage is
 /// wired in.

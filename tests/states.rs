@@ -394,7 +394,7 @@ fn every_implemented_event_plays_through_game() {
                 game.hands_mut().remove_from_game(any_of[0]);
             }
             game.play_card(&cards, id).unwrap_or_else(|e| panic!("{} ({side}): play_card: {e}", card.name));
-            game.play_event(&map, &cards).unwrap_or_else(|e| panic!("{} ({side}): play_event: {e}", card.name));
+            game.play_event_with(&map, &cards, &mut twilight_struggle::Dice::from_seed(3)).unwrap_or_else(|e| panic!("{} ({side}): play_event: {e}", card.name));
             // A choice card opens a session for its own side; let a random
             // chooser carry it out — every session must be finishable.
             let mut ai = twilight_struggle::RandomAi::from_seed(7);
@@ -2586,5 +2586,206 @@ mod discard_or_suffer {
                 assert!(game.operation().is_none() && game.active() == Superpower::Us, "{state} seed {seed}");
             }
         }
+    }
+}
+
+mod hands {
+    use super::*;
+    use twilight_struggle::game::GameError;
+    use twilight_struggle::ops::Operation;
+    use twilight_struggle::{CountryId, Dice};
+
+    fn id(map: &WorldMap, name: &str) -> CountryId {
+        map.id_by_name(name).unwrap_or_else(|| panic!("no country {name}"))
+    }
+
+    fn start(file: &str, state: &str, card: &str) -> (WorldMap, CardCatalog, Game) {
+        let (map, cards, lib) = fixtures();
+        let (scenario, _) = lib.load(&map, &cards, &format!("{file}/{state}")).unwrap_or_else(|e| panic!("{state}: {e}"));
+        let mut game = Game::from_scenario(&scenario);
+        game.play_card(&cards, cards.id_by_name(card).unwrap()).unwrap();
+        (map, cards, game)
+    }
+
+    fn names(cards: &CardCatalog, ids: &[twilight_struggle::cards::CardId]) -> Vec<String> {
+        ids.iter().map(|&c| cards.card(c).name.clone()).collect()
+    }
+
+    #[test]
+    fn terrorism_needs_dice_and_discards_one_random_card() {
+        let (map, cards, mut game) = start("events", "terrorism", "Terrorism");
+        assert!(matches!(game.play_event(&map, &cards), Err(GameError::NeedsDice { .. })));
+        let EventOutcome::Effect(result) = game.play_event_with(&map, &cards, &mut Dice::from_seed(5)).unwrap() else { panic!("a fixed effect") };
+        assert_eq!(result.discards.len(), 1);
+        let (side, card) = result.discards[0];
+        assert_eq!(side, Superpower::Us);
+        assert!(game.discards().contains(&card) && !game.hand(Superpower::Us).contains(&card));
+        assert_eq!(game.hand(Superpower::Us).len(), 2);
+        assert_eq!(game.active(), Superpower::Us);
+    }
+
+    #[test]
+    fn terrorism_picks_differently_for_different_dice() {
+        let mut seen = std::collections::HashSet::new();
+        for seed in 0..30 {
+            let (map, cards, mut game) = start("events", "terrorism", "Terrorism");
+            let EventOutcome::Effect(r) = game.play_event_with(&map, &cards, &mut Dice::from_seed(seed)).unwrap() else { panic!() };
+            seen.insert(r.discards[0].1);
+        }
+        assert_eq!(seen.len(), 3, "every card in the hand can be the one lost");
+    }
+
+    #[test]
+    fn terrorism_costs_the_us_two_cards_once_the_hostage_crisis_has_been_played() {
+        let (map, cards, mut game) = start("events", "terrorism-after-hostage-crisis", "Terrorism");
+        let EventOutcome::Effect(result) = game.play_event_with(&map, &cards, &mut Dice::from_seed(1)).unwrap() else { panic!() };
+        assert_eq!(result.discards.len(), 2);
+        assert_ne!(result.discards[0].1, result.discards[1].1, "two different cards");
+        assert_eq!(game.hand(Superpower::Us).len(), 1);
+    }
+
+    #[test]
+    fn terrorism_played_by_the_us_costs_the_ussr_only_one_card() {
+        let (map, cards, mut game) = start("events", "terrorism-played-by-us", "Terrorism");
+        let EventOutcome::Effect(result) = game.play_event_with(&map, &cards, &mut Dice::from_seed(1)).unwrap() else { panic!() };
+        assert_eq!(result.discards.len(), 1);
+        assert_eq!(result.discards[0].0, Superpower::Ussr);
+        assert_eq!(game.hand(Superpower::Ussr).len(), 2);
+    }
+
+    #[test]
+    fn terrorism_with_an_empty_hand_discards_nothing() {
+        let (map, cards, mut game) = start("events", "terrorism", "Terrorism");
+        for c in game.hand(Superpower::Us).to_vec() {
+            game.hands_mut().take(c);
+            game.hands_mut().discard(c);
+        }
+        assert!(game.hand(Superpower::Us).is_empty());
+        let EventOutcome::Effect(result) = game.play_event_with(&map, &cards, &mut Dice::from_seed(1)).unwrap() else { panic!() };
+        assert!(result.discards.is_empty());
+    }
+
+    #[test]
+    fn aldrich_ames_lets_the_ussr_pick_a_us_card_and_opens_the_hand_for_the_turn() {
+        let (map, cards, mut game) = start("choices", "aldrich-ames", "Aldrich Ames Remix");
+        assert!(matches!(game.play_event(&map, &cards).unwrap(), EventOutcome::Pending { chooser: Superpower::Ussr, .. }));
+        assert_eq!(game.decider(), Superpower::Ussr);
+        let Some(Operation::Event(e)) = game.operation() else { panic!("a session is open") };
+        assert_eq!(e.gate_side(), Superpower::Us, "the USSR picks from the US hand");
+        assert_eq!((e.gate_offset(), e.gate_cards().len()), (0, 3));
+        assert!(matches!(game.confirm(), Err(GameError::EventIncomplete { .. })), "a card has to be picked");
+        game.choose_mode(&map, 1).unwrap();
+        game.confirm().unwrap();
+        let containment = cards.id_by_name("Containment").unwrap();
+        assert!(game.discards().contains(&containment) && !game.hand(Superpower::Us).contains(&containment));
+        assert_eq!(game.hand(Superpower::Us).len(), 2);
+        assert!(game.status().effects.hand_revealed(Superpower::Us), "the US hand is open for the rest of the turn");
+        assert!(game.removed_from_game().contains(&cards.id_by_name("Aldrich Ames Remix").unwrap()));
+        assert_eq!(game.active(), Superpower::Us);
+    }
+
+    #[test]
+    fn aldrich_ames_is_a_card_pick_not_a_region_designation() {
+        let (map, cards, mut game) = start("choices", "aldrich-ames", "Aldrich Ames Remix");
+        game.play_event(&map, &cards).unwrap();
+        let Some(Operation::Event(e)) = game.operation() else { panic!("a session is open") };
+        assert!(!e.is_designation(), "only Chernobyl designates a region");
+        assert!(e.is_mode_only(), "so the map is left alone and the confirm reminder applies");
+        assert!(e.prompt().contains("discard Marshall Plan") && !e.prompt().contains("region"), "{}", e.prompt());
+    }
+
+    #[test]
+    fn the_revealed_hand_closes_when_the_turn_rolls_over() {
+        let (map, cards, mut game) = start("choices", "aldrich-ames", "Aldrich Ames Remix");
+        game.play_event(&map, &cards).unwrap();
+        game.choose_mode(&map, 0).unwrap();
+        game.confirm().unwrap();
+        assert!(game.status().effects.hand_revealed(Superpower::Us));
+        // Both sides pass out the rest of the turn.
+        for _ in 0..30 {
+            if game.status().turn > 8 {
+                break;
+            }
+            game.pass().unwrap();
+        }
+        assert!(!game.status().effects.hand_revealed(Superpower::Us));
+    }
+
+    #[test]
+    fn aldrich_ames_with_an_empty_us_hand_only_reveals() {
+        let (map, cards, mut game) = start("choices", "aldrich-ames-empty-hand", "Aldrich Ames Remix");
+        assert!(matches!(game.play_event(&map, &cards).unwrap(), EventOutcome::Effect(_)));
+        assert!(game.status().effects.hand_revealed(Superpower::Us));
+        assert_eq!(game.active(), Superpower::Us);
+    }
+
+    #[test]
+    fn the_ai_can_finish_aldrich_ames() {
+        use twilight_struggle::{play_turn, RandomAi};
+        for seed in 0..10 {
+            let (map, cards, mut game) = start("choices", "aldrich-ames", "Aldrich Ames Remix");
+            game.play_event(&map, &cards).unwrap();
+            let mut ai = RandomAi::from_seed(seed);
+            let mut dice = Dice::from_seed(seed);
+            for _ in 0..3 {
+                if game.operation().is_some() {
+                    play_turn(&mut ai, &mut game, &map, &cards, &mut dice).unwrap();
+                }
+            }
+            assert!(game.operation().is_none() && game.hand(Superpower::Us).len() == 2, "seed {seed}");
+        }
+    }
+
+    #[test]
+    fn cia_created_and_lone_gunman_open_the_hand_for_the_turn_too() {
+        let (map, cards, mut game) = start("events", "cia-created", "CIA Created");
+        game.play_event(&map, &cards).unwrap();
+        assert!(game.status().effects.hand_revealed(Superpower::Ussr));
+        assert!(!game.status().effects.hand_revealed(Superpower::Us));
+        let (map, cards, mut game) = start("events", "lone-gunman", "“Lone Gunman”");
+        game.play_event(&map, &cards).unwrap();
+        assert!(game.status().effects.hand_revealed(Superpower::Us));
+    }
+
+    #[test]
+    fn cambridge_five_reveals_the_scoring_cards_and_adds_influence_in_a_named_region() {
+        let (map, cards, mut game) = start("events", "cambridge-five", "The Cambridge Five");
+        assert!(matches!(game.play_event(&map, &cards).unwrap(), EventOutcome::Pending { chooser: Superpower::Ussr, .. }));
+        assert!(game.place(&map, id(&map, "Egypt")).is_err(), "the Middle East isn't named by a revealed card");
+        game.place(&map, id(&map, "Poland")).unwrap();
+        assert!(game.place(&map, id(&map, "Japan")).is_err(), "a single country only");
+        game.confirm().unwrap();
+        assert_eq!(game.board().influence(id(&map, "Poland"), Superpower::Ussr), 1);
+        let logged = game.log().entries().iter().rev().find_map(|e| match &e.event {
+            twilight_struggle::Event::EventResolved { result, .. } => Some(result.clone()),
+            _ => None,
+        });
+        let reveal = logged.and_then(|r| r.reveals).expect("the scoring cards are revealed");
+        assert_eq!(names(&cards, &reveal.cards), ["Asia Scoring", "Europe Scoring", "Southeast Asia Scoring"]);
+        assert_eq!(game.active(), Superpower::Us);
+    }
+
+    #[test]
+    fn cambridge_five_can_be_skipped_and_southeast_asia_names_no_region() {
+        let (map, cards, mut game) = start("events", "cambridge-five", "The Cambridge Five");
+        game.play_event(&map, &cards).unwrap();
+        game.confirm().expect("a 'may' event can be confirmed with nothing added");
+        assert_eq!(game.board().influence(id(&map, "Poland"), Superpower::Ussr), 0);
+    }
+
+    #[test]
+    fn cambridge_five_with_no_scoring_cards_just_reveals_nothing() {
+        let (map, cards, mut game) = start("events", "cambridge-five-no-scoring-cards", "The Cambridge Five");
+        let EventOutcome::Effect(result) = game.play_event(&map, &cards).unwrap() else { panic!("resolves on the spot") };
+        assert_eq!(result.reveals.map(|r| r.cards.len()), Some(0));
+        assert_eq!(game.active(), Superpower::Us);
+    }
+
+    #[test]
+    fn cambridge_five_cannot_be_played_in_the_late_war() {
+        let (map, cards, mut game) = start("events", "cambridge-five-late-war", "The Cambridge Five");
+        assert!(matches!(game.play_event(&map, &cards), Err(GameError::EventTooLate { .. })));
+        let legal = game.legal_actions(&map, &cards);
+        assert!(!legal.contains(&twilight_struggle::Action::Event), "not offered to the AI either");
     }
 }

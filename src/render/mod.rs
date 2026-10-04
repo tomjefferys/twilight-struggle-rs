@@ -485,7 +485,11 @@ pub(crate) fn mode_only_hint(e: &crate::events::EventChoice) -> String {
     if e.gate_cards().is_empty() {
         format!("←→↑↓ look around · 1-{} choose · ⌫ undo · c done", e.modes().len().min(9))
     } else {
-        "←→↑↓ look around · [ ] pick a card · space discard it · 1 keep your cards · ⌫ undo · c done".to_string()
+        if e.gate_offset() == 0 {
+            "←→↑↓ look around · [ ] pick a card · space discard it · ⌫ undo · c done".to_string()
+        } else {
+            "←→↑↓ look around · [ ] pick a card · space discard it · 1 keep your cards · ⌫ undo · c done".to_string()
+        }
     }
 }
 
@@ -540,6 +544,7 @@ pub fn ongoing_effect_line(effect: &crate::ongoing::OngoingEffect) -> String {
         E::IranContra => "Iran-Contra: US realignment rolls -1".to_string(),
         E::Chernobyl { region } => format!("Chernobyl: USSR can't add influence in {region} with ops"),
         E::YuriSamantha => "Yuri and Samantha: USSR +1 VP per US coup".to_string(),
+        E::HandRevealed { side, .. } => format!("{side} hand revealed to {} (v to view it)", side.opponent()),
     }
 }
 

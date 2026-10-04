@@ -159,7 +159,7 @@ impl Game {
                     }
                     actions.push(Action::Pass);
                 } else if let Some(id) = self.card_in_play() {
-                    if events::is_implemented(id) && events::blocked(id, self.removed_from_game()).is_none() {
+                    if events::is_implemented(id) && events::blocked_at(id, self.removed_from_game(), self.status().turn).is_none() {
                         actions.push(Action::Event);
                     }
                     // A scoring card has no ops for `Begin` to spend —
@@ -200,7 +200,7 @@ impl Game {
         match action {
             Action::PlayCard(id) => self.play_card(cards, id),
             Action::Begin(kind) => self.begin(kind),
-            Action::Event => self.play_event(map, cards).map(|_| ()),
+            Action::Event => self.play_event_with(map, cards, dice).map(|_| ()),
             Action::Place(id) => self.place(map, id).map(|_| ()),
             Action::Unplace(id) => self.unplace(map, id),
             Action::ChooseMode(i) => self.choose_mode(map, i as usize),

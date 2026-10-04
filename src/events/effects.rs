@@ -78,8 +78,9 @@ pub struct EffectResult {
     pub ends_game: bool,
     /// A hand the event reveals.
     pub reveals: Option<Reveal>,
-    /// A card a side discards from its hand (declining Blockade's penalty by paying a card).
-    pub discards: Option<(Superpower, CardId)>,
+    /// Cards discarded from a side's hand: paid to avoid Blockade's penalty, picked
+    /// out of the US hand by Aldrich Ames, or lost at random to Terrorism.
+    pub discards: Vec<(Superpower, CardId)>,
 }
 
 /// What one card's effect function sees and mutates: the board as it was
@@ -279,11 +280,14 @@ const EFFECTS: &[(u8, Effect)] = &[
     (89, soviets_shoot_down_kal_007),
     (90, glasnost),
     (91, ortega_elected_in_nicaragua),
+    (92, terrorism),
     (93, iran_contra_scandal),
     (96, tear_down_this_wall),
     (97, an_evil_empire),
+    (98, aldrich_ames_remix),
     (101, solidarity),
     (103, defectors),
+    (104, the_cambridge_five),
     (107, che),
     (109, yuri_and_samantha),
     (110, awacs_sale_to_saudis),
@@ -304,7 +308,7 @@ pub fn resolve(map: &WorldMap, board: &Board, status: &GameStatus, card: CardId)
     let effect = effect_for(card)?;
     let mut ctx = Ctx { map, before: board, working: board.clone(), status, changes: Vec::new(), vp_delta: 0, defcon: None, ongoing: None, lasting: None, cancels: None, china: None, space: None, reveals: None };
     effect(&mut ctx);
-    Some(EffectResult { card, player: status.active, influence: ctx.changes, vp_delta: ctx.vp_delta, defcon: ctx.defcon, ongoing: ctx.ongoing, lasting: ctx.lasting, cancels: ctx.cancels, china: ctx.china, space: ctx.space, mil_ops: 0, ends_game: false, reveals: ctx.reveals, discards: None })
+    Some(EffectResult { card, player: status.active, influence: ctx.changes, vp_delta: ctx.vp_delta, defcon: ctx.defcon, ongoing: ctx.ongoing, lasting: ctx.lasting, cancels: ctx.cancels, china: ctx.china, space: ctx.space, mil_ops: 0, ends_game: false, reveals: ctx.reveals, discards: Vec::new() })
 }
 
 // ---- the cards, in printed-number order ----
@@ -380,6 +384,7 @@ fn red_scare_purge(c: &mut Ctx) {
 /// #26 CIA Created: the USSR reveals its hand; the US may then use the card's ops (`events::ops_grant`).
 fn cia_created(c: &mut Ctx) {
     c.reveal_hand(Superpower::Ussr);
+    c.start(OngoingEffect::HandRevealed { side: Superpower::Ussr, card: 26 });
 }
 
 /// #34 Nuclear Test Ban: the player receives VP from the *current* level, then improves it by 2.
@@ -450,6 +455,7 @@ fn opec(c: &mut Ctx) {
 /// #62 “Lone Gunman”: the US reveals its hand; the USSR may then use the card's ops.
 fn lone_gunman(c: &mut Ctx) {
     c.reveal_hand(Superpower::Us);
+    c.start(OngoingEffect::HandRevealed { side: Superpower::Us, card: 62 });
 }
 
 /// #64 Panama Canal Returned
@@ -558,6 +564,10 @@ fn ortega_elected_in_nicaragua(c: &mut Ctx) {
     c.set("Nicaragua", Superpower::Us, 0);
 }
 
+/// #92 Terrorism: the opponent discards 1 card at random (2 for the US once #82 has been
+/// played). Chance is `Game::play_event_with`'s business, so nothing happens here.
+fn terrorism(_: &mut Ctx) {}
+
 /// #93 Iran-Contra Scandal: US realignment rolls get -1 for the rest of the turn.
 fn iran_contra_scandal(c: &mut Ctx) {
     c.start(OngoingEffect::IranContra);
@@ -634,6 +644,19 @@ fn shuttle_diplomacy(c: &mut Ctx) {
 /// #101 Solidarity (needs #68 first — see `events::blocked`).
 fn solidarity(c: &mut Ctx) {
     c.add("Poland", Superpower::Us, 3);
+}
+
+/// #98 Aldrich Ames Remix with no US cards to discard: the US hand (empty) is still open
+/// to the USSR for the rest of the turn. (With cards, `EventChoice::pick_from_hand`.)
+fn aldrich_ames_remix(c: &mut Ctx) {
+    c.reveal_hand(Superpower::Us);
+    c.start(OngoingEffect::HandRevealed { side: Superpower::Us, card: 98 });
+}
+
+/// #104 The Cambridge Five with no region to add influence to: the US scoring cards are
+/// revealed and that is all. (Otherwise `EventChoice::in_named_regions`.)
+fn the_cambridge_five(c: &mut Ctx) {
+    c.reveal_hand(Superpower::Us);
 }
 
 /// #103 Defectors: played in an action round by the USSR, the US gets 1 VP. (The headline
