@@ -1040,7 +1040,7 @@ fn comecon_session() -> (WorldMap, MapLayout, Board, Operation, CountryId) {
     let mut choice = EventChoice::new(&map, &scenario.board, &scenario.status, card).unwrap();
     let hungary = map.id_by_name("Hungary").unwrap();
     choice.step(&map, hungary, twilight_struggle::choice::Sign::Plus).unwrap();
-    (map, layout, scenario.board, Operation::Event(choice), hungary)
+    (map, layout, scenario.board, Operation::Event(Box::new(choice)), hungary)
 }
 
 #[test]

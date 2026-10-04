@@ -2789,3 +2789,362 @@ mod hands {
         assert!(!legal.contains(&twilight_struggle::Action::Event), "not offered to the AI either");
     }
 }
+
+mod contests {
+    use super::*;
+    use twilight_struggle::events::Contest;
+    use twilight_struggle::game::GameError;
+    use twilight_struggle::ops::Operation;
+    use twilight_struggle::{CountryId, Dice, OperationKind};
+
+    fn id(map: &WorldMap, name: &str) -> CountryId {
+        map.id_by_name(name).unwrap_or_else(|| panic!("no country {name}"))
+    }
+
+    /// A seed whose first two rolls are `(a, b)`.
+    fn seed_for(a: u8, b: u8) -> u64 {
+        (0..10_000)
+            .find(|&s| {
+                let mut d = Dice::from_seed(s);
+                d.roll() == a && d.roll() == b
+            })
+            .unwrap()
+    }
+
+    fn start(state: &str, card: &str) -> (WorldMap, CardCatalog, Game) {
+        let (map, cards, lib) = fixtures();
+        let (scenario, _) = lib.load(&map, &cards, &format!("events/{state}")).unwrap_or_else(|e| panic!("{state}: {e}"));
+        let mut game = Game::from_scenario(&scenario);
+        game.play_card(&cards, cards.id_by_name(card).unwrap()).unwrap();
+        (map, cards, game)
+    }
+
+    fn event_choice_modes(game: &Game) -> Vec<String> {
+        let Some(Operation::Event(e)) = game.operation() else { panic!("an event is open") };
+        e.modes().iter().map(|m| m.label.clone()).collect()
+    }
+
+    fn last_contest(game: &Game) -> Contest {
+        game.log()
+            .entries()
+            .iter()
+            .rev()
+            .find_map(|e| match &e.event {
+                twilight_struggle::Event::EventResolved { result, .. } => result.contest.clone(),
+                _ => None,
+            })
+            .expect("the event logged its roll-off")
+    }
+
+    // ---- Summit ----
+
+    /// Plays Summit's event (opening its roll-off) and throws the dice `(us, ussr)`.
+    fn summit_rolled(game: &mut Game, map: &WorldMap, cards: &CardCatalog, a: u8, b: u8) -> Contest {
+        assert!(matches!(game.play_event(map, cards).unwrap(), EventOutcome::Pending { .. }));
+        game.roll_contest(map, &mut Dice::from_seed(seed_for(a, b))).unwrap()
+    }
+
+    #[test]
+    fn summit_waits_for_the_roll_and_shows_the_odds_first() {
+        let (map, cards, mut game) = start("summit", "Summit");
+        let outcome = game.play_event(&map, &cards).unwrap();
+        assert!(matches!(outcome, EventOutcome::Pending { chooser: Superpower::Us, .. }), "the player rolls");
+        let Some(Operation::Event(e)) = game.operation() else { panic!("an event is open") };
+        assert!(e.needs_roll() && e.has_session_modal());
+        let (us, ussr) = e.pending_bonuses().unwrap();
+        assert_eq!((us.0, us.1.as_str(), ussr.0), (1, "Central America", 0));
+        // US d6+1 against USSR d6: 21 ways to win, 5 to tie, 10 to lose.
+        assert_eq!(e.roll_odds(), Some((21, 5, 10)));
+        assert!(matches!(game.confirm(), Err(GameError::EventIncomplete { .. })), "roll first");
+        assert!(matches!(game.choose_mode(&map, 0), Err(GameError::Event(_))), "nothing to choose before the roll");
+    }
+
+    #[test]
+    fn an_unrolled_summit_can_be_taken_back_but_a_rolled_one_cannot() {
+        let (map, cards, mut game) = start("summit", "Summit");
+        game.play_event(&map, &cards).unwrap();
+        game.abandon().expect("nothing has been rolled");
+        assert!(game.card_in_play().is_some() && game.operation().is_none());
+
+        game.play_event(&map, &cards).unwrap();
+        game.roll_contest(&map, &mut Dice::from_seed(seed_for(4, 3))).unwrap();
+        assert!(matches!(game.abandon(), Err(GameError::CannotAbandonEvent)), "the dice are thrown");
+        assert!(matches!(game.roll_contest(&map, &mut Dice::from_seed(1)), Err(GameError::Event(_))), "only one roll");
+    }
+
+    #[test]
+    fn summit_adds_one_per_dominated_or_controlled_region_and_the_winner_chooses_defcon() {
+        let (map, cards, mut game) = start("summit", "Summit");
+        let contest = summit_rolled(&mut game, &map, &cards, 4, 3);
+        assert_eq!(contest.winner(), Some(Superpower::Us), "US 4+1 beats USSR 3");
+        assert_eq!(game.decider(), Superpower::Us);
+        let labels = event_choice_modes(&game);
+        assert_eq!(labels, ["improve DEFCON to 4", "degrade DEFCON to 2", "leave DEFCON at 3"]);
+        assert!(matches!(game.confirm(), Err(GameError::EventIncomplete { .. })), "the winner has to choose");
+        game.choose_mode(&map, 0).unwrap();
+        game.confirm().unwrap();
+        assert_eq!((game.status().defcon, game.status().vp), (4, 2));
+        assert_eq!(game.active(), Superpower::Ussr);
+        let contest = last_contest(&game);
+        assert_eq!((contest.us.die, contest.us.bonus, contest.us.note.as_str(), contest.ussr.die, contest.ussr.bonus), (4, 1, "Central America", 3, 0));
+    }
+
+    #[test]
+    fn summit_won_by_the_ussr_pays_the_ussr_and_the_ussr_picks() {
+        let (map, cards, mut game) = start("summit", "Summit");
+        let contest = summit_rolled(&mut game, &map, &cards, 1, 4);
+        assert_eq!(contest.winner(), Some(Superpower::Ussr), "US 1+1 loses to USSR 4");
+        assert_eq!(game.decider(), Superpower::Ussr, "the winner decides, though the US is phasing");
+        game.choose_mode(&map, 1).unwrap();
+        game.confirm().unwrap();
+        assert_eq!((game.status().defcon, game.status().vp), (2, -2));
+    }
+
+    #[test]
+    fn the_summit_winner_can_change_their_mind_before_confirming() {
+        let (map, cards, mut game) = start("summit", "Summit");
+        summit_rolled(&mut game, &map, &cards, 1, 4);
+        game.choose_mode(&map, 0).unwrap();
+        assert!(game.clear_event_mode(&map), "the USSR isn't the phasing side, but it is the one choosing");
+        assert!(matches!(game.confirm(), Err(GameError::EventIncomplete { .. })));
+    }
+
+    #[test]
+    fn summit_winner_may_leave_defcon_alone() {
+        let (map, cards, mut game) = start("summit", "Summit");
+        summit_rolled(&mut game, &map, &cards, 6, 1);
+        game.choose_mode(&map, 2).unwrap();
+        game.confirm().unwrap();
+        assert_eq!((game.status().defcon, game.status().vp), (3, 2));
+    }
+
+    #[test]
+    fn a_summit_tie_changes_nothing_and_is_not_rerolled() {
+        let (map, cards, mut game) = start("summit", "Summit");
+        let contest = summit_rolled(&mut game, &map, &cards, 3, 4);
+        assert_eq!((contest.us.total(), contest.ussr.total(), contest.rerolls), (4, 4, 0));
+        assert_eq!(contest.winner(), None);
+        game.confirm().expect("a tie is simply acknowledged");
+        assert_eq!((game.status().defcon, game.status().vp, game.active()), (3, 0, Superpower::Ussr));
+        assert_eq!(last_contest(&game).winner(), None, "the tie is in the log");
+    }
+
+    #[test]
+    fn summit_cannot_improve_past_defcon_5() {
+        let (map, cards, mut game) = start("summit", "Summit");
+        game.status_mut().defcon = 5;
+        summit_rolled(&mut game, &map, &cards, 4, 3);
+        assert_eq!(event_choice_modes(&game), ["degrade DEFCON to 4", "leave DEFCON at 5"]);
+    }
+
+    #[test]
+    fn a_summit_degrade_to_defcon_1_loses_for_the_phasing_player() {
+        let (map, cards, mut game) = start("summit", "Summit");
+        game.status_mut().defcon = 2;
+        // The US plays it and the USSR wins the roll-off and degrades DEFCON: rule 8.1.3 still
+        // blames the phasing player, so the US loses.
+        summit_rolled(&mut game, &map, &cards, 1, 5);
+        assert_eq!(game.decider(), Superpower::Ussr);
+        game.choose_mode(&map, 1).unwrap();
+        game.confirm().unwrap();
+        assert_eq!(game.status().defcon, 1);
+        assert_eq!(game.winner(), Some(Victory { side: Superpower::Ussr, reason: VictoryReason::Defcon }), "the phasing player (the US) is responsible");
+    }
+
+    #[test]
+    fn the_modal_renders_the_odds_then_the_result_and_the_options() {
+        use twilight_struggle::render::render_event_session;
+        use twilight_struggle::ColorMode;
+        let (map, cards, mut game) = start("summit", "Summit");
+        game.play_event(&map, &cards).unwrap();
+        let Some(Operation::Event(e)) = game.operation() else { panic!() };
+        let before = render_event_session(&cards, e, game.status()).render(ColorMode::Never);
+        assert!(before.contains("Central America") && before.contains("21/36") && before.contains("r roll"), "{before}");
+        game.roll_contest(&map, &mut Dice::from_seed(seed_for(4, 3))).unwrap();
+        game.choose_mode(&map, 0).unwrap();
+        let Some(Operation::Event(e)) = game.operation() else { panic!() };
+        let after = render_event_session(&cards, e, game.status()).render(ColorMode::Never);
+        assert!(after.contains("USA wins") && after.contains("▶ 1) improve DEFCON to 4") && after.contains("DEFCON 3 → 4") && after.contains("+2 VP to the US"), "{after}");
+        assert!(after.contains("c confirm"), "{after}");
+        for line in before.lines().chain(after.lines()) {
+            assert!(line.chars().count() <= 68 + 1, "a line overflows the modal: {line:?}");
+        }
+    }
+
+    // ---- Olympic Games ----
+
+    #[test]
+    fn olympic_games_asks_the_sponsors_opponent_to_participate_or_boycott() {
+        let (map, cards, mut game) = start("olympic-games", "Olympic Games");
+        let outcome = game.play_event(&map, &cards).unwrap();
+        assert!(matches!(outcome, EventOutcome::Pending { chooser: Superpower::Us, .. }));
+        assert_eq!(game.decider(), Superpower::Us);
+        assert!(matches!(game.abandon(), Err(GameError::CannotAbandonEvent)), "the sponsor can't take it back");
+        let labels = event_choice_modes(&game);
+        assert!(labels[0].starts_with("participate") && labels[1].starts_with("boycott: DEFCON drops to 2"), "{labels:?}");
+        let Some(Operation::Event(e)) = game.operation() else { panic!() };
+        assert!(e.has_session_modal() && !e.needs_roll(), "nothing to roll until the US takes part");
+    }
+
+    #[test]
+    fn taking_part_waits_for_the_roll_with_the_sponsor_adding_two() {
+        let (map, cards, mut game) = start("olympic-games", "Olympic Games");
+        game.play_event(&map, &cards).unwrap();
+        game.choose_mode(&map, 0).unwrap();
+        let Some(Operation::Event(e)) = game.operation() else { panic!() };
+        assert!(e.needs_roll() && e.rerolls_ties());
+        let (us, ussr) = e.pending_bonuses().unwrap();
+        assert_eq!((us.0, ussr.0, ussr.1.as_str()), (0, 2, "sponsor"));
+        // US d6 against USSR d6+2: 6 ways to win, 4 to tie, 26 to lose.
+        assert_eq!(e.roll_odds(), Some((6, 4, 26)));
+        assert!(matches!(game.confirm(), Err(GameError::EventIncomplete { .. })), "roll first");
+        game.choose_mode(&map, 1).expect("they can still change their mind before the dice are thrown");
+        game.choose_mode(&map, 0).unwrap();
+    }
+
+    #[test]
+    fn participating_gives_the_roll_off_winner_2_vp_and_the_sponsor_adds_2() {
+        let (map, cards, mut game) = start("olympic-games", "Olympic Games");
+        game.play_event(&map, &cards).unwrap();
+        game.choose_mode(&map, 0).unwrap();
+        let contest = game.roll_contest(&map, &mut Dice::from_seed(seed_for(6, 2))).unwrap();
+        assert_eq!(contest.winner(), Some(Superpower::Us), "US 6 beats USSR 2+2");
+        game.confirm().unwrap();
+        assert_eq!(game.status().vp, 2);
+        let contest = last_contest(&game);
+        assert_eq!((contest.us.total(), contest.ussr.total(), contest.ussr.note.as_str()), (6, 4, "sponsor"));
+        assert_eq!((game.status().defcon, game.active()), (3, Superpower::Us));
+
+        let (map, cards, mut game) = start("olympic-games", "Olympic Games");
+        game.play_event(&map, &cards).unwrap();
+        game.choose_mode(&map, 0).unwrap();
+        game.roll_contest(&map, &mut Dice::from_seed(seed_for(2, 1))).unwrap();
+        game.confirm().unwrap();
+        assert_eq!(game.status().vp, -2, "USSR 1+2 = 3 beats US 2: the sponsor wins");
+    }
+
+    #[test]
+    fn olympic_ties_are_rerolled() {
+        // US 3 vs USSR 1+2 ties; the next pair breaks it.
+        let seed = (0..100_000)
+            .find(|&s| {
+                let mut d = Dice::from_seed(s);
+                d.roll() == 3 && d.roll() == 1 && d.roll() == 6 && d.roll() == 1
+            })
+            .unwrap();
+        let (map, cards, mut game) = start("olympic-games", "Olympic Games");
+        game.play_event(&map, &cards).unwrap();
+        game.choose_mode(&map, 0).unwrap();
+        game.roll_contest(&map, &mut Dice::from_seed(seed)).unwrap();
+        game.confirm().unwrap();
+        let contest = last_contest(&game);
+        assert_eq!(contest.rerolls, 1);
+        assert_eq!((contest.us.die, contest.ussr.die), (6, 1));
+        assert_eq!(game.status().vp, 2);
+    }
+
+    #[test]
+    fn once_the_dice_are_thrown_the_olympic_choice_is_locked() {
+        let (map, cards, mut game) = start("olympic-games", "Olympic Games");
+        game.play_event(&map, &cards).unwrap();
+        game.choose_mode(&map, 0).unwrap();
+        game.roll_contest(&map, &mut Dice::from_seed(1)).unwrap();
+        assert!(matches!(game.choose_mode(&map, 1), Err(GameError::Event(_))), "no switching to a boycott after seeing the result");
+        assert!(!game.clear_event_mode(&map));
+        assert!(matches!(game.roll_contest(&map, &mut Dice::from_seed(2)), Err(GameError::Event(_))), "only one roll");
+    }
+
+    #[test]
+    fn boycotting_drops_defcon_and_lets_the_sponsor_conduct_four_ops() {
+        let (map, cards, mut game) = start("olympic-games", "Olympic Games");
+        game.play_event(&map, &cards).unwrap();
+        game.choose_mode(&map, 1).unwrap();
+        let Some(Operation::Event(e)) = game.operation() else { panic!() };
+        assert!(!e.needs_roll(), "a boycott rolls nothing");
+        game.confirm().unwrap();
+        assert_eq!(game.status().defcon, 2);
+        assert_eq!(game.active(), Superpower::Ussr, "the sponsor still has the card in play");
+        let grant = game.ops_after_event().expect("the sponsor may conduct operations");
+        assert_eq!(grant.ops, Some(4));
+        assert_eq!(game.ops_available(), 4, "a 2-ops card, worth 4 for this");
+        game.begin(OperationKind::Influence).unwrap();
+        assert_eq!(game.operation().unwrap().ops_total(), 4);
+        game.place(&map, id(&map, "Poland")).unwrap();
+        game.confirm().unwrap();
+        assert_eq!(game.board().influence(id(&map, "Poland"), Superpower::Ussr), 2);
+        assert!(game.discards().contains(&cards.id_by_name("Olympic Games").unwrap()), "not removed after its event");
+        assert_eq!(game.active(), Superpower::Us);
+    }
+
+    #[test]
+    fn the_sponsor_can_skip_the_boycott_operations() {
+        let (map, cards, mut game) = start("olympic-games", "Olympic Games");
+        game.play_event(&map, &cards).unwrap();
+        game.choose_mode(&map, 1).unwrap();
+        game.confirm().unwrap();
+        game.pass().unwrap();
+        assert_eq!(game.active(), Superpower::Us);
+    }
+
+    #[test]
+    fn a_boycott_that_takes_defcon_to_1_loses_for_the_sponsor_as_the_phasing_player() {
+        let (map, cards, mut game) = start("olympic-games", "Olympic Games");
+        game.status_mut().defcon = 2;
+        game.play_event(&map, &cards).unwrap();
+        game.choose_mode(&map, 1).unwrap();
+        game.confirm().unwrap();
+        assert_eq!(game.winner(), Some(Victory { side: Superpower::Us, reason: VictoryReason::Defcon }), "the USSR is phasing, so it is responsible even though the US boycotted");
+    }
+
+    #[test]
+    fn the_olympic_modal_walks_through_choice_odds_and_result() {
+        use twilight_struggle::render::render_event_session;
+        use twilight_struggle::ColorMode;
+        let (map, cards, mut game) = start("olympic-games", "Olympic Games");
+        game.play_event(&map, &cards).unwrap();
+        let draw = |game: &Game| {
+            let Some(Operation::Event(e)) = game.operation() else { panic!() };
+            render_event_session(&cards, e, game.status()).render(ColorMode::Never)
+        };
+        let choosing = draw(&game);
+        assert!(choosing.contains("USSR sponsors") && choosing.contains("1) participate") && choosing.contains("2) boycott") && choosing.contains("1-2 choose"), "{choosing}");
+        game.choose_mode(&map, 0).unwrap();
+        let odds = draw(&game);
+        assert!(odds.contains("▶ 1) participate") && odds.contains("6/32") && odds.contains("26/32") && odds.contains("thrown again") && odds.contains("r roll"), "{odds}");
+        game.roll_contest(&map, &mut Dice::from_seed(seed_for(6, 2))).unwrap();
+        let rolled = draw(&game);
+        assert!(rolled.contains("USA wins the Olympic Games") && rolled.contains("+2 VP to the US") && rolled.contains("c confirm"), "{rolled}");
+        for line in rolled.lines().chain(odds.lines()).chain(choosing.lines()) {
+            assert!(line.chars().count() <= 68 + 1, "a line overflows the modal: {line:?}");
+        }
+
+        let (map, cards, mut game) = start("olympic-games", "Olympic Games");
+        game.play_event(&map, &cards).unwrap();
+        game.choose_mode(&map, 1).unwrap();
+        let Some(Operation::Event(e)) = game.operation() else { panic!() };
+        let boycott = render_event_session(&cards, e, game.status()).render(ColorMode::Never);
+        for line in boycott.lines() {
+            assert!(line.chars().count() <= 68 + 1, "a line overflows the modal: {line:?}");
+        }
+        assert!(boycott.contains("DEFCON 3 → 2") && boycott.contains("USSR may then conduct") && boycott.contains("worth 4 ops"), "{boycott}");
+    }
+
+    #[test]
+    fn the_ai_can_finish_both_decisions() {
+        use twilight_struggle::{play_turn, RandomAi};
+        for seed in 0..10 {
+            for (state, card) in [("summit", "Summit"), ("olympic-games", "Olympic Games")] {
+                let (map, cards, mut game) = start(state, card);
+                game.play_event(&map, &cards).unwrap();
+                let mut ai = RandomAi::from_seed(seed);
+                let mut dice = Dice::from_seed(seed);
+                for _ in 0..6 {
+                    if game.winner().is_none() && (game.operation().is_some() || game.ops_after_event().is_some()) {
+                        play_turn(&mut ai, &mut game, &map, &cards, &mut dice).unwrap();
+                    }
+                }
+                assert!(game.winner().is_some() || (game.operation().is_none() && game.ops_after_event().is_none()), "{state} seed {seed}");
+            }
+        }
+    }
+}

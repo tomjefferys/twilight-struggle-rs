@@ -122,6 +122,8 @@ pub fn render_status_bar_with(
                 let name = card.map(|c| c.name.as_str()).unwrap_or("?");
                 let n = e.modes().len();
                 let keys = match (e.mode(), e.is_designation()) {
+                    _ if e.needs_roll() && e.is_participation() => format!("r roll the dice · 1-{n} change · ⌫ clear"),
+                    _ if e.needs_roll() => "r roll the dice · ⌫ cancel the event".to_string(),
                     (None, false) if !e.gate_cards().is_empty() => "[ ] pick a card · space discard it · 1 keep your cards".to_string(),
                     (Some(_), false) if !e.gate_cards().is_empty() => "[ ] pick a card · space discard it · 1 keep · c done".to_string(),
                     (None, true) => format!("Enter on world map or 1-{n} to choose region"),
@@ -130,10 +132,14 @@ pub fn render_status_bar_with(
                     (Some(_), false) if !e.picks_countries() => format!("1-{n} change · c done"),
                     (Some(_), false) => "+ add · - remove · u undo · c done".to_string(),
                 };
-                (
-                    format!("{name} · {} · {keys}", operation_balance_line(layout, board, operation)),
-                    side_style(e.chooser()).bold(),
-                )
+                // A choice settled by its mode alone has a long prompt (the roll-off, the options):
+                // keep its keys in front where a narrow terminal won't clip them.
+                let line = if e.is_mode_only() {
+                    format!("{name} · {keys} · {}", operation_balance_line(layout, board, operation))
+                } else {
+                    format!("{name} · {} · {keys}", operation_balance_line(layout, board, operation))
+                };
+                (line, side_style(e.chooser()).bold())
             }
             (_, Some(operation)) => {
                 let name = card.map(|c| c.name.as_str()).unwrap_or("?");
@@ -146,7 +152,12 @@ pub fn render_status_bar_with(
                     .filter_map(|(on, k)| on.then_some(k))
                     .collect();
                 (
-                    format!("{} event played ({}) — {} · p skip the ops", card.name, ops_text(status, card), keys.join(" · ")),
+                    format!(
+                        "{} event played ({}) — {} · p skip the ops",
+                        card.name,
+                        grant.ops.map_or_else(|| ops_text(status, card), |o| format!("{} ops", status.effects.card_ops(o, status.active).0)),
+                        keys.join(" · ")
+                    ),
                     Style::color(Color::Selected),
                 )
             }
@@ -428,7 +439,7 @@ mod tests {
         // The US is phasing, but Comecon is the USSR's card.
         let comecon = cards.card(CardId(14));
         let choice = crate::events::EventChoice::new(&map, &board, &status, comecon.id).unwrap();
-        let op = Operation::Event(choice);
+        let op = Operation::Event(Box::new(choice));
         let text = render_status_bar(&layout, &board, &status, Some(comecon), Some(&op), None, 80).render(ColorMode::Never);
         let first = text.lines().next().unwrap();
         assert!(first.contains("USSR to act"), "{first}");

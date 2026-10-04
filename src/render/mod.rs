@@ -24,7 +24,7 @@ pub mod worldmap;
 
 pub use card::render_card;
 pub use country::render_country;
-pub use event::render_event_result;
+pub use event::{render_event_result, render_event_session};
 pub use hand::{render_hand, HAND_ROWS, HAND_WIDTH};
 pub use log::{log_entry_line, log_text, render_log};
 pub use region::render_region;
@@ -482,7 +482,11 @@ pub fn operation_balance_line(layout: &crate::layout::MapLayout, board: &crate::
 /// is open (a discard decision, a DEFCON level): browsing the map is still
 /// fine, but nothing on it is the event's business.
 pub(crate) fn mode_only_hint(e: &crate::events::EventChoice) -> String {
-    if e.gate_cards().is_empty() {
+    if e.needs_roll() && e.is_participation() {
+        "←→↑↓ look around · r roll the dice · 1-2 change · ⌫ clear".to_string()
+    } else if e.needs_roll() {
+        "←→↑↓ look around · r roll the dice · ⌫ cancel the event".to_string()
+    } else if e.gate_cards().is_empty() {
         format!("←→↑↓ look around · 1-{} choose · ⌫ undo · c done", e.modes().len().min(9))
     } else {
         if e.gate_offset() == 0 {

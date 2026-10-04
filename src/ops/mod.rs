@@ -70,7 +70,7 @@ pub enum Operation {
     /// A choice card's event in progress — see [`EventChoice`]. Spends no
     /// ops, and its [`Operation::side`] is the *chooser* (the card's own
     /// side), not necessarily the phasing player.
-    Event(EventChoice),
+    Event(Box<EventChoice>),
     /// A chosen-target war card's event awaiting its target — see
     /// [`War`]. Spends no ops; `Game::roll` on a target resolves it and
     /// closes it (and the turn) in one step.

@@ -58,6 +58,8 @@ pub enum Action {
     /// Choose which way to play an open multi-mode event (0-based) —
     /// [`Game::choose_mode`].
     ChooseMode(u8),
+    /// Throw the open event's roll-off (Summit) — [`Game::roll_contest`].
+    RollContest,
     /// Resolve one realignment roll, or a coup's one attempt, against this
     /// country — [`Game::roll`].
     Roll(CountryId),
@@ -105,6 +107,7 @@ impl Game {
                 }
                 actions.push(Action::Confirm);
             }
+            Some(Operation::Event(e)) if e.needs_roll() => actions.push(Action::RollContest),
             Some(Operation::Event(e)) => {
                 // Whoever `Game::decider` names — the event's chooser — is
                 // the one these are offered to. Every forward step spends a
@@ -205,6 +208,7 @@ impl Game {
             Action::Unplace(id) => self.unplace(map, id),
             Action::ChooseMode(i) => self.choose_mode(map, i as usize),
             Action::Roll(id) => self.roll(map, id, dice).map(|_| ()),
+            Action::RollContest => self.roll_contest(map, dice).map(|_| ()),
             Action::Confirm => self.confirm().map(|_| ()),
             Action::Space => self.space(dice).map(|_| ()),
             Action::Pass => self.pass(),

@@ -27,7 +27,7 @@ pub mod scoring;
 pub mod war;
 
 pub use choice::EventChoice;
-pub use effects::{ChinaTransfer, EffectResult, Reveal};
+pub use effects::{ChinaTransfer, Contest, ContestRoll, EffectResult, Reveal};
 pub use scoring::ScoringResult;
 pub use war::{War, WarResult};
 
@@ -74,11 +74,13 @@ pub struct OpsGrant {
     pub exclude: Option<crate::country::CountryId>,
     /// A second coup is allowed if this one removes US influence (Che).
     pub follow_up: bool,
+    /// The operation is worth this many ops instead of the card's own (Olympic Games' boycott: 4).
+    pub ops: Option<u8>,
 }
 
 impl OpsGrant {
     const fn kinds(influence: bool, realign: bool, coup: bool) -> OpsGrant {
-        OpsGrant { influence, realign, coup, scope: choice::Where::Everywhere, scope_label: "", exclude: None, follow_up: false }
+        OpsGrant { influence, realign, coup, scope: choice::Where::Everywhere, scope_label: "", exclude: None, follow_up: false, ops: None }
     }
 
     /// Any operation.
@@ -89,6 +91,11 @@ impl OpsGrant {
     /// Coups and realignments (not placement) within `scope`.
     const fn coup_or_realign_in(scope: choice::Where, label: &'static str) -> OpsGrant {
         OpsGrant { scope, scope_label: label, ..OpsGrant::kinds(false, true, true) }
+    }
+
+    /// The same grant, worth `ops` operation points rather than the card's own.
+    pub const fn with_ops(self, ops: u8) -> OpsGrant {
+        OpsGrant { ops: Some(ops), ..self }
     }
 
     pub fn allows(self, kind: crate::game::OperationKind) -> bool {
@@ -115,6 +122,9 @@ impl OpsGrant {
         let mut text = if kinds.len() == 3 { "any operation".to_string() } else { kinds.join(" or ") };
         if !self.scope_label.is_empty() {
             text = format!("{text} {}", self.scope_label);
+        }
+        if let Some(ops) = self.ops {
+            text.push_str(&format!(" as if the card were worth {ops} ops"));
         }
         if self.follow_up {
             text.push_str(" (and a second coup in a different country if it removes US influence)");
@@ -183,7 +193,7 @@ pub fn blocked_at(card: CardId, removed: &[CardId], turn: u8) -> Option<Blocked>
     blocked(card, removed)
 }
 
-/// Whether resolving `card`'s event draws on chance (Terrorism's random discard), and so
+/// Whether resolving `card`'s event draws on chance (Terrorism's random discard, , and so
 /// needs `Game::play_event_with`'s dice.
 pub fn needs_dice(card: CardId) -> bool {
     card.0 == 92

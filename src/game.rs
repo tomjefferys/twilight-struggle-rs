@@ -484,7 +484,11 @@ impl Game {
     /// play but no operation's open yet, else 0 — there's no ops to spend
     /// with nothing played.
     pub fn ops_available(&self) -> u8 {
-        self.op.as_ref().map(Operation::remaining).or(self.card.map(|c| self.status.effects.card_ops(c.ops, self.status.active).0)).unwrap_or(0)
+        self.op
+            .as_ref()
+            .map(Operation::remaining)
+            .or(self.card.map(|c| self.status.effects.card_ops(c.ops_after_event.and_then(|g| g.ops).unwrap_or(c.ops), self.status.active).0))
+            .unwrap_or(0)
     }
 
     /// The card currently in play, if any — taken from the active side's
@@ -634,7 +638,9 @@ impl Game {
         let scope = card.ops_after_event.and_then(OpsGrant::target_scope);
         let side = self.status.active;
         let effects = self.status.effects;
-        let (ops, _) = effects.card_ops(card.ops, side);
+        // An event can make the card worth something else for its operation (Olympic Games' boycott: 4).
+        let printed = card.ops_after_event.and_then(|g| g.ops).unwrap_or(card.ops);
+        let (ops, _) = effects.card_ops(printed, side);
         let bonuses = effects.ops_bonuses(side, card.id);
         self.op = Some(match kind {
             OperationKind::Influence => Operation::Influence(
@@ -774,6 +780,17 @@ impl Game {
         self.log_game_over();
     }
 
+    /// Throws the open event's roll-off — Summit's, once its player has seen the odds. The
+    /// winner becomes the one who decides (see [`Game::decider`]); nothing is applied until
+    /// [`Game::confirm`].
+    pub fn roll_contest(&mut self, map: &WorldMap, dice: &mut Dice) -> Result<events::Contest, GameError> {
+        match &mut self.op {
+            Some(Operation::Event(e)) => Ok(e.roll_contest(map, dice)?),
+            Some(op) => Err(GameError::WrongKind { open: op.verb() }),
+            None => Err(GameError::NoOperation),
+        }
+    }
+
     /// Takes back the single most recently placed influence point,
     /// refunding its ops — only meaningful for a placement. Refused (with
     /// no state changed) for a realignment or coup, whose rolls already
@@ -808,7 +825,7 @@ impl Game {
             let Operation::Event(e) = &mut op else { unreachable!() };
             // A declined gate hands the card on to its follow-up session.
             if let Some(next) = e.take_follow_up() {
-                self.op = Some(Operation::Event(next));
+                self.op = Some(Operation::Event(Box::new(next)));
                 return Ok(op);
             }
             let result = e.into_result(&self.status);
@@ -897,7 +914,7 @@ impl Game {
             // An event can be backed out of only by the side that chose to
             // play it, and only before anything has been picked.
             Some(Operation::Event(e)) => {
-                if e.is_pristine() && e.chooser() == self.status.active && !e.is_second_stage() {
+                if e.is_pristine() && e.chooser() == self.status.active && !e.is_second_stage() && e.contest().is_none() {
                     Ok(self.op.take().expect("checked Some above"))
                 } else {
                     Err(GameError::CannotAbandonEvent)
@@ -924,7 +941,7 @@ impl Game {
         match &mut self.op {
             // The victim of a discard-or-suffer card may change their mind too, though they aren't the phasing side.
             Some(Operation::Event(e))
-                if e.modes().len() > 1 && e.mode().is_some() && e.is_pristine() && (e.chooser() == active || !e.gate_cards().is_empty()) =>
+                if e.modes().len() > 1 && e.mode().is_some() && e.is_pristine() && (e.chooser() == active || !e.gate_cards().is_empty() || e.has_session_modal()) =>
             {
                 e.clear_mode(map).is_ok()
             }
@@ -1080,12 +1097,35 @@ impl Game {
             None => {}
         }
 
+        // Olympic Games: the sponsor's opponent chooses whether to take part; taking part
+        // is settled by a roll-off thrown with `Game::roll_contest`.
+        if card.id == CardId(20) {
+            let choice = EventChoice::olympics_pending(map, &self.board, &self.status, card.id, self.status.active);
+            let chooser = choice.chooser();
+            self.op = Some(Operation::Event(Box::new(choice)));
+            return Ok(EventOutcome::Pending { card: card.id, chooser });
+        }
+
+        // Summit: each side rolls (`Game::roll_contest`), +1 for every region it dominates
+        // or controls; the winner gets 2 VP and picks the DEFCON change. A tie changes nothing.
+        if card.id == CardId(45) {
+            let tiers = events::scoring::region_tiers(map, &self.board, &self.status.lasting);
+            let held = |ours: fn(&(Region, events::scoring::Tier, events::scoring::Tier)) -> events::scoring::Tier| -> (u8, String) {
+                let regions: Vec<String> =
+                    tiers.iter().filter(|t| matches!(ours(t), events::scoring::Tier::Domination | events::scoring::Tier::Control)).map(|t| t.0.to_string()).collect();
+                (regions.len() as u8, regions.join(", "))
+            };
+            let choice = EventChoice::summit_pending(map, &self.board, &self.status, card.id, held(|t| t.1), held(|t| t.2));
+            self.op = Some(Operation::Event(Box::new(choice)));
+            return Ok(EventOutcome::Pending { card: card.id, chooser: self.status.active });
+        }
+
         // Aldrich Ames Remix: the USSR picks a card out of the (revealed) US hand to
         // discard. With nothing there, only the reveal happens, through the ordinary event.
         if card.id == CardId(98) {
             let us_hand: Vec<(CardId, String)> = self.hands.hand(Superpower::Us).iter().map(|&c| (c, cards.card(c).name.clone())).collect();
             if let Some(pick) = EventChoice::pick_from_hand(map, &self.board, card.id, Superpower::Ussr, &us_hand) {
-                self.op = Some(Operation::Event(pick));
+                self.op = Some(Operation::Event(Box::new(pick)));
                 return Ok(EventOutcome::Pending { card: card.id, chooser: Superpower::Ussr });
             }
         }
@@ -1098,7 +1138,7 @@ impl Game {
             regions.dedup();
             let reveal = events::Reveal { side: Superpower::Us, cards: scoring };
             if let Some(choice) = EventChoice::in_named_regions(map, &self.board, card.id, &regions, reveal) {
-                self.op = Some(Operation::Event(choice));
+                self.op = Some(Operation::Event(Box::new(choice)));
                 return Ok(EventOutcome::Pending { card: card.id, chooser: Superpower::Ussr });
             }
         }
@@ -1115,7 +1155,7 @@ impl Game {
                 .map(|&c| (c, cards.card(c).name.clone()))
                 .collect();
             if let Some(gate) = EventChoice::discard_gate(map, &self.board, &self.status, card.id, &candidates) {
-                self.op = Some(Operation::Event(gate));
+                self.op = Some(Operation::Event(Box::new(gate)));
                 return Ok(EventOutcome::Pending { card: card.id, chooser: decider });
             }
         }
@@ -1140,7 +1180,7 @@ impl Game {
                 return Ok(EventOutcome::Effect(result));
             }
             let chooser = choice.chooser();
-            self.op = Some(Operation::Event(choice));
+            self.op = Some(Operation::Event(Box::new(choice)));
             return Ok(EventOutcome::Pending { card: card.id, chooser });
         }
 
@@ -1313,8 +1353,9 @@ impl Game {
     }
 
     /// Sets DEFCON to `level` (clamped to the track), ending the game
-    /// against the active side if it reaches 1 — only the active side's
-    /// own event can have just moved it, so they're the one who lost.
+    /// against the phasing (active) side if it reaches 1 — rule 8.1.3: the
+    /// phasing player is responsible for the marker reaching DEFCON 1, whoever's
+    /// choice actually moved it, and loses.
     fn apply_defcon(&mut self, level: u8) {
         self.status.defcon = level.clamp(1, 5);
         if self.status.defcon == 1 {

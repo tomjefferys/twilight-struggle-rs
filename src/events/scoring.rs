@@ -63,6 +63,18 @@ pub fn region_of(card: CardId) -> Option<Region> {
     REGION_SCORING.iter().find(|&&(id, _)| id == card).map(|(_, r)| r.region)
 }
 
+/// How far each side stands in every region right now, as scoring them would find:
+/// `(region, US tier, USSR tier)` — what Summit counts (Domination or Control).
+pub fn region_tiers(map: &WorldMap, board: &Board, lasting: &LastingEffects) -> Vec<(Region, Tier, Tier)> {
+    REGION_SCORING
+        .iter()
+        .filter_map(|&(card, _)| match resolve(map, board, lasting, card)?.kind {
+            ScoringKind::Region { region, us, ussr } => Some((region, us.tier, ussr.tier)),
+            ScoringKind::SoutheastAsia { .. } => None,
+        })
+        .collect()
+}
+
 /// Whether `card` is one of the seven scoring cards this module knows how
 /// to resolve — every `scoring` card in the catalog, once this stage is
 /// wired in.

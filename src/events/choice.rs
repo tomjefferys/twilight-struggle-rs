@@ -32,8 +32,9 @@
 
 use std::fmt;
 
-use super::effects::{ChinaTransfer, EffectResult, InfluenceChange, Reveal};
+use super::effects::{ChinaTransfer, Contest, EffectResult, InfluenceChange, Reveal};
 use super::OpsGrant;
+use crate::dice::Dice;
 use crate::board::Board;
 use crate::cards::CardId;
 use crate::country::{CountryId, Region, SubRegion, Superpower};
@@ -253,10 +254,28 @@ struct Extra {
     discard: Option<(Superpower, CardId)>,
     /// Choosing this mode hands the event on to its follow-up session (Debt Crisis: the USSR's doubling).
     then: bool,
+    /// Choosing this mode reports the event's roll-off (Summit, Olympic Games' participation).
+    contest: bool,
+    /// Choosing this mode lets the player who played the card conduct operations with it (Olympic Games' boycott).
+    grant: Option<OpsGrant>,
 }
 
 impl Extra {
-    const NONE: Extra = Extra { defcon: None, mil_ops: 0, ends_game: false, discard: None, then: false };
+    const NONE: Extra = Extra { defcon: None, mil_ops: 0, ends_game: false, discard: None, then: false, contest: false, grant: None };
+}
+
+/// One side's bonus to a roll-off and where it comes from.
+pub type RollBonus = (u8, String);
+
+/// Summit's roll-off before it has been thrown: each side's bonus and where it comes from, and
+/// the DEFCON the winner's options will start from.
+#[derive(Debug, Clone)]
+struct PendingRoll {
+    us: (u8, String),
+    ussr: (u8, String),
+    defcon: u8,
+    /// Ties are thrown again (Olympic Games) rather than standing (Summit).
+    reroll_ties: bool,
 }
 
 /// A card's whole choice: who chooses, whether they must finish, and the
@@ -296,11 +315,17 @@ pub enum EventChoiceError {
     /// Modes can't change once picks have been made.
     ModeLocked,
     NotAllowed { country: String, reason: String },
+    /// The event's roll-off hasn't been thrown yet.
+    RollFirst,
+    /// No roll-off is waiting.
+    NoRoll,
 }
 
 impl fmt::Display for EventChoiceError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            EventChoiceError::RollFirst => write!(f, "roll first (r)"),
+            EventChoiceError::NoRoll => write!(f, "there is no roll to make"),
             EventChoiceError::NoMode => write!(f, "choose which way to play this event first (mode <n>)"),
             EventChoiceError::BadMode { modes } => write!(f, "this event has {modes} mode(s)"),
             EventChoiceError::ModeLocked => write!(f, "undo the picks already made before changing mode"),
@@ -345,6 +370,16 @@ pub struct EventChoice {
     gate_prompt: String,
     /// A hand the event shows (Aldrich Ames, Cambridge Five), reported in the result.
     reveal: Option<Reveal>,
+    /// The roll-off the event has already held (Summit, Olympic Games), reported by the modes marked `contest`.
+    contest: Option<Contest>,
+    /// What the player is being told before choosing (the roll-off's outcome, who sponsors).
+    context: String,
+    /// A roll-off still to be thrown (Summit).
+    pending_roll: Option<PendingRoll>,
+    /// Whether the event runs in a modal of its own (Summit, Olympic Games).
+    session_modal: bool,
+    /// The mode that takes a roll-off to settle (Olympic Games' participation), if any.
+    roll_mode: Option<usize>,
     /// The session a "declined" gate hands on to (Debt Crisis's doubling).
     follow_up: Option<Box<EventChoice>>,
     /// Whether this is such a follow-up: the card has gone irrevocably, so
@@ -379,6 +414,11 @@ impl EventChoice {
             gate_offset: 0,
             gate_prompt: String::new(),
             reveal: None,
+            contest: None,
+            context: String::new(),
+            pending_roll: None,
+            session_modal: false,
+            roll_mode: None,
             follow_up: None,
             second_stage: false,
         };
@@ -521,7 +561,167 @@ impl EventChoice {
 
     /// The operation this event allows once confirmed, if any.
     pub fn grant(&self) -> Option<OpsGrant> {
-        self.grant
+        self.mode.and_then(|i| self.modes[i].extra.grant).or(self.grant)
+    }
+
+    /// Summit (#45), before anyone has rolled: each side rolls a die plus its bonus
+    /// (`(bonus, note)`, +1 per region it dominates or controls). Nothing can be chosen
+    /// until [`EventChoice::roll_contest`]; then the winner gets 2 VP and may improve or
+    /// degrade DEFCON by 1, or leave it be (a tie does nothing).
+    pub fn summit_pending(map: &WorldMap, board: &Board, status: &GameStatus, card: CardId, us: (u8, String), ussr: (u8, String)) -> Self {
+        let spec = Spec { chooser: status.active, optional: false, modes: Vec::new() };
+        let mut choice = Self::from_spec(map, board, card, spec);
+        choice.context = "Summit: roll-off between the superpowers".to_string();
+        choice.pending_roll = Some(PendingRoll { us, ussr, defcon: status.defcon, reroll_ties: false });
+        choice.session_modal = true;
+        choice
+    }
+
+    /// Whether a roll-off is still waiting to be thrown ([`EventChoice::roll_contest`]).
+    pub fn needs_roll(&self) -> bool {
+        self.pending_roll.is_some() && self.roll_mode.is_none_or(|m| self.mode == Some(m))
+    }
+
+    /// Whether the event is played in a modal of its own (Summit's roll, result and choice).
+    pub fn has_session_modal(&self) -> bool {
+        self.session_modal
+    }
+
+    /// The bonuses each side will roll with, `((US bonus, note), (USSR bonus, note))`, while the roll is pending.
+    pub fn pending_bonuses(&self) -> Option<(&RollBonus, &RollBonus)> {
+        self.pending_roll.as_ref().map(|p| (&p.us, &p.ussr))
+    }
+
+    /// How the pending roll-off will go, in 36ths: `(US wins, ties, USSR wins)`.
+    pub fn roll_odds(&self) -> Option<(u8, u8, u8)> {
+        let p = self.pending_roll.as_ref()?;
+        let (mut us, mut tie, mut ussr) = (0, 0, 0);
+        for a in 1..=6u8 {
+            for b in 1..=6u8 {
+                match (a + p.us.0).cmp(&(b + p.ussr.0)) {
+                    std::cmp::Ordering::Greater => us += 1,
+                    std::cmp::Ordering::Equal => tie += 1,
+                    std::cmp::Ordering::Less => ussr += 1,
+                }
+            }
+        }
+        Some((us, tie, ussr))
+    }
+
+    /// The roll-off, once thrown.
+    pub fn contest(&self) -> Option<&Contest> {
+        self.contest.as_ref()
+    }
+
+    /// Throws Summit's roll-off. The winner becomes the chooser and gets the DEFCON options; a
+    /// tie leaves a single "nothing happens" mode already chosen.
+    pub fn roll_contest(&mut self, map: &WorldMap, dice: &mut Dice) -> Result<Contest, EventChoiceError> {
+        if !self.needs_roll() {
+            return Err(EventChoiceError::NoRoll);
+        }
+        let p = self.pending_roll.take().expect("needs_roll checked");
+        let contest = Contest::roll(dice, p.us, p.ussr, p.reroll_ties);
+        // Olympic Games: taking part is settled by this roll-off; the winner gets 2 VP.
+        if let Some(m) = self.roll_mode {
+            let winner = contest.winner().expect("ties were thrown again");
+            // VP are relative to the chooser: negative gives the 2 VP to the sponsor.
+            self.modes[m].vp = if winner == self.chooser { 2 } else { -2 };
+            self.context = format!("Olympic Games: {winner} wins the roll-off and gets 2 VP");
+            self.contest = Some(contest.clone());
+            self.refresh(map);
+            return Ok(contest);
+        }
+        let defcon = p.defcon;
+        let mode = |label: String, vp: i8, to: u8| Mode {
+            label,
+            fixed: Vec::new(),
+            rule: None,
+            ongoing: None,
+            vp,
+            china: None,
+            extra: Extra { defcon: (to != defcon).then_some(to), contest: true, ..Extra::NONE },
+        };
+        self.modes = match contest.winner() {
+            Some(winner) => {
+                self.chooser = winner;
+                self.context = format!("Summit: {winner} wins the roll-off and gets 2 VP");
+                let mut modes = Vec::new();
+                if defcon < 5 {
+                    modes.push(mode(format!("improve DEFCON to {}", defcon + 1), 2, defcon + 1));
+                }
+                if defcon > 1 {
+                    modes.push(mode(format!("degrade DEFCON to {}", defcon - 1), 2, defcon - 1));
+                }
+                modes.push(mode(format!("leave DEFCON at {defcon}"), 2, defcon));
+                modes
+            }
+            None => {
+                self.context = "Summit: the roll-off is a tie".to_string();
+                vec![mode("tie: no VP, DEFCON unchanged".to_string(), 0, defcon)]
+            }
+        };
+        self.contest = Some(contest.clone());
+        if self.modes.len() == 1 {
+            self.select(map, 0);
+        }
+        Ok(contest)
+    }
+
+    /// Olympic Games (#20): the sponsor's opponent chooses to participate or boycott. Taking
+    /// part needs a roll-off (the sponsor adds 2, ties are thrown again, the winner gets 2 VP):
+    /// choosing it makes [`EventChoice::needs_roll`] true, and [`EventChoice::roll_contest`]
+    /// settles who scores. Boycotting drops DEFCON by 1 and lets the sponsor conduct
+    /// operations as if the card were worth 4.
+    pub fn olympics_pending(map: &WorldMap, board: &Board, status: &GameStatus, card: CardId, sponsor: Superpower) -> Self {
+        let chooser = sponsor.opponent();
+        let boycott_defcon = status.defcon.saturating_sub(1).max(1);
+        let modes = vec![
+            Mode {
+                label: format!("participate: both roll, {sponsor} adds 2, the winner gets 2 VP"),
+                fixed: Vec::new(),
+                rule: None,
+                ongoing: None,
+                vp: 0,
+                china: None,
+                extra: Extra { contest: true, ..Extra::NONE },
+            },
+            Mode {
+                label: format!("boycott: DEFCON drops to {boycott_defcon}, and {sponsor} may conduct operations as a 4-ops card"),
+                fixed: Vec::new(),
+                rule: None,
+                ongoing: None,
+                vp: 0,
+                china: None,
+                extra: Extra { defcon: Some(boycott_defcon), grant: Some(OpsGrant::ANY.with_ops(4)), ..Extra::NONE },
+            },
+        ];
+        let mut choice = Self::from_spec(map, board, card, Spec { chooser, optional: false, modes });
+        let bonus = |side: Superpower| if side == sponsor { (2, "sponsor".to_string()) } else { (0, String::new()) };
+        choice.context = format!("Olympic Games: {sponsor} sponsors, {chooser} chooses");
+        choice.pending_roll = Some(PendingRoll { us: bonus(Superpower::Us), ussr: bonus(Superpower::Ussr), defcon: status.defcon, reroll_ties: true });
+        choice.roll_mode = Some(0);
+        choice.session_modal = true;
+        choice
+    }
+
+    /// Whether the event's tied roll-offs are thrown again (Olympic Games).
+    pub fn rerolls_ties(&self) -> bool {
+        self.pending_roll.as_ref().is_some_and(|p| p.reroll_ties)
+    }
+
+    /// The line saying what the event is about and who is choosing, before the options.
+    pub fn context(&self) -> &str {
+        &self.context
+    }
+
+    /// Whether the roll-off was part of choosing to take part (Olympic Games), which locks that choice in.
+    pub fn is_participation(&self) -> bool {
+        self.roll_mode.is_some()
+    }
+
+    /// Whether the dice have been thrown for a participation: the choice can't be changed now.
+    fn roll_locked(&self) -> bool {
+        self.roll_mode.is_some() && self.contest.is_some()
     }
 
     /// The side that makes this event's choices — the card's own side.
@@ -583,6 +783,12 @@ impl EventChoice {
     /// Picks which way to play a multi-mode card (0-based). Re-picking is
     /// fine until the first country has been chosen.
     pub fn choose_mode(&mut self, map: &WorldMap, i: usize) -> Result<(), EventChoiceError> {
+        if self.pending_roll.is_some() && self.roll_mode.is_none() {
+            return Err(EventChoiceError::RollFirst);
+        }
+        if self.roll_locked() {
+            return Err(EventChoiceError::ModeLocked);
+        }
         if i >= self.modes.len() {
             return Err(EventChoiceError::BadMode { modes: self.modes.len() });
         }
@@ -597,7 +803,7 @@ impl EventChoice {
     /// picked yet — the step back from a chosen region/mode that comes
     /// before abandoning the whole event.
     pub fn clear_mode(&mut self, map: &WorldMap) -> Result<(), EventChoiceError> {
-        if !self.history.is_empty() {
+        if !self.history.is_empty() || self.roll_locked() {
             return Err(EventChoiceError::ModeLocked);
         }
         self.board = self.base.clone();
@@ -816,6 +1022,9 @@ impl EventChoice {
 
     fn compute_complete(&self, map: &WorldMap) -> bool {
         let Some(_) = self.mode else { return false };
+        if self.needs_roll() {
+            return false;
+        }
         let balanced = self.rule().is_none_or(|r| r.kind != Kind::Reallocate || self.added() == self.removed());
         if self.optional {
             return balanced;
@@ -863,9 +1072,15 @@ impl EventChoice {
                 ),
             };
         }
+        if self.roll_mode.is_none()
+            && let (Some((us, ussr)), Some((a, t, b))) = (self.pending_bonuses(), self.roll_odds())
+        {
+            return format!("{} (US +{}, USSR +{}) — US wins {a}/36, tie {t}/36, USSR wins {b}/36 · r to roll", self.context, us.0, ussr.0);
+        }
+        let context = if self.context.is_empty() { String::new() } else { format!("{} — ", self.context) };
         match self.mode {
             Some(i) => self.modes[i].label.clone(),
-            None => self.modes.iter().enumerate().map(|(i, m)| format!("{}) {}", i + 1, m.label)).collect::<Vec<_>>().join("  or  "),
+            None => format!("{context}{}", self.modes.iter().enumerate().map(|(i, m)| format!("{}) {}", i + 1, m.label)).collect::<Vec<_>>().join("  or  ")),
         }
     }
 
@@ -875,7 +1090,13 @@ impl EventChoice {
             return if self.mode.is_some() { "region chosen".into() } else { "choose a region".into() };
         }
         let Some(rule) = self.rule() else {
-            return if self.mode.is_some() { "mode chosen".into() } else { "choose a mode".into() };
+            return if self.needs_roll() {
+                "roll first".into()
+            } else if self.mode.is_some() {
+                "mode chosen".into()
+            } else {
+                "choose a mode".into()
+            };
         };
         let mut parts = Vec::new();
         if rule.countries != ANY && rule.kind != Kind::Reallocate {
@@ -952,6 +1173,7 @@ impl EventChoice {
             ends_game: extra.ends_game,
             reveals: self.reveal.clone(),
             discards: extra.discard.into_iter().collect(),
+            contest: if extra.contest { self.contest.clone() } else { None },
         }
     }
 
@@ -967,7 +1189,7 @@ impl EventChoice {
     /// Whether this event only designates something (no countries to
     /// pick), so the map views have nothing to mark as live.
     pub fn is_designation(&self) -> bool {
-        self.modes.iter().all(|m| m.rule.is_none() && matches!(m.ongoing, Some(OngoingEffect::Chernobyl { .. })))
+        !self.modes.is_empty() && self.modes.iter().all(|m| m.rule.is_none() && matches!(m.ongoing, Some(OngoingEffect::Chernobyl { .. })))
     }
 
     /// Whether the event is settled by choosing a mode alone: no countries
@@ -982,6 +1204,15 @@ impl EventChoice {
     pub fn picks_countries(&self) -> bool {
         self.modes.iter().any(|m| m.rule.is_some())
     }
+}
+
+/// `US 4+1 (Europe) = 5, USSR 3 = 3` — both rolls, for a prompt or log line.
+pub fn describe_contest(contest: &Contest) -> String {
+    let side = |name: &str, r: &super::effects::ContestRoll| {
+        if r.bonus == 0 { format!("{name} {}", r.die) } else { format!("{name} {}+{} ({}) = {}", r.die, r.bonus, r.note, r.total()) }
+    };
+    let rerolled = if contest.rerolls > 0 { format!(" after {} tied re-roll(s)", contest.rerolls) } else { String::new() };
+    format!("{}, {}{rerolled}", side("US", &contest.us), side("USSR", &contest.ussr))
 }
 
 // ---- the cards, in printed-number order ----

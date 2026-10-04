@@ -14,7 +14,7 @@ use crossterm::{execute, queue};
 
 use twilight_struggle::render::{
     log_entry_line, operation_abandoned_line, operation_closed_line, operation_header, render_card, render_country, render_hand,
-    render_event_result, render_space_confirm, render_space_result, render_space_track_with_hint, render_war_result, render_region, render_roll_result, render_scoring_result, render_status_bar_with, render_world_map, Canvas, RollReport, HAND_ROWS,
+    render_event_result, render_event_session, render_space_confirm, render_space_result, render_space_track_with_hint, render_war_result, render_region, render_roll_result, render_scoring_result, render_status_bar_with, render_world_map, Canvas, RollReport, HAND_ROWS,
 };
 use twilight_struggle::events::{EffectResult, ScoringResult, WarResult};
 use twilight_struggle::game::Victory;
@@ -53,6 +53,9 @@ enum Modal {
     /// it's drawn live from the card in play and the status, and Enter
     /// rolls only if [`Game::can_space`].
     SpaceConfirm,
+    /// An open event that runs in a modal of its own (Summit's roll-off): drawn live from the
+    /// event, keyed by `r` (roll), digits (choose), `c` (confirm and close), ⌫ (back).
+    Session,
     /// `t`: the space race track, for information only — drawn live from
     /// the status, dismissed with Enter, Esc or `t` again.
     SpaceTrack,
@@ -237,6 +240,49 @@ pub fn run(
                     // happens. Only Enter (and Esc, as a harmless
                     // synonym) dismiss the front of the queue; nothing
                     // else reaches the map or the hand while it's up.
+                    if matches!(modal.front(), Some(Modal::Session)) {
+                        match key.code {
+                            KeyCode::Char('r') if matches!(game.operation(), Some(Operation::Event(e)) if e.needs_roll()) => {
+                                if let Err(e) = game.roll_contest(map, dice) {
+                                    message = Some(e.to_string());
+                                }
+                            }
+                            KeyCode::Char(d @ '1'..='9') => {
+                                if let Err(e) = game.choose_mode(map, d as usize - '1' as usize) {
+                                    message = Some(e.to_string());
+                                }
+                            }
+                            KeyCode::Char('c') => match game.confirm() {
+                                Ok(op) => {
+                                    // The modal already showed what it did: no result modal on top.
+                                    modal.pop_front();
+                                    message = Some(operation_closed_line(&op, true, game.decider()));
+                                }
+                                Err(e) => message = Some(e.to_string()),
+                            },
+                            KeyCode::Backspace | KeyCode::Esc => {
+                                if game.clear_event_mode(map) {
+                                    // Back to choosing.
+                                } else if matches!(game.operation(), Some(Operation::Event(e)) if e.needs_roll()) {
+                                    // Not rolled yet: take the card back.
+                                    match game.abandon() {
+                                        Ok(op) => {
+                                            modal.pop_front();
+                                            message = Some(operation_abandoned_line(&op));
+                                        }
+                                        Err(e) => message = Some(e.to_string()),
+                                    }
+                                }
+                            }
+                            KeyCode::Char('q') => return Ok(()),
+                            _ => {}
+                        }
+                        maybe_run_ai_turn(ai_side, ai, game, map, cards, dice, &mut message, &mut sticky, &mut zoomed, &mut modal);
+                        prune_session_modal(&mut modal, game);
+                        ensure_session_modal(&mut modal, game);
+                        draw(&screen, map, layout, cards, game, message.as_deref(), &hand_selected, zoomed, &modal, color)?;
+                        continue;
+                    }
                     if matches!(modal.front(), Some(Modal::SpaceConfirm)) {
                         // A confirmation, not a result: Enter rolls (only
                         // when allowed — otherwise it does nothing and the
@@ -353,6 +399,7 @@ pub fn run(
                         Ok(EventOutcome::Pending { .. }) => {
                             zoomed = false;
                             message = None;
+                            ensure_session_modal(&mut modal, game);
                             // A war: a lone target (Korean War) goes straight to
                             // its country screen, ready for `r`; otherwise to a
                             // region view where only the legal targets are live.
@@ -551,6 +598,8 @@ pub fn run(
                     },
                 }
                 maybe_run_ai_turn(ai_side, ai, game, map, cards, dice, &mut message, &mut sticky, &mut zoomed, &mut modal);
+                prune_session_modal(&mut modal, game);
+                ensure_session_modal(&mut modal, game);
                 draw(&screen, map, layout, cards, game, message.as_deref(), &hand_selected, zoomed, &modal, color)?;
             }
             TermEvent::Resize(_, _) => draw(&screen, map, layout, cards, game, message.as_deref(), &hand_selected, zoomed, &modal, color)?,
@@ -793,6 +842,21 @@ fn zoom_card(game: &Game, hand_selected: &HandUi) -> Option<CardId> {
     game.card_in_play().or_else(|| selected_hand_card(game, hand_selected))
 }
 
+/// Opens a [`Modal::Session`] for an open event that runs in one but has none showing — one the
+/// AI started, say, whose choice falls to the human.
+fn ensure_session_modal(modal: &mut VecDeque<Modal>, game: &Game) {
+    if matches!(game.operation(), Some(Operation::Event(e)) if e.has_session_modal()) && !modal.iter().any(|m| matches!(m, Modal::Session)) {
+        modal.push_back(Modal::Session);
+    }
+}
+
+/// Closes a [`Modal::Session`] whose event is no longer open (confirmed, or settled by the AI).
+fn prune_session_modal(modal: &mut VecDeque<Modal>, game: &Game) {
+    while matches!(modal.front(), Some(Modal::Session)) && !matches!(game.operation(), Some(Operation::Event(e)) if e.has_session_modal()) {
+        modal.pop_front();
+    }
+}
+
 /// What an open event that is settled by its chosen mode alone (a discard
 /// decision, a DEFCON level) still needs from its player: confirm it, or
 /// undo it. Shown for as long as that is true, whatever else is pressed.
@@ -997,6 +1061,10 @@ fn draw(
             Modal::War(result, vp_after, winner) => render_war_result(map, cards, result, *vp_after, *winner, queue_pos),
             Modal::Space(result, vp_after, winner) => render_space_result(cards, result, *vp_after, *winner, queue_pos),
             Modal::SpaceTrack => render_space_track_with_hint(game.status(), "Enter/Esc/⌫/t close"),
+            Modal::Session => match game.operation() {
+                Some(Operation::Event(e)) => render_event_session(cards, e, game.status()),
+                _ => Canvas::new(0, 0),
+            },
             Modal::SpaceConfirm => match game.card_in_play() {
                 Some(id) => render_space_confirm(game.status(), cards.card(id)),
                 None => Canvas::new(0, 0),

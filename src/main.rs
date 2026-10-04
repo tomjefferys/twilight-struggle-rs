@@ -993,6 +993,10 @@ fn print_event_prompt(session: &Session) {
     let Some(Operation::Event(e)) = session.game.operation() else { return };
     let card = session.game.card_in_play().map(|id| session.cards.card(id).name.as_str()).unwrap_or("?");
     println!("{card} — {} chooses: {}", e.chooser(), e.prompt());
+    if e.needs_roll() {
+        println!("throw the dice with: roll");
+        return;
+    }
     if e.mode().is_none() {
         println!("pick a {} with: mode <n|name>", if e.is_designation() { "region" } else { "mode" });
         return;
@@ -1190,7 +1194,15 @@ fn run_place_command(session: &mut Session, words: &[&str]) {
 fn run_roll_command(session: &mut Session, words: &[&str]) {
     let rest = &words[1..];
     if rest.is_empty() {
-        println!("usage: roll <country>");
+        // An open event waiting for its roll-off (Summit).
+        match session.game.roll_contest(&session.map, &mut session.dice) {
+            Ok(contest) => {
+                println!("rolled: {}", twilight_struggle::choice::describe_contest(&contest));
+                print_event_prompt(session);
+            }
+            Err(twilight_struggle::GameError::NoOperation) | Err(twilight_struggle::GameError::WrongKind { .. }) => println!("usage: roll <country>"),
+            Err(e) => println!("{e}"),
+        }
         return;
     }
     let country_query = rest.join(" ");

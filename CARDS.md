@@ -4,7 +4,7 @@ Which of the 110 cards have their **event** implemented (`events::is_implemented
 Every card can already be played for its ops value; this tracks the event text only.
 `tests/cards_progress.rs` fails if a ✅ here disagrees with the code, so update both together.
 
-**Implemented: 95 / 110**
+**Implemented: 97 / 110**
 
 - `events::scoring` — the seven scoring cards.
 - `events::effects` — fixed influence / VP / DEFCON effects with no choices or die rolls.
@@ -34,7 +34,7 @@ Every card can already be played for its ops value; this tracks the event text o
 | 17 | De Gaulle Leads France | USSR | ✅ | Exempts France from NATO (#21) |
 | 18 | Captured Nazi Scientist | Both | ✅ | Advances the space race 1 box |
 | 19 | Truman Doctrine | US | ✅ | Choice |
-| 20 | Olympic Games | Both |  |  |
+| 20 | Olympic Games | Both | ✅ | The opponent participates (roll-off, sponsor +2, ties re-rolled, winner 2 VP) or boycotts (DEFCON −1, sponsor conducts ops as a 4-ops card); played in the same modal as Summit (choose, `r` roll, confirm) |
 | 21 | NATO | US | ✅ | Lasting: USSR can't coup/realign US-controlled Europe; needs #16 or #23 first; Brush War clause modelled |
 | 22 | Independent Reds | US | ✅ | Choice |
 | 23 | Marshall Plan | US | ✅ | Choice; enables #21 (modelled) |
@@ -59,7 +59,7 @@ Every card can already be played for its ops value; this tracks the event text o
 | 42 | Quagmire | USSR |  |  |
 | 43 | SALT Negotiations | Both |  |  |
 | 44 | Bear Trap | US |  |  |
-| 45 | Summit | Both |  |  |
+| 45 | Summit | Both | ✅ | Roll-off (+1 per region dominated/controlled); the winner gets 2 VP and picks DEFCON ±1 or no change; a tie does nothing; played in a modal: odds, `r` roll, then choose (`Game::roll_contest`) |
 | 46 | How I Learned to Stop Worrying | Both | ✅ | Choice (mode = DEFCON level 1-5); +5 Military Ops (max 5) |
 | 47 | Junta | Both | ✅ | Choice (+2 influence in one Central/South America country), then a coup or realignment there with the card's ops |
 | 48 | Kitchen Debates | US | ✅ |  |

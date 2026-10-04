@@ -299,6 +299,9 @@ fn event_detail(map: &WorldMap, cards: &CardCatalog, result: &EffectResult, vp_a
     if result.mil_ops != 0 {
         parts.push(format!("{} Mil Ops {:+}", result.player, result.mil_ops));
     }
+    if let Some(contest) = &result.contest {
+        parts.push(format!("rolls {}", crate::events::choice::describe_contest(contest)));
+    }
     for &(side, card) in &result.discards {
         parts.push(format!("{side} discards {}", cards.card(card).name));
     }

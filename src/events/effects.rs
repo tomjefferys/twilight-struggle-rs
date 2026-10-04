@@ -15,6 +15,7 @@
 
 use crate::board::Board;
 use crate::cards::CardId;
+use crate::dice::Dice;
 use crate::country::{CountryId, Region, Superpower};
 use crate::map::WorldMap;
 use crate::ongoing::{LastingEffect, OngoingEffect};
@@ -50,6 +51,57 @@ pub struct Reveal {
     pub cards: Vec<CardId>,
 }
 
+/// One side's die in a contest between the two (Summit, Olympic Games).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ContestRoll {
+    pub die: u8,
+    /// Added to the die.
+    pub bonus: u8,
+    /// Where the bonus came from, for a view to explain it.
+    pub note: String,
+}
+
+impl ContestRoll {
+    pub fn total(&self) -> u8 {
+        self.die + self.bonus
+    }
+}
+
+/// A roll-off between the two sides: both dice, and how many tied rolls were thrown away first.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Contest {
+    pub us: ContestRoll,
+    pub ussr: ContestRoll,
+    pub rerolls: u8,
+}
+
+impl Contest {
+    /// The side with the higher modified roll, `None` on a tie.
+    pub fn winner(&self) -> Option<Superpower> {
+        match self.us.total().cmp(&self.ussr.total()) {
+            std::cmp::Ordering::Greater => Some(Superpower::Us),
+            std::cmp::Ordering::Less => Some(Superpower::Ussr),
+            std::cmp::Ordering::Equal => None,
+        }
+    }
+
+    /// One die each with the given bonuses (`(bonus, note)`), re-rolling ties if `reroll_ties`.
+    pub fn roll(dice: &mut Dice, us: (u8, String), ussr: (u8, String), reroll_ties: bool) -> Contest {
+        let mut rerolls = 0;
+        loop {
+            let contest = Contest {
+                us: ContestRoll { die: dice.roll(), bonus: us.0, note: us.1.clone() },
+                ussr: ContestRoll { die: dice.roll(), bonus: ussr.0, note: ussr.1.clone() },
+                rerolls,
+            };
+            if !reroll_ties || contest.winner().is_some() {
+                return contest;
+            }
+            rerolls += 1;
+        }
+    }
+}
+
 /// What resolving a fixed-effect card produced. `vp_delta` follows
 /// [`GameStatus::vp`]'s convention (positive favours the US); `defcon` is
 /// `(before, after)`, already clamped to the track, and `None` for a card
@@ -78,6 +130,8 @@ pub struct EffectResult {
     pub ends_game: bool,
     /// A hand the event reveals.
     pub reveals: Option<Reveal>,
+    /// A roll-off the event held (Summit, Olympic Games).
+    pub contest: Option<Contest>,
     /// Cards discarded from a side's hand: paid to avoid Blockade's penalty, picked
     /// out of the US hand by Aldrich Ames, or lost at random to Terrorism.
     pub discards: Vec<(Superpower, CardId)>,
@@ -243,6 +297,7 @@ const EFFECTS: &[(u8, Effect)] = &[
     (15, nasser),
     (17, de_gaulle_leads_france),
     (18, captured_nazi_scientist),
+    (20, olympic_games),
     (21, nato),
     (26, cia_created),
     (25, containment),
@@ -253,6 +308,7 @@ const EFFECTS: &[(u8, Effect)] = &[
     (35, formosan_resolution),
     (80, one_small_step),
     (41, nuclear_subs),
+    (45, summit),
     (48, kitchen_debates),
     (50, we_will_bury_you),
     (51, brezhnev_doctrine),
@@ -308,7 +364,7 @@ pub fn resolve(map: &WorldMap, board: &Board, status: &GameStatus, card: CardId)
     let effect = effect_for(card)?;
     let mut ctx = Ctx { map, before: board, working: board.clone(), status, changes: Vec::new(), vp_delta: 0, defcon: None, ongoing: None, lasting: None, cancels: None, china: None, space: None, reveals: None };
     effect(&mut ctx);
-    Some(EffectResult { card, player: status.active, influence: ctx.changes, vp_delta: ctx.vp_delta, defcon: ctx.defcon, ongoing: ctx.ongoing, lasting: ctx.lasting, cancels: ctx.cancels, china: ctx.china, space: ctx.space, mil_ops: 0, ends_game: false, reveals: ctx.reveals, discards: Vec::new() })
+    Some(EffectResult { card, player: status.active, influence: ctx.changes, vp_delta: ctx.vp_delta, defcon: ctx.defcon, ongoing: ctx.ongoing, lasting: ctx.lasting, cancels: ctx.cancels, china: ctx.china, space: ctx.space, mil_ops: 0, ends_game: false, reveals: ctx.reveals, discards: Vec::new(), contest: None })
 }
 
 // ---- the cards, in printed-number order ----
@@ -600,6 +656,14 @@ fn yuri_and_samantha(c: &mut Ctx) {
 fn awacs_sale_to_saudis(c: &mut Ctx) {
     c.add("Saudi Arabia", Superpower::Us, 2);
 }
+
+/// #20 Olympic Games: the opponent chooses to participate or boycott — decided by
+/// `EventChoice::olympics`, which `Game::play_event_with` opens.
+fn olympic_games(_: &mut Ctx) {}
+
+/// #45 Summit on a tied roll: nothing happens. (A winner picks DEFCON through
+/// `EventChoice::summit`.)
+fn summit(_: &mut Ctx) {}
 
 /// #21 NATO: the USSR can't coup or realign US-controlled Europe.
 fn nato(c: &mut Ctx) {
