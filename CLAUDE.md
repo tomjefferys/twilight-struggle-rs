@@ -1,24 +1,31 @@
 # Twilight Struggle
 
-A Rust CLI implementation of the board game *Twilight Struggle*. Currently
-focused on the data model and terminal display, a handful of the
-ops-spending actions (influence placement, realignment, coups), enforced
-alternating turns, playing a card from each side's hand for its ops
-value, and — the first slices of card *events* — the seven scoring cards
-twenty-one fixed-effect cards (influence/VP/DEFCON/China Card only, no choices or
-rolls), twenty-one *choice* cards (the card's own side picks the
-countries to add/remove influence in, whoever is phasing), and ten
-*turn-long* effects ("for the remainder of this turn" — Containment,
-Chernobyl, …, held in `GameStatus::effects` until the turn rolls over),
-the five *war* cards (a die roll against a target, Military Ops tracked), and eight *lasting* cards (NATO, US/Japan Pact, Formosan Resolution, We Will Bury You, Willy Brandt, Flower Power, Shuttle Diplomacy — held in `GameStatus::lasting`, never cleared by a turn rolling over — plus Solidarity's prerequisite), which can end the game outright (VP reaching ±20, DEFCON
-reaching 1, or Europe Scoring's Control tier), and the *Space Race* (`src/space.rs`, below). `CARDS.md` tracks which of
-the 110 cards have their event implemented (`tests/cards_progress.rs`
-keeps it honest). The end of a turn (Military Operations, held scoring
-cards, DEFCON +1, the Mid/Late War deck additions and the redeal) is
-implemented (`Game::settle`, below), as is final scoring after turn 10; the
-headline phase, new-game setup and an opponent's card's ops-and-event dual
-use (below) are too, which completes the game's rules loop. A first AI
-opponent plays uniformly random legal moves.
+A Rust CLI implementation of the board game *Twilight Struggle*, rules-complete:
+the map and its terminal display; influence, realignment and coup operations
+(with the DEFCON limits on where they may go and the Military Operations a
+coup earns); the whole turn structure — new-game setup (the printed start, a
+shuffled and dealt Early War deck, the opening placement), the headline phase,
+ten turns of action rounds, the end-of-turn Military Operations penalty and
+held-scoring-card loss, the Mid/Late War additions and the redeal, and final
+scoring — the Space Race and its perks; an opponent's card played for its ops
+firing its event too; and the events of 109 of the 110 cards (the China Card
+has none: it is an ops card, and its end-of-game point is final scoring's).
+`CARDS.md` tracks which cards have their event implemented
+(`tests/cards_progress.rs` keeps it honest); they come in kinds, each with its
+own module and tests — the scoring cards, fixed-effect cards (influence/VP/
+DEFCON/China Card by fixed amounts), *choice* cards (the card's own side picks
+countries, cards or modes, whoever is phasing), *turn-long* effects (held in
+`GameStatus::effects` until the turn ends), the *war* cards (a die roll
+against a target, Military Ops tracked), *lasting* cards (held in
+`GameStatus::lasting`, never cleared by a turn ending), and the ones that touch
+the hands and decks (discards, reveals, the discard-pile picks, draws). A game
+can end by VP reaching ±20, DEFCON reaching 1, Europe Scoring's Control tier,
+Wargames, Cuban Missile Crisis, a scoring card held at the end of a turn, or
+final scoring after turn 10 (a draw is possible). The AI opponents are random:
+`RandomAi` plays uniformly random legal moves, and `RandomAi::careful()` adds
+just enough rules-awareness (play a scoring card in time, never lose to DEFCON
+at once) for a game to run its full length — `tests/full_game.rs` soaks both
+over many seeded whole games.
 
 ## Architecture
 
@@ -684,7 +691,12 @@ opponent plays uniformly random legal moves.
   turn's very start. `ai::random::RandomAi` is the first implementation:
   picks uniformly among whatever's legal, via its own `Dice` (seeded
   independently of the game's own, so an AI's choices never shift a
-  realignment's or coup's die sequence). Wired into both `main.rs` (an
+  realignment's or coup's die sequence). `RandomAi::careful()` (what
+  `main.rs` and so the interactive map use) first narrows the list: with as
+  many scoring cards held as action rounds left it plays one, and — below
+  DEFCON 4 — it drops any `Event`/coup `Roll` that a look ahead on
+  `Game::lookahead()` shows losing the game to DEFCON; `tests/full_game.rs`
+  plays whole seeded games with both flavours (`SOAK_SEEDS=n` to run more). Wired into both `main.rs` (an
   `ai`/`ai us|ussr|off` REPL command, `--ai us|ussr` at launch) and
   `interactive.rs` (the same auto-play, driven on every keypress that
   might have handed the turn to the AI's side) — see each file's own notes
@@ -1365,6 +1377,10 @@ cargo run -- worldmap              # one-shot: the whole-world map
 cargo run -- region europe         # one-shot: zoom into a region
 cargo run -- --state scoring/europe-ussr-control-wins
                                     # jump straight into a named test state
+cargo run -- --new                 # a real game: deal, opening placement, headline, ...
+cargo run -- --new --ai ussr       # ... against the (careful) random AI
+SOAK_SEEDS=5000 cargo test --release --test full_game
+                                    # play thousands of AI-vs-AI whole games
 cargo test                         # all tests (unit + snapshot)
 cargo clippy --all-targets         # lint; expected clean
 ```

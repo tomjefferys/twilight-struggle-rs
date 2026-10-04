@@ -168,7 +168,10 @@ impl Game {
             Some(Operation::War(w)) => {
                 // Rolling on a target is the whole event — no `Confirm`.
                 for id in events::war::eligible_targets(map, w.card()) {
-                    actions.push(Action::Roll(id));
+                    // (not one a lasting event shields, like Brush War's NATO-protected Europe)
+                    if w.is_legal_target(map, id) {
+                        actions.push(Action::Roll(id));
+                    }
                 }
             }
             Some(Operation::Coup(c)) => {
@@ -212,17 +215,19 @@ impl Game {
                             actions.push(Action::Begin(OperationKind::Coup));
                         }
                     }
+                } else if let Some((_, trap)) = self.trap() {
+                    // A trapped round is spent escaping (or playing scoring cards, or skipped) — even
+                    // when Missile Envy is owed, which is simply still owed afterwards.
+                    match trap {
+                        Trap::Escape(candidates) => actions.extend(candidates.into_iter().map(Action::Escape)),
+                        Trap::PlayScoring => actions.extend(self.hand(self.active()).iter().filter(|&&c| events::scoring::is_scoring_card(c)).map(|&c| Action::PlayCard(c))),
+                        Trap::Skip => actions.push(Action::Pass),
+                    }
                 } else if let Some((_, forced)) = self.status().forced_play.filter(|&(s, _)| s == self.active()) {
                     // Missile Envy's new holder has to spend it on operations.
                     match self.hand(self.active()).iter().copied().find(|c| c.number() == forced) {
                         Some(card) => actions.push(Action::PlayCard(card)),
                         None => actions.push(Action::Pass),
-                    }
-                } else if let Some((_, trap)) = self.trap() {
-                    match trap {
-                        Trap::Escape(candidates) => actions.extend(candidates.into_iter().map(Action::Escape)),
-                        Trap::PlayScoring => actions.extend(self.hand(self.active()).iter().filter(|&&c| events::scoring::is_scoring_card(c)).map(|&c| Action::PlayCard(c))),
-                        Trap::Skip => actions.push(Action::Pass),
                     }
                 } else {
                     let side = self.active();

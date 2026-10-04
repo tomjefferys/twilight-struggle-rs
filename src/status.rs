@@ -182,7 +182,8 @@ impl GameStatus {
         }
         // North Sea Oil and the Space Station box give one side rounds past the usual count;
         // round 0 is the headline phase, before the first action round.
-        if self.action_round > self.rounds_for(self.active) {
+        // (at the end of the turn `active` can be either side, whichever has the round it ended on)
+        if self.action_round > self.rounds_for(Superpower::Us).max(self.rounds_for(Superpower::Ussr)) {
             return Err(StatusError::ActionRoundOutOfRange {
                 action_round: self.action_round,
                 action_rounds_per_turn: self.action_rounds_per_turn,

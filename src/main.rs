@@ -151,7 +151,9 @@ fn main() {
         Some(s) => RandomAi::from_seed(s ^ AI_SEED_SALT),
         None if one_shot => RandomAi::from_seed(AI_SEED_SALT),
         None => RandomAi::from_entropy(),
-    };
+    }
+    // Careful: plays its scoring cards in time and never loses to DEFCON at once, so a game lasts.
+    .careful();
 
     // Built before `map`/`cards` move into `session`, for the line
     // editor's completer (`completion::TsHelper`) below.

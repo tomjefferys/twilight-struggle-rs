@@ -1417,6 +1417,10 @@ impl Game {
         let side = self.status.active;
         self.hands.remove(side, discard);
         self.hands.discard(discard);
+        // Discarding the card Missile Envy made them play spends that obligation too.
+        if self.status.forced_play.is_some_and(|(s, c)| s == side && c == discard.0) {
+            self.status.forced_play = None;
+        }
         let roll = dice.roll();
         let escaped = roll <= 4;
         if escaped {
@@ -1578,6 +1582,12 @@ impl Game {
             .filter(|c| !c.scoring && c.side != CardSide::Neutral && c.side != crate::cards::side_of(side))
             .map(|c| (PlayCard { id: c.id, ops: c.ops, removed: c.removed_after_event, scoring: false, how: PlayAs::Ops, exchange: false }, c.name.clone()))
             .collect()
+    }
+
+    /// Whether the player holds a card UN Intervention could be played with (no catalog needed).
+    fn un_partner_exists(&self) -> bool {
+        let side = self.status.active;
+        self.hands.hand(side).iter().map(|&c| standard_cards().card(c)).any(|c| !c.scoring && c.side != CardSide::Neutral && c.side != crate::cards::side_of(side))
     }
 
     /// Whether `id`'s event can be played right now beyond the checks every card gets
@@ -1748,7 +1758,6 @@ impl Game {
         self.status.china_card_face_up = true;
         self.status.space_attempts_us = 0;
         self.status.space_attempts_ussr = 0;
-        self.status.effects = TurnEffects::default();
         if self.winner.is_none() && turn >= *TURN_RANGE.end() {
             self.push_turn_end(turn, round, report);
             self.finish_game(map);
@@ -1768,6 +1777,9 @@ impl Game {
 
     /// Turn marker, DEFCON, deck additions and the deal for the turn after the one that just ended.
     fn start_next_turn(&mut self, cards: &CardCatalog, dice: &mut Dice, report: &mut TurnEndReport) {
+        // Every "for the remainder of the turn" effect ends here — not earlier, so a game that
+        // ends at the turn's end still shows the extra round (North Sea Oil, Space Station) it had.
+        self.status.effects = TurnEffects::default();
         self.status.turn += 1;
         let turn = self.status.turn;
         self.status.action_rounds_per_turn = rounds_for_turn(turn);
@@ -1857,6 +1869,7 @@ impl Game {
         if let Some((side, forced)) = self.status.forced_play
             && side == self.status.active
             && self.card.is_none()
+            && self.trap().is_none()
             && self.hands.hand(side).iter().any(|c| c.0 == forced)
         {
             return Err(GameError::Trap(format!("card #{forced} has to be used for operations this action round — play it")));
@@ -2182,7 +2195,9 @@ impl Game {
                 // Shuttle Diplomacy is spent by the scoring it modified.
                 if result.modifiers.contains(&CardId(73)) {
                     self.status.lasting.cancel(LastingEffect::ShuttleDiplomacy);
-                    self.hands.discard(CardId(73));
+                    if !self.hands.contains(CardId(73)) {
+                        self.hands.discard(CardId(73));
+                    }
                 }
                 if let Some(side) = result.automatic_victory {
                     self.set_winner(side, VictoryReason::EuropeControl);
@@ -2222,9 +2237,21 @@ impl Game {
         // Another card's event puts a card into play (Star Wars, Five Year Plan, Grain Sales,
         // Missile Envy): this card is spent and the one it names takes its place, the turn
         // not yet over.
-        if let (None, Some(p)) = (self.winner, plays)
+        if let (None, Some(mut p)) = (self.winner, plays)
             && self.hands.take(p.id)
         {
+            // A headline is an event and nothing else: a card that arrives "for its event or its
+            // operations" is only its event, and one that can't be played that way (operations
+            // only, UN Intervention, a prevented event) is simply spent.
+            let headline = self.phase == Phase::Headline;
+            if headline && p.how == PlayAs::Either {
+                p.how = PlayAs::Event;
+            }
+            let event_dead = !events::is_implemented(p.id)
+                || events::blocked_at(p.id, self.hands.removed(), self.status.turn).is_some()
+                || (p.id == UN_INTERVENTION && (headline || !self.un_partner_exists()));
+            // (outside the headline, a card with operations to use is kept even if its event is dead)
+            let spent = (headline && (p.how == PlayAs::Ops || event_dead)) || (p.how == PlayAs::Event && event_dead);
             if p.exchange {
                 // Missile Envy changes hands; its new holder must use it for operations.
                 let opponent = self.status.active.opponent();
@@ -2234,6 +2261,11 @@ impl Game {
                 }
             } else {
                 self.discard_or_remove_event_card();
+            }
+            if spent {
+                self.hands.discard(p.id);
+                self.advance();
+                return;
             }
             self.card = Some(PlayedCard { id: p.id, ops: p.ops, hand_index: None, logged: false, scoring: p.scoring, removed_after_event: p.removed, ops_after_event: None, forced_event: Some((host, p.how)), opponents: false, event_owed: false });
             return;
@@ -2511,6 +2543,11 @@ impl Game {
         let Some(card) = self.card.take() else { return };
         if self.status.forced_play.is_some_and(|(_, c)| c == card.id.0) {
             self.status.forced_play = None;
+        }
+        if card.id == CardId(73) && card.ops_after_event.is_some() && self.status.lasting.shuttle_diplomacy {
+            // Played as an opponent's card, event first: it stays in front of the US until a
+            // scoring spends it — the operations that followed don't discard it too.
+            return;
         }
         if card.id == CHINA_CARD && self.status.active == Superpower::Us {
             // Formosan Resolution ends once the US plays the China Card.
