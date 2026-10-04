@@ -21,7 +21,7 @@ use crate::ongoing::short_name;
 /// three-state hint (see [`render_status_bar`]'s own doc), distinct from
 /// `BEGIN_HINT`'s card-agnostic one-liner shown by the region/world-map/
 /// country views, which never know whether a card's already been played.
-const PLAY_HINT: &str = "no card in play — [ ] select · space play · p pass";
+const PLAY_HINT: &str = "no card in play — [ ] select · p play";
 
 /// The bar's height, always — with or without an operation open — so the
 /// view drawn below it never shifts up or down as one opens or closes.
@@ -213,7 +213,7 @@ pub fn render_status_bar_with(
                 side_style(status.active).bold(),
             ),
             (None, None) if status.forced_play.is_some_and(|(side, _)| side == status.active) => (
-                format!("{} to act · you must play Missile Envy for operations this round · [ ] select it · space play", status.active),
+                format!("{} to act · you must play Missile Envy for operations this round · [ ] select it · p play", status.active),
                 side_style(status.active).bold(),
             ),
             (None, None) => match status.lasting.trap_on(status.active) {
@@ -404,8 +404,7 @@ mod tests {
         let board = Board::new(&map);
         let text = render_status_bar(&layout, &board, &status(), None, None, None, 60).render(ColorMode::Never);
         assert!(text.contains("no card in play"), "missing play hint:\n{text}");
-        assert!(text.contains("space play"), "missing play hint:\n{text}");
-        assert!(text.contains("p pass"), "missing play hint:\n{text}");
+        assert!(text.contains("p play"), "missing play hint:\n{text}");
     }
 
     #[test]

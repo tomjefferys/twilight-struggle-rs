@@ -172,12 +172,12 @@ fn the_selection_hints_offer_the_operation_keys() {
     let italy = map.id_by_name("Italy").unwrap();
 
     let region_text = render_region(&map, &layout, &board, Region::Europe, Some(italy), None).render(ColorMode::Never);
-    for key in ["space play card", "i/a/o influence/realign/coup", "p pass"] {
+    for key in ["p play card", "i/a/o influence/realign/coup", "p pass"] {
         assert!(region_text.contains(key), "region hint missing {key:?}:\n{region_text}");
     }
 
     let country_text = render_country(&map, &layout, &board, italy, None, ViewMode::Interactive).render(ColorMode::Never);
-    for key in ["space play card", "i/a/o influence/realign/coup", "p pass"] {
+    for key in ["p play card", "i/a/o influence/realign/coup", "p pass"] {
         assert!(country_text.contains(key), "country hint missing {key:?}:\n{country_text}");
     }
 }
@@ -191,11 +191,11 @@ fn an_open_operation_hides_the_operation_keys() {
     let op = Operation::Influence(placement);
 
     let region_text = render_region(&map, &layout, &board, Region::Europe, Some(italy), Some(&op)).render(ColorMode::Never);
-    assert!(!region_text.contains("space play card"), "an open operation shouldn't advertise starting another:\n{region_text}");
+    assert!(!region_text.contains("p play card"), "an open operation shouldn't advertise starting another:\n{region_text}");
     assert!(!region_text.contains("p pass"), "an open operation shouldn't advertise passing:\n{region_text}");
 
     let country_text = render_country(&map, &layout, &board, italy, Some(&op), ViewMode::Interactive).render(ColorMode::Never);
-    assert!(!country_text.contains("space play card"), "an open operation shouldn't advertise starting another:\n{country_text}");
+    assert!(!country_text.contains("p play card"), "an open operation shouldn't advertise starting another:\n{country_text}");
     assert!(!country_text.contains("p pass"), "an open operation shouldn't advertise passing:\n{country_text}");
 }
 

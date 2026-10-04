@@ -908,7 +908,7 @@ over many seeded whole games.
     follows. Each slot shows its ops value (or `S` for a scoring card),
     its truncated name, its side/phase, and a `*` if it's removed from
     play once played as an event; the selected slot (if any) is drawn
-    with `Canvas::draw_thick_box` like a region view's own selection. The
+    with `Canvas::draw_double_box` and a `▶` pointer, keeping the card's own red/blue border colour. The
     China Card, when `render_hand`'s `china: Option<bool>` is `Some`
     (whether it's face up), is always the hand's final slot — it's never
     read from the hand list itself, since `Hands` deliberately never
@@ -921,7 +921,7 @@ over many seeded whole games.
     `Option<usize>`; `None` for the China Card, which was never spliced
     out of the hand list to begin with — it's drawn via `china`
     regardless of whether it's the one in play) and drawn with
-    `SlotRole::Played` — a bold, bright `Color::Selected` thick box and an
+    `SlotRole::Played` — a bold thick box in the card's own side colour and an
     `IN PLAY` line in place of its usual side/phase one — while every
     *other* slot drawn that call is `SlotRole::Dimmed` instead of
     `SlotRole::Selected`, so the one card that matters isn't competing
@@ -1182,13 +1182,13 @@ over many seeded whole games.
   whichever screen is showing — turn/AR/active side (in its own colour)/
   DEFCON/VP, then one of its four states for the card/operation row (see
   `statusbar.rs` above) — since a keypress alone carries no "USSR" the way
-  the REPL prompt does. A turn now starts with `Space`, which plays the
+  the REPL prompt does. A turn now starts with `p` (or `Space`), which plays the
   selected hand card (`Game::play_card`) — a no-op on an empty hand, or
   once a card's already in play. Only then do `i`/`a`/`o` open an
   influence placement, realignment, or coup for the active side, spending
   that card's own ops, `e` resolves its event instead
   (`Game::play_event` — so far, the only way to play a scoring card,
-  since it has no ops for `i`/`a`/`o` to spend), and `p` passes the turn
+  since it has no ops for `i`/`a`/`o` to spend), and `p` passes the turn when there is no card to play (otherwise it plays the selected one)
   (`Game::pass`) — all five global, working from any of the three
   screens, and refused (`GameError`'s own text shown in the message row)
   while an operation is already open, or — for `i`/`a`/`o`/`e` — with no

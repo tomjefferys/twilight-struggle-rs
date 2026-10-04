@@ -156,7 +156,7 @@ fn a_selection_adds_the_region_title_and_key_hints() {
     assert!(text.contains("EUROPE"), "region name missing:\n{text}");
     assert!(text.contains("Enter open"), "key hints missing:\n{text}");
     assert_eq!(selected.height(), plain.height() + 2, "selection should add exactly two rows");
-    for key in ["space play card", "i/a/o influence/realign/coup", "p pass"] {
+    for key in ["p play card", "i/a/o influence/realign/coup", "p pass"] {
         assert!(text.contains(key), "world-map hint missing {key:?}:\n{text}");
     }
 }

@@ -443,8 +443,8 @@ pub fn run(
                         KeyCode::Esc | KeyCode::Backspace => zoomed = false,
                         KeyCode::Char('q') => return Ok(()),
                         KeyCode::Char('z') => zoomed = false,
-                        KeyCode::Char('[') | KeyCode::BackTab | KeyCode::Char(']') | KeyCode::Tab | KeyCode::Char(' ') => {
-                            if let Some(m) = handle_hand_key(key.code, game, map, cards, &mut hand_selected, &mut zoomed, &mut modal) {
+                        KeyCode::Char('[') | KeyCode::BackTab | KeyCode::Char(']') | KeyCode::Tab | KeyCode::Char(' ') | KeyCode::Char('p') => {
+                            if let Some(m) = handle_hand_key(if key.code == KeyCode::Char('p') { KeyCode::Char(' ') } else { key.code }, game, map, cards, &mut hand_selected, &mut zoomed, &mut modal) {
                                 message = Some(m);
                             }
                         }
@@ -569,6 +569,11 @@ pub fn run(
                                     }
                                 }
                             }
+                        }
+                    }
+                    KeyCode::Char('p') if p_plays(game, &hand_selected) => {
+                        if let Some(m) = handle_hand_key(KeyCode::Char(' '), game, map, cards, &mut hand_selected, &mut zoomed, &mut modal) {
+                            message = Some(m);
                         }
                     }
                     KeyCode::Char('p') => {
@@ -1040,6 +1045,14 @@ fn hand_side(game: &Game, peek: bool) -> Superpower {
 /// revealed it for the turn.
 fn peeking_allowed(game: &Game) -> bool {
     game.status().effects.hand_revealed(game.active().opponent())
+}
+
+/// Whether `p` plays the selected card (like `Space`) rather than passing:
+/// nothing is in play, there is a card to select, and no held-card discard
+/// is being asked for (there `p` keeps the hand). Pass is only legal when
+/// the hand is empty or a card is already in play, so the two never clash.
+fn p_plays(game: &Game, hand_selected: &HandUi) -> bool {
+    game.card_in_play().is_none() && game.awaiting_discard().is_none() && hand_item_count(game, hand_side(game, hand_selected.peek)) > 0
 }
 
 /// `[`/`]`/`Space` share this handler between the normal keymap and the

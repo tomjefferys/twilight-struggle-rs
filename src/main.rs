@@ -1709,7 +1709,7 @@ Commands:
                           is) or a prompt to play one. The active side's
                           hand is drawn below every screen; [ and ] cycle
                           the selected card, z zooms it into a full detail
-                          overlay, space plays it
+                          overlay, p (or space) plays it
   region <name>, 1-6      zoom into one region (europe/asia/middleeast/africa/centralamerica/southamerica)
   country <name>, /<name> a single country's detail, with all its neighbours (name or code)
   new                     start a real game: the printed starting influence, the

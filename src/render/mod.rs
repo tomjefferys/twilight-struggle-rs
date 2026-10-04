@@ -813,7 +813,7 @@ pub(crate) fn vp_line(vp: i8) -> String {
 /// steps rather than two different hints the caller would have to choose
 /// between. The status bar (which does know) uses its own three-state
 /// wording instead — see `statusbar.rs`.
-pub(crate) const BEGIN_HINT: &str = "space play card · i/a/o influence/realign/coup · s space race · t space track · e event · p pass";
+pub(crate) const BEGIN_HINT: &str = "p play card · i/a/o influence/realign/coup · s space race · t space track · e event · p pass";
 
 /// One escape attempt, worded for the REPL: `Bear Trap: USSR discards Fidel, rolls 3 — escapes`.
 pub fn trap_result_line(cards: &crate::cards::CardCatalog, r: &crate::game::TrapResult) -> String {
