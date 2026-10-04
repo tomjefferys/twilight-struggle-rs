@@ -14,7 +14,7 @@ use crossterm::{execute, queue};
 
 use twilight_struggle::render::{
     log_entry_line, operation_abandoned_line, pile_cards, render_piles, PileTab, operation_closed_line, operation_header, render_card, render_country, render_forced_card, render_hand,
-    render_event_result, render_event_session, render_final_scoring, render_headline_confirm, render_headline_reveal, render_space_confirm, render_space_result, render_trap_confirm, render_trap_result, render_space_track_with_hint, render_war_result, render_region, render_roll_result, render_scoring_result, render_status_bar_with, render_world_map, Canvas, RollReport, HAND_ROWS,
+    render_event_result, render_event_session, render_final_scoring, render_headline_confirm, render_headline_reveal, render_space_confirm, render_space_result, render_trap_confirm, render_trap_result, render_space_track_with_hint, render_war_result, render_region, render_roll_result, render_scoring_preview, render_scoring_result, render_status_bar_with, render_world_map, Canvas, RollReport, HAND_ROWS,
 };
 use twilight_struggle::events::{PlayAs, EffectResult, ScoringResult, WarResult};
 use twilight_struggle::game::{Phase, Trap, TrapResult, Victory};
@@ -64,6 +64,10 @@ enum Modal {
     Trap(TrapResult),
     /// The confirmation before a headline card is chosen.
     HeadlineConfirm(CardId),
+    /// The preview before a scoring card is played: what it would score on the board as it
+    /// stands, drawn live. Enter plays it (its event is all a scoring card has), Esc leaves it
+    /// in the hand.
+    ScoreConfirm(CardId),
     /// An open event that runs in a modal of its own (Summit's roll-off): drawn live from the
     /// event, keyed by `r` (roll), digits (choose), `c` (confirm and close), ⌫ (back).
     Session,
@@ -361,6 +365,39 @@ pub fn run(
                                             format!("{side} has chosen a headline card — {} to choose", game.active())
                                         }
                                     }
+                                    Err(e) => e.to_string(),
+                                });
+                            }
+                            KeyCode::Esc | KeyCode::Backspace => {
+                                modal.pop_front();
+                            }
+                            KeyCode::Char('q') => return Ok(()),
+                            _ => {}
+                        }
+                        maybe_run_ai_turn(ai_side, ai, game, map, cards, dice, &mut message, &mut sticky, &mut zoomed, &mut modal);
+                        prune_session_modal(&mut modal, game);
+                        ensure_session_modal(&mut modal, game);
+                        draw(&screen, map, layout, cards, game, message.as_deref(), &hand_selected, zoomed, &modal, color)?;
+                        continue;
+                    }
+                    if let Some(&Modal::ScoreConfirm(card)) = modal.front() {
+                        match key.code {
+                            KeyCode::Enter => {
+                                modal.pop_front();
+                                let side = game.active();
+                                message = Some(match game.play_card(cards, card) {
+                                    Ok(()) => match game.play_event_with(map, cards, dice) {
+                                        Ok(EventOutcome::Scoring(result)) => {
+                                            zoomed = false;
+                                            modal.push_back(Modal::Score(result, game.status().vp));
+                                            format!("{side} plays {}", cards.card(card).name)
+                                        }
+                                        Ok(_) => String::new(),
+                                        Err(e) => {
+                                            let _ = game.return_card();
+                                            e.to_string()
+                                        }
+                                    },
                                     Err(e) => e.to_string(),
                                 });
                             }
@@ -1118,6 +1155,12 @@ fn handle_hand_key(code: KeyCode, game: &mut Game, map: &WorldMap, cards: &CardC
                 Err(e) => e.to_string(),
             })
         }
+        KeyCode::Char(' ') if game.card_in_play().is_none() && !hand_selected.peek && selected_hand_card(game, hand_selected).is_some_and(|id| cards.card(id).scoring) => {
+            let id = selected_hand_card(game, hand_selected)?;
+            *zoomed = false;
+            modal.push_back(Modal::ScoreConfirm(id));
+            None
+        }
         KeyCode::Char(' ') => {
             let id = selected_hand_card(game, hand_selected)?;
             let side = game.active();
@@ -1279,6 +1322,13 @@ fn draw(
                 None => Canvas::new(0, 0),
             },
             Modal::Trap(result) => render_trap_result(cards, result, queue_pos),
+            Modal::ScoreConfirm(card) => match twilight_struggle::events::scoring::resolve(map, game.board(), &game.status().lasting, *card) {
+                Some(result) => {
+                    let vp_after = (game.status().vp + result.vp_delta).clamp(-20, 20);
+                    render_scoring_preview(map, cards, &result, vp_after)
+                }
+                None => Canvas::new(0, 0),
+            },
             Modal::HeadlineConfirm(card) => render_headline_confirm(game.active(), cards.card(*card)),
             Modal::SpaceConfirm => match game.card_in_play() {
                 Some(id) => render_space_confirm(game.status(), cards.card(id)),

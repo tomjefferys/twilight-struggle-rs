@@ -32,7 +32,7 @@ pub use log::{log_entry_line, log_text, render_log};
 pub use piles::{pile_cards, pile_len, piles_text, render_piles, PileTab};
 pub use region::render_region;
 pub use roll::{render_roll_result, RollReport};
-pub use score::{render_final_scoring, render_headline_confirm, render_headline_reveal, render_scoring_result};
+pub use score::{render_final_scoring, render_headline_confirm, render_headline_reveal, render_scoring_preview, render_scoring_result};
 pub use trap::{render_trap_confirm, render_trap_result};
 pub use space::{render_space_confirm, render_space_result, render_space_track, render_space_track_with_hint};
 pub use statusbar::{render_status_bar, render_status_bar_with, STATUS_BAR_ROWS};

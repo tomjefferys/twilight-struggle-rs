@@ -33,6 +33,20 @@ pub fn render_scoring_result(
     vp_after: i8,
     queue_pos: Option<(usize, usize)>,
 ) -> Canvas {
+    let hint = match queue_pos {
+        Some((n, total)) => format!("Enter to continue · {n} of {total}"),
+        None => "Enter to continue".to_string(),
+    };
+    scoring_box(map, cards, result, vp_after, &hint)
+}
+
+/// What playing a scoring card would score right now, before it is played: the same box as
+/// [`render_scoring_result`], with the VP track's value it would land on and a confirm/cancel hint.
+pub fn render_scoring_preview(map: &WorldMap, cards: &CardCatalog, result: &ScoringResult, vp_after: i8) -> Canvas {
+    scoring_box(map, cards, result, vp_after, "Enter play it · Esc cancel")
+}
+
+fn scoring_box(map: &WorldMap, cards: &CardCatalog, result: &ScoringResult, vp_after: i8, hint: &str) -> Canvas {
     let title = cards.card(result.card).name.clone();
     let text_width = SCORE_WIDTH - 2 - 2 * PADDING;
     let mut lines: Vec<(String, Style)> = Vec::new();
@@ -78,10 +92,6 @@ pub fn render_scoring_result(
     }
 
     lines.push((String::new(), Style::default()));
-    let hint = match queue_pos {
-        Some((n, total)) => format!("Enter to continue · {n} of {total}"),
-        None => "Enter to continue".to_string(),
-    };
     lines.push((format!("{hint:>text_width$}"), Style::color(Color::Muted)));
 
     let box_height = 2 + lines.len();
