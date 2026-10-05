@@ -58,7 +58,7 @@ fn rounds_left(game: &Game) -> u8 {
 /// The actions worth considering: with a scoring card that must be played now (as many held as
 /// rounds left), only those; and without any that would lose to DEFCON at once. Falls back to
 /// everything when a filter would leave nothing.
-fn sensible(game: &Game, map: &WorldMap, cards: &CardCatalog, legal: &[Action]) -> Vec<Action> {
+pub(super) fn sensible(game: &Game, map: &WorldMap, cards: &CardCatalog, legal: &[Action]) -> Vec<Action> {
     let side = game.active();
     let scoring = |c| cards.card(c).scoring;
     let held = game.hand(side).iter().filter(|&&c| scoring(c)).count() as u8;

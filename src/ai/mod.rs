@@ -5,13 +5,55 @@
 //! `Game`'s take-back methods.
 //!
 //! [`random::RandomAi`] is the first, simplest implementation: pick
-//! uniformly among whatever's legal. A future, stronger opponent is just
-//! another [`Ai`] impl — nothing here or in `action.rs` is specific to
-//! randomness.
+//! uniformly among whatever's legal. [`HeuristicAi`] is the stronger one:
+//! it scores positions ([`eval`]) and picks the moves that lead to the best
+//! ones. Either is just an [`Ai`] impl — nothing here or in `action.rs` is
+//! specific to either — and [`AiKind`] picks which to build.
 
+mod eval;
+mod heuristic;
 mod random;
 
+pub use eval::evaluate;
+pub use heuristic::HeuristicAi;
 pub use random::RandomAi;
+
+/// Which opponent to play against.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum AiKind {
+    /// Scores positions and plays the best move it can find ([`HeuristicAi`]).
+    #[default]
+    Heuristic,
+    /// Random legal moves, with just enough care to finish a game ([`RandomAi::careful`]).
+    Random,
+}
+
+impl AiKind {
+    pub fn parse(word: &str) -> Option<AiKind> {
+        match word.to_ascii_lowercase().as_str() {
+            "heuristic" | "smart" => Some(AiKind::Heuristic),
+            "random" => Some(AiKind::Random),
+            _ => None,
+        }
+    }
+
+    pub fn name(self) -> &'static str {
+        match self {
+            AiKind::Heuristic => "heuristic",
+            AiKind::Random => "random",
+        }
+    }
+
+    /// Builds this kind of AI, seeded from `seed` (or the clock when `None`).
+    pub fn build(self, seed: Option<u64>) -> Box<dyn Ai> {
+        match (self, seed) {
+            (AiKind::Heuristic, Some(s)) => Box::new(HeuristicAi::from_seed(s)),
+            (AiKind::Heuristic, None) => Box::new(HeuristicAi::from_entropy()),
+            (AiKind::Random, Some(s)) => Box::new(RandomAi::from_seed(s).careful()),
+            (AiKind::Random, None) => Box::new(RandomAi::from_entropy().careful()),
+        }
+    }
+}
 
 use crate::action::Action;
 use crate::cards::CardCatalog;
@@ -57,7 +99,7 @@ const MAX_ACTIONS_PER_TURN: usize = 1000;
 /// any — `choose` returning something other than one of `legal`'s own
 /// actions is the only way that can happen, since `legal_actions` only
 /// ever lists moves `apply` accepts.
-pub fn play_turn(ai: &mut dyn Ai, game: &mut Game, map: &WorldMap, cards: &CardCatalog, dice: &mut Dice) -> Result<(), GameError> {
+pub fn play_turn<A: Ai + ?Sized>(ai: &mut A, game: &mut Game, map: &WorldMap, cards: &CardCatalog, dice: &mut Dice) -> Result<(), GameError> {
     // `decider`, not `active`: an event's chooser is the card's own side,
     // so a turn can pass the move to the other side and back mid-turn.
     let side = game.decider();

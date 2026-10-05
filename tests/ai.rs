@@ -353,3 +353,40 @@ fn legal_actions_are_for_the_decider_not_the_phasing_side() {
     play_turn(&mut ai, &mut game, &map, &cards, &mut Dice::from_seed(1)).unwrap();
     assert_eq!(game.board().influence(italy, Superpower::Ussr), 0);
 }
+
+/// Plays a whole game with `smart` on `smart_side` against a careful `RandomAi`; true if `smart` won.
+fn heuristic_wins(seed: u64, smart_side: Superpower) -> (bool, u8, Option<twilight_struggle::game::VictoryReason>) {
+    use twilight_struggle::HeuristicAi;
+    let map = WorldMap::standard().unwrap();
+    let cards = CardCatalog::standard().unwrap();
+    let mut dice = Dice::from_seed(seed);
+    let mut game = Game::new_game(&map, &cards, &mut dice);
+    let mut smart = HeuristicAi::from_seed(seed);
+    let mut random = RandomAi::from_seed(seed ^ 0x5eed).careful();
+    for _ in 0..3000 {
+        if game.winner().is_some() {
+            break;
+        }
+        if game.decider() == smart_side {
+            play_turn(&mut smart, &mut game, &map, &cards, &mut dice).unwrap();
+        } else {
+            play_turn(&mut random, &mut game, &map, &cards, &mut dice).unwrap();
+        }
+    }
+    let victory = game.winner().expect("the game finishes");
+    (victory.side == Some(smart_side), game.status().turn, Some(victory.reason))
+}
+
+#[test]
+fn heuristic_beats_careful_random_most_of_the_time() {
+    let games = 20u64;
+    let mut wins = 0;
+    for seed in 0..games {
+        let side = if seed % 2 == 0 { Superpower::Us } else { Superpower::Ussr };
+        let (won, turn, reason) = heuristic_wins(seed, side);
+        println!("seed {seed} {side}: won={won} turn {turn} {reason:?}");
+        wins += won as u64;
+    }
+    println!("heuristic won {wins}/{games}");
+    assert!(wins * 100 >= games * 75, "heuristic won only {wins}/{games}");
+}

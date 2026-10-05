@@ -11,7 +11,7 @@ use twilight_struggle::render::{
 };
 use twilight_struggle::{
     ai, CardCatalog, CardFound, CardId, ColorMode, Dice, EventOutcome, Found, Game, GameError, GameStatus, MapLayout, Operation,
-    OperationKind, RandomAi, Region, RollOutcome, Scenario, StateLibrary, Superpower, ViewMode, WorldMap, CHINA_CARD, DEFCON_RANGE,
+    OperationKind, Region, RollOutcome, Scenario, StateLibrary, Superpower, ViewMode, WorldMap, CHINA_CARD, DEFCON_RANGE,
     MAX_HAND_SIZE, TURN_RANGE,
 };
 
@@ -62,7 +62,9 @@ struct Session {
     /// seed is independent of `dice`'s (derived from `--seed` when given,
     /// else entropy) so `--seed`/`seed <n>` keep controlling realignment
     /// and coup rolls only, not which moves the AI happens to pick.
-    ai: RandomAi,
+    ai: Box<dyn ai::Ai>,
+    /// Which kind of AI `ai` is, for `ai kind` to report and rebuild.
+    ai_kind: ai::AiKind,
     /// Which side (if any) the AI plays instead of a human — at most one,
     /// so the REPL loop can never drive both sides without a human typing
     /// anything. `None` means every turn is typed at the prompt as usual.
@@ -99,6 +101,7 @@ fn main() {
     let mut ai_side: Option<Superpower> = None;
     let mut state_ref: Option<String> = None;
     let mut new_game_flag = false;
+    let mut ai_kind = ai::AiKind::default();
     let mut command_words = Vec::new();
 
     while let Some(arg) = args.next() {
@@ -128,6 +131,10 @@ fn main() {
                 state_ref = args.next();
             }
             "--new" => new_game_flag = true,
+            "--ai-kind" => match args.next().as_deref().and_then(ai::AiKind::parse) {
+                Some(kind) => ai_kind = kind,
+                None => eprintln!("--ai-kind takes heuristic or random"),
+            },
             other => command_words.push(other.to_string()),
         }
     }
@@ -147,13 +154,12 @@ fn main() {
     // replay each other's sequence) — `--seed`/`seed <n>` keep controlling
     // realignment and coup rolls only, never which moves the AI picks.
     const AI_SEED_SALT: u64 = 0x41_495F_5345_4544;
-    let ai = match seed {
-        Some(s) => RandomAi::from_seed(s ^ AI_SEED_SALT),
-        None if one_shot => RandomAi::from_seed(AI_SEED_SALT),
-        None => RandomAi::from_entropy(),
-    }
-    // Careful: plays its scoring cards in time and never loses to DEFCON at once, so a game lasts.
-    .careful();
+    let ai_seed = match seed {
+        Some(s) => Some(s ^ AI_SEED_SALT),
+        None if one_shot => Some(AI_SEED_SALT),
+        None => None,
+    };
+    let ai = ai_kind.build(ai_seed);
 
     // Built before `map`/`cards` move into `session`, for the line
     // editor's completer (`completion::TsHelper`) below.
@@ -170,6 +176,7 @@ fn main() {
         interactive_ok: !one_shot,
         dice,
         ai,
+        ai_kind,
         ai_side,
         debug: false,
         states: StateLibrary::standard(),
@@ -275,12 +282,18 @@ fn run_ai_turn(session: &mut Session) {
     let side = session.game.decider();
     println!("{side} (AI) plays:");
     let before = session.game.log().len();
-    if let Err(e) = ai::play_turn(&mut session.ai, &mut session.game, &session.map, &session.cards, &mut session.dice) {
+    if let Err(e) = ai::play_turn(session.ai.as_mut(), &mut session.game, &session.map, &session.cards, &mut session.dice) {
         println!("  AI error: {e}");
     }
     for entry in &session.game.log().entries()[before..] {
         println!("  {}", log_entry_line(&session.map, &session.cards, entry));
     }
+}
+
+/// Swaps in a fresh AI of `kind`, seeded from the clock.
+fn set_ai_kind(session: &mut Session, kind: ai::AiKind) {
+    session.ai = kind.build(None);
+    session.ai_kind = kind;
 }
 
 /// `ai` plays the active side's turn once, right now, regardless of
@@ -294,12 +307,28 @@ fn run_ai_command(session: &mut Session, words: &[&str]) {
             session.ai_side = None;
             println!("AI auto-play off");
         }
+        Some("kind") => match words.get(2).copied() {
+            None => println!("AI kind: {}", session.ai_kind.name()),
+            Some(k) => match ai::AiKind::parse(k) {
+                Some(kind) => set_ai_kind(session, kind),
+                None => println!("usage: ai kind [heuristic|random]"),
+            },
+        },
         Some(s) => match parse_superpower(s) {
             Some(side) => {
+                if let Some(k) = words.get(2).copied() {
+                    match ai::AiKind::parse(k) {
+                        Some(kind) => set_ai_kind(session, kind),
+                        None => {
+                            println!("usage: ai us|ussr [heuristic|random]");
+                            return;
+                        }
+                    }
+                }
                 session.ai_side = Some(side);
-                println!("AI now plays {side} automatically");
+                println!("AI ({}) now plays {side} automatically", session.ai_kind.name());
             }
-            None => println!("usage: ai [us|ussr|off]"),
+            None => println!("usage: ai [us|ussr [heuristic|random]|kind [heuristic|random]|off]"),
         },
     }
 }
@@ -352,7 +381,7 @@ fn run_command(session: &mut Session, line: &str) {
                     &mut session.dice,
                     session.color,
                     session.ai_side,
-                    &mut session.ai,
+                    session.ai.as_mut(),
                 ) {
                     Ok(()) => {
                         if let Some(op) = session.game.operation() {
@@ -1734,6 +1763,8 @@ Commands:
   ai us|ussr              from now on, the AI plays that side's turns
                           automatically (in the REPL and the interactive
                           map alike) — `--ai us|ussr` sets this at launch
+  ai us|ussr heuristic|random   ... with that kind of AI (default: heuristic)
+  ai kind [heuristic|random]    show or change which AI plays (`--ai-kind` at launch)
   ai off                  turn automatic AI play back off
 
   play <id|name>          take a card from the active side's hand (id,

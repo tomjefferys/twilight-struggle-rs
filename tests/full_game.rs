@@ -6,7 +6,7 @@
 use std::collections::HashSet;
 
 use twilight_struggle::game::{Phase, VictoryReason};
-use twilight_struggle::{play_turn, CardCatalog, CardId, Dice, Game, RandomAi, WorldMap};
+use twilight_struggle::{play_turn, Ai, CardCatalog, CardId, Dice, Game, HeuristicAi, RandomAi, Superpower, WorldMap};
 
 /// How many seeds each soak test plays: 50 normally, more with `SOAK_SEEDS=1000 cargo test --test full_game`.
 fn seeds() -> u64 {
@@ -35,25 +35,36 @@ fn assert_no_duplicate_cards(game: &Game, context: &str) {
 
 /// Plays one full game; returns how it ended.
 fn play_game(seed: u64, careful: bool) -> (u8, Option<VictoryReason>) {
-    let (map, cards) = fixtures();
-    let mut dice = Dice::from_seed(seed);
-    let mut game = Game::new_game(&map, &cards, &mut dice);
     let mut ai = RandomAi::from_seed(seed ^ 0xabcdef);
     if careful {
         ai = ai.careful();
     }
+    let (turn, victory) = play_with(seed, &mut ai, None);
+    (turn, Some(victory.reason))
+}
+
+/// Plays a whole game. With `other`, the USSR is driven by `ai` and the US by `other`; without it
+/// `ai` plays both. Returns the last turn reached and the result.
+fn play_with(seed: u64, ai: &mut dyn Ai, mut other: Option<&mut dyn Ai>) -> (u8, twilight_struggle::game::Victory) {
+    let (map, cards) = fixtures();
+    let mut dice = Dice::from_seed(seed);
+    let mut game = Game::new_game(&map, &cards, &mut dice);
     for call in 0..3000 {
         if game.winner().is_some() {
             break;
         }
         let context = format!("seed {seed} call {call} (turn {}, {:?})", game.status().turn, game.phase());
-        play_turn(&mut ai, &mut game, &map, &cards, &mut dice).unwrap_or_else(|e| panic!("{context}: {e}"));
+        let result = match other.as_mut() {
+            Some(us) if game.decider() == Superpower::Us => play_turn(&mut **us, &mut game, &map, &cards, &mut dice),
+            _ => play_turn(&mut *ai, &mut game, &map, &cards, &mut dice),
+        };
+        result.unwrap_or_else(|e| panic!("{context}: {e}"));
         game.status().validate().unwrap_or_else(|e| panic!("{context}: invalid status: {e}"));
         assert_no_duplicate_cards(&game, &context);
     }
     let victory = game.winner().unwrap_or_else(|| panic!("seed {seed}: no result after 3000 turns — stuck in {:?} on turn {}", game.phase(), game.status().turn));
     assert!(game.legal_actions(&map, &cards).is_empty(), "seed {seed}: a finished game offers no moves");
-    (game.status().turn, Some(victory.reason))
+    (game.status().turn, victory)
 }
 
 #[test]
@@ -89,4 +100,24 @@ fn a_game_that_ends_leaves_the_phase_alone() {
         play_turn(&mut ai, &mut game, &map, &cards, &mut dice).unwrap();
     }
     assert!(game.winner().is_some());
+}
+
+#[test]
+fn heuristic_ais_play_whole_games_to_a_result() {
+    for seed in 0..(seeds() / 10).max(3) {
+        let mut ai = HeuristicAi::from_seed(seed);
+        play_with(seed, &mut ai, None);
+    }
+}
+
+#[test]
+fn heuristic_and_random_ais_finish_games_against_each_other() {
+    for seed in 0..(seeds() / 10).max(3) {
+        let mut smart = HeuristicAi::from_seed(seed);
+        let mut random = RandomAi::from_seed(seed).careful();
+        play_with(seed, &mut smart, Some(&mut random));
+        let mut smart = HeuristicAi::from_seed(seed);
+        let mut random = RandomAi::from_seed(seed).careful();
+        play_with(seed, &mut random, Some(&mut smart));
+    }
 }

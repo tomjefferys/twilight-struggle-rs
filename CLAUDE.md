@@ -21,11 +21,12 @@ against a target, Military Ops tracked), *lasting* cards (held in
 the hands and decks (discards, reveals, the discard-pile picks, draws). A game
 can end by VP reaching ±20, DEFCON reaching 1, Europe Scoring's Control tier,
 Wargames, Cuban Missile Crisis, a scoring card held at the end of a turn, or
-final scoring after turn 10 (a draw is possible). The AI opponents are random:
-`RandomAi` plays uniformly random legal moves, and `RandomAi::careful()` adds
-just enough rules-awareness (play a scoring card in time, never lose to DEFCON
-at once) for a game to run its full length — `tests/full_game.rs` soaks both
-over many seeded whole games.
+final scoring after turn 10 (a draw is possible). There are two AI opponents:
+`HeuristicAi` (the default) scores positions and plays the move leading to the
+best one, and `RandomAi` plays uniformly random legal moves, with
+`RandomAi::careful()` adding just enough rules-awareness (play a scoring card in
+time, never lose to DEFCON at once) for a game to run its full length —
+`tests/full_game.rs` soaks all of them over many seeded whole games.
 
 ## Architecture
 
@@ -696,7 +697,28 @@ over many seeded whole games.
   many scoring cards held as action rounds left it plays one, and — below
   DEFCON 4 — it drops any `Event`/coup `Roll` that a look ahead on
   `Game::lookahead()` shows losing the game to DEFCON; `tests/full_game.rs`
-  plays whole seeded games with both flavours (`SOAK_SEEDS=n` to run more). Wired into both `main.rs` (an
+  plays whole seeded games with both flavours (`SOAK_SEEDS=n` to run more). **`HeuristicAi`** (`ai/heuristic.rs`, scoring in `ai/eval.rs`) is the default
+opponent, picked by `AiKind` (`ai/mod.rs`: `parse`/`build`; `--ai-kind
+heuristic|random` at launch, `ai us|ussr [kind]` / `ai kind [kind]` in the REPL;
+`Session.ai` is a `Box<dyn Ai>`, `interactive::run` takes `&mut dyn Ai`).
+`eval::evaluate(game, map, cards, side)` is the whole of its game knowledge — VP
+on the track, per-country control progress (battlegrounds weigh most), what each
+scoring card would pay now (Europe's automatic victory a huge term), DEFCON 2/3
+risk, the Military Ops shortfall (scaled by how far the turn has gone), the space
+race and what's still in hand — every weight a named constant at the top. Moves
+are chosen by looking ahead on `Game::lookahead()` copies: *small* decisions
+(`Place`, `Roll`, `Confirm`, …) are **greedy** one-step picks (dice sampled with
+fixed seeds, never the real dice; realign/coup targets with nothing to win are
+skipped; a step that gains nothing still beats stopping, since spare ops are
+lost); *decisions* (`PlayCard`, `Begin`, `Event`, `Space`, `ChooseMode`,
+`Escape`, `DiscardHeld`) are settled by **rollout** — play each option out
+greedily to the end of the card (`DECISION_DEPTH` levels of nesting, an opponent
+choosing mid-event minimising instead) and score it; the headline is a static
+card score. It first applies `random::sensible`'s filter (scoring card due,
+no DEFCON suicide). It sees hidden information through the copy (a known,
+accepted limitation). `tests/ai.rs::heuristic_beats_careful_random_most_of_the_time`
+is the check that it's sensible (and the harness for tuning the weights).
+Wired into both `main.rs` (an
   `ai`/`ai us|ussr|off` REPL command, `--ai us|ussr` at launch) and
   `interactive.rs` (the same auto-play, driven on every keypress that
   might have handed the turn to the AI's side) — see each file's own notes
@@ -1378,7 +1400,9 @@ cargo run -- region europe         # one-shot: zoom into a region
 cargo run -- --state scoring/europe-ussr-control-wins
                                     # jump straight into a named test state
 cargo run -- --new                 # a real game: deal, opening placement, headline, ...
-cargo run -- --new --ai ussr       # ... against the (careful) random AI
+cargo run -- --new --ai ussr       # ... against the heuristic AI
+cargo run -- --new --ai ussr --ai-kind random
+                                    # ... against the (careful) random AI
 SOAK_SEEDS=5000 cargo test --release --test full_game
                                     # play thousands of AI-vs-AI whole games
 cargo test                         # all tests (unit + snapshot)

@@ -21,8 +21,8 @@ use twilight_struggle::game::{Phase, Trap, TrapResult, Victory};
 use twilight_struggle::space::SpaceResult;
 use twilight_struggle::ops::Operation;
 use twilight_struggle::{
-    ai, Board, CardCatalog, CardId, ColorMode, CountryId, Dice, Direction, Event, EventOutcome, Game, GameError, LogEntry, MapLayout,
-    OperationKind, RandomAi, Region, RollOutcome, Superpower, ViewMode, WorldMap, CHINA_CARD,
+    ai, Ai, Board, CardCatalog, CardId, ColorMode, CountryId, Dice, Direction, Event, EventOutcome, Game, GameError, LogEntry, MapLayout,
+    OperationKind, Region, RollOutcome, Superpower, ViewMode, WorldMap, CHINA_CARD,
 };
 
 /// How many cards the piles view can scroll through on `tab`.
@@ -210,7 +210,7 @@ pub fn run(
     dice: &mut Dice,
     color: ColorMode,
     ai_side: Option<Superpower>,
-    ai: &mut RandomAi,
+    ai: &mut dyn Ai,
 ) -> io::Result<()> {
     let _guard = TerminalGuard::enter()?;
     let mut screen = Screen::World { selected: Region::Europe };
@@ -791,7 +791,7 @@ pub fn run(
 #[allow(clippy::too_many_arguments)]
 fn maybe_run_ai_turn(
     ai_side: Option<Superpower>,
-    ai: &mut RandomAi,
+    ai: &mut dyn Ai,
     game: &mut Game,
     map: &WorldMap,
     cards: &CardCatalog,
