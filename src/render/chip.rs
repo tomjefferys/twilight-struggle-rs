@@ -134,10 +134,10 @@ impl ChipGrid {
         // A `Foreign` chip is never a target from whichever screen is
         // showing it (a region view's guest, or any neighbour on the
         // country view's mini-map), so illegality never dims its name —
-        // only a `Native` chip's can be.
+        // only a `Native` or `Selected` chip's can be.
         let legal = match event {
             Some(eligible) => eligible,
-            None => role != ChipRole::Native || op.is_none_or(|o| o.is_legal_target(map, board, id)),
+            None => role == ChipRole::Foreign || op.is_none_or(|o| o.is_legal_target(map, board, id)),
         };
         let controller = board.controller(map, id);
         // An uncontested country's name takes its controller's colour.
