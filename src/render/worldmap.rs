@@ -1,4 +1,3 @@
-use std::collections::HashMap;
 
 use crate::board::Board;
 use crate::country::{Region, Superpower};
@@ -72,7 +71,6 @@ pub fn render_world_map(
     let height = background.len();
     let width = background.iter().map(|l| l.chars().count()).max().unwrap_or(0);
 
-    let legend = superpower_legend(map);
     let footer_lines = footer_lines(map, layout, board, selected, op);
     let footer_rows = footer_lines.len();
     // Unlike `render_region`, this view's width previously left the
@@ -80,15 +78,14 @@ pub fn render_world_map(
     // while that footer never grew, but the balance line can be long, so
     // it (and the hints) must be included here or `Canvas` will silently
     // clip them.
-    let content_width = legend
+    let content_width = footer_lines
         .iter()
-        .map(|l| l.chars().count())
-        .chain(footer_lines.iter().map(|(l, _)| l.chars().count()))
+        .map(|(l, _)| l.chars().count())
         .chain([width])
         .max()
         .unwrap_or(width);
 
-    let mut canvas = Canvas::new(content_width, height + 1 + legend.len() + footer_rows);
+    let mut canvas = Canvas::new(content_width, height + footer_rows);
 
     // Tint each patch of land by whichever zone is closest to it, so the
     // landmass reads like the physical board's coloured areas rather than
@@ -122,11 +119,7 @@ pub fn render_world_map(
         draw_chip(&mut canvas, cell.row as usize, cell.col as usize, map, layout, board, id, bold, touched, op);
     }
 
-    for (i, line) in legend.iter().enumerate() {
-        canvas.put(height + 1 + i, 0, line, Style::color(Color::Muted));
-    }
-
-    let frow = height + 1 + legend.len();
+    let frow = height;
     for (i, (line, style)) in footer_lines.iter().enumerate() {
         canvas.put(frow + i, 0, line, *style);
     }
@@ -379,23 +372,4 @@ fn draw_chip(
     };
     canvas.put_char(row, start, flag, style);
     canvas.put(row, start + 1, code, style);
-}
-
-/// One line per superpower listing its real bordering countries — with no
-/// connectors anywhere on this view, this is the only place either
-/// superpower's actual adjacency is represented.
-fn superpower_legend(map: &WorldMap) -> Vec<String> {
-    let mut borders: HashMap<Superpower, Vec<&str>> = HashMap::new();
-    for (_, country) in map.iter() {
-        for &sp in &country.adjacent_superpowers {
-            borders.entry(sp).or_default().push(&country.name);
-        }
-    }
-    let mut lines = Vec::new();
-    for sp in [Superpower::Us, Superpower::Ussr] {
-        if let Some(names) = borders.get(&sp) {
-            lines.push(format!("{sp}: {}", names.join(", ")));
-        }
-    }
-    lines
 }
