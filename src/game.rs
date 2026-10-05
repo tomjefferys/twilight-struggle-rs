@@ -1601,6 +1601,18 @@ impl Game {
             && (id != UN_INTERVENTION || !self.un_intervention_candidates(cards).is_empty())
     }
 
+    /// `side`'s hand as a random-pick event sees it: during the headline phase a side's chosen
+    /// headline card is already played (face down), so it can't be discarded or drawn.
+    fn pickable_hand(&self, side: Superpower) -> Vec<CardId> {
+        let mut hand = self.hands.hand(side).to_vec();
+        if self.phase == Phase::Headline {
+            if let Some(Some(chosen)) = self.headline.picks[side_slot(side)] {
+                hand.retain(|&c| c != chosen);
+            }
+        }
+        hand
+    }
+
     /// Whether the side to act is choosing its headline card right now.
     pub fn picking_headline(&self) -> bool {
         self.phase == Phase::Headline
@@ -1731,8 +1743,7 @@ impl Game {
         if !self.turn_end.scored {
             let mut report = TurnEndReport { mil_ops: (self.status.military_ops_us, self.status.military_ops_ussr), defcon: self.status.defcon, ..Default::default() };
             // Each side short of DEFCON hands the opponent the shortfall; both short nets out.
-            let short = |ops: i8| (self.status.defcon as i8 - ops).max(0);
-            let swing = short(report.mil_ops.1) - short(report.mil_ops.0);
+            let swing = self.status.military_shortfall(Superpower::Ussr) - self.status.military_shortfall(Superpower::Us);
             self.status.military_ops_us = 0;
             self.status.military_ops_ussr = 0;
             self.apply_vp(swing);
@@ -1991,7 +2002,7 @@ impl Game {
 
         // Grain Sales to Soviets: the US draws a USSR card at random, then plays it or returns it.
         if card.id == CardId(67) {
-            let hand = self.hands.hand(Superpower::Ussr).to_vec();
+            let hand = self.pickable_hand(Superpower::Ussr);
             let drawn = (!hand.is_empty()).then(|| {
                 let pick = hand[dice.index(hand.len())];
                 let c = cards.card(pick);
@@ -2039,7 +2050,7 @@ impl Game {
         // Five Year Plan: the USSR discards a random card; a US event fires at once (the card
         // then waits in play, its event to be played — see `PlayedCard::forced_event`).
         if card.id == CardId(5) {
-            let hand = self.hands.hand(Superpower::Ussr).to_vec();
+            let hand = self.pickable_hand(Superpower::Ussr);
             if !hand.is_empty() {
                 let pick = hand[dice.index(hand.len())];
                 let picked = cards.card(pick);
@@ -2191,7 +2202,7 @@ impl Game {
                 // Terrorism: the opponent loses cards at random (two for the US once #82 is out).
                 let victim = self.status.active.opponent();
                 let n = if victim == Superpower::Us && self.hands.removed().contains(&CardId(82)) { 2 } else { 1 };
-                let mut hand = self.hands.hand(victim).to_vec();
+                let mut hand = self.pickable_hand(victim);
                 for _ in 0..n.min(hand.len()) {
                     let i = dice.index(hand.len());
                     result.discards.push((victim, hand.remove(i)));

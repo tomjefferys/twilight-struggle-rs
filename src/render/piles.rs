@@ -4,7 +4,7 @@
 
 use crate::cards::{Card, CardCatalog, CardSide, Hands};
 
-use super::{put_border_title, Canvas, Color, Style};
+use super::{Canvas, Color, Style, modal_box};
 
 const WIDTH: usize = 60;
 const PADDING: usize = 2;
@@ -138,14 +138,7 @@ pub fn render_piles(cards: &CardCatalog, hands: &Hands, tab: PileTab, cursor: us
     let text_width = WIDTH - 2 - 2 * PADDING;
     lines.push((format!("{hint:>text_width$}"), muted));
 
-    let height = lines.len() + 2;
-    let mut canvas = Canvas::new(WIDTH, height);
-    canvas.draw_box(0, 0, WIDTH, height, Style::default());
-    put_border_title(&mut canvas, 0, 0, "Card piles", Style::default().bold(), "", Style::default(), WIDTH);
-    for (i, (line, style)) in lines.iter().enumerate() {
-        canvas.put(1 + i, 1 + PADDING, line, *style);
-    }
-    canvas
+    modal_box("Card piles", "", WIDTH, Style::default(), false, lines)
 }
 
 #[cfg(test)]

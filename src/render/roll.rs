@@ -16,7 +16,7 @@ use crate::log::CoupAftermath;
 use crate::map::WorldMap;
 use crate::ops::Modifiers;
 
-use super::{put_border_title, wrap, Canvas, Color, Style};
+use super::{Canvas, Color, Style, modal_box};
 
 /// Fixed content width — like [`super::card::render_card`]'s own
 /// `CARD_WIDTH`, nothing about this box's width should depend on the
@@ -80,8 +80,8 @@ pub fn render_roll_result(map: &WorldMap, report: &RollReport, queue_pos: Option
             let opposing = acting.opponent();
             let acting_total = result.acting_die as i32 + result.acting_mods.total() as i32;
             let opposing_total = result.opposing_die as i32 + result.opposing_mods.total() as i32;
-            push_roll_lines(&mut lines, acting, result.acting_die, &result.acting_mods, acting_total, text_width);
-            push_roll_lines(&mut lines, opposing, result.opposing_die, &result.opposing_mods, opposing_total, text_width);
+            push_roll_lines(&mut lines, acting, result.acting_die, &result.acting_mods, acting_total);
+            push_roll_lines(&mut lines, opposing, result.opposing_die, &result.opposing_mods, opposing_total);
             lines.push((String::new(), Style::default()));
 
             let (outcome_line, outcome_style) = match result.loser {
@@ -94,7 +94,7 @@ pub fn render_roll_result(map: &WorldMap, report: &RollReport, queue_pos: Option
                     Style::color(side_color(opposing)).bold(),
                 ),
             };
-            push_text(&mut lines, &outcome_line, outcome_style, text_width);
+            push_text(&mut lines, &outcome_line, outcome_style);
 
             after_us = before_us.saturating_sub(if result.loser == Some(Superpower::Us) { result.removed } else { 0 });
             after_ussr = before_ussr.saturating_sub(if result.loser == Some(Superpower::Ussr) { result.removed } else { 0 });
@@ -102,7 +102,7 @@ pub fn render_roll_result(map: &WorldMap, report: &RollReport, queue_pos: Option
             if let Some(loser) = result.loser {
                 lines.push((String::new(), Style::default()));
                 let (before, after) = if loser == Superpower::Us { (before_us, after_us) } else { (before_ussr, after_ussr) };
-                push_text(&mut lines, &influence_change_line(loser, country, before, after), Style::default(), text_width);
+                push_text(&mut lines, &influence_change_line(loser, country, before, after), Style::default());
             }
 
             match result.loser {
@@ -128,7 +128,7 @@ pub fn render_roll_result(map: &WorldMap, report: &RollReport, queue_pos: Option
             } else {
                 (format!("COUP FAILS — {modified} is not greater than {}", result.target_number), Style::color(Color::Muted).bold())
             };
-            push_text(&mut lines, &outcome_line, outcome_style, text_width);
+            push_text(&mut lines, &outcome_line, outcome_style);
 
             after_us = if acting == Superpower::Us { before_us + result.added } else { before_us.saturating_sub(result.removed) };
             after_ussr = if acting == Superpower::Ussr { before_ussr + result.added } else { before_ussr.saturating_sub(result.removed) };
@@ -137,11 +137,11 @@ pub fn render_roll_result(map: &WorldMap, report: &RollReport, queue_pos: Option
                 lines.push((String::new(), Style::default()));
                 if result.removed > 0 {
                     let (before, after) = if opposing == Superpower::Us { (before_us, after_us) } else { (before_ussr, after_ussr) };
-                    push_text(&mut lines, &influence_change_line(opposing, country, before, after), Style::default(), text_width);
+                    push_text(&mut lines, &influence_change_line(opposing, country, before, after), Style::default());
                 }
                 if result.added > 0 {
                     let (before, after) = if acting == Superpower::Us { (before_us, after_us) } else { (before_ussr, after_ussr) };
-                    push_text(&mut lines, &influence_change_line(acting, country, before, after), Style::default(), text_width);
+                    push_text(&mut lines, &influence_change_line(acting, country, before, after), Style::default());
                 }
             }
 
@@ -157,24 +157,24 @@ pub fn render_roll_result(map: &WorldMap, report: &RollReport, queue_pos: Option
     let after_control = controller_from(after_us, after_ussr, stability);
     if before_control != after_control {
         let text = format!("Control: {} → {}", control_label(before_control), control_label(after_control));
-        push_text(&mut lines, &text, Style::default().bold(), text_width);
+        push_text(&mut lines, &text, Style::default().bold());
     }
 
     if let Some(aftermath) = report.aftermath.filter(|a| !a.is_empty()) {
         lines.push((String::new(), Style::default()));
         if let Some((before, after)) = aftermath.mil_ops {
-            push_text(&mut lines, &format!("Military Operations {before} → {after}"), Style::color(Color::Muted).bold(), text_width);
+            push_text(&mut lines, &format!("Military Operations {before} → {after}"), Style::color(Color::Muted).bold());
         }
         if let Some((before, after)) = aftermath.defcon {
-            push_text(&mut lines, &format!("DEFCON {before} → {after} (battleground coup)"), Style::color(Color::Muted).bold(), text_width);
+            push_text(&mut lines, &format!("DEFCON {before} → {after} (battleground coup)"), Style::color(Color::Muted).bold());
         }
         if aftermath.defcon_spared {
-            push_text(&mut lines, "Nuclear Subs: DEFCON unchanged", Style::color(Color::Muted).bold(), text_width);
+            push_text(&mut lines, "Nuclear Subs: DEFCON unchanged", Style::color(Color::Muted).bold());
         }
         if let Some((delta, vp_after)) = aftermath.vp {
             let side = if delta > 0 { Superpower::Us } else { Superpower::Ussr };
             let text = format!("Yuri and Samantha: {:+} VP to the {side} (now {vp_after})", delta.abs());
-            push_text(&mut lines, &text, Style::color(side_color(side)).bold(), text_width);
+            push_text(&mut lines, &text, Style::color(side_color(side)).bold());
         }
     }
 
@@ -185,16 +185,7 @@ pub fn render_roll_result(map: &WorldMap, report: &RollReport, queue_pos: Option
     };
     lines.push((format!("{hint:>text_width$}"), Style::color(Color::Muted)));
 
-    let box_height = 2 + lines.len();
-    let mut canvas = Canvas::new(ROLL_WIDTH, box_height);
-    canvas.draw_thick_box(0, 0, ROLL_WIDTH, box_height, Style::color(border_color));
-    put_border_title(&mut canvas, 0, 0, &title, Style::default().bold(), "", Style::default(), ROLL_WIDTH);
-
-    for (i, (line, style)) in lines.iter().enumerate() {
-        canvas.put(1 + i, 1 + PADDING, line, *style);
-    }
-
-    canvas
+    modal_box(&title, "", ROLL_WIDTH, Style::color(border_color), true, lines)
 }
 
 /// Appends one side's roll to `lines`: a short `{side} rolled {die} {mod}
@@ -203,27 +194,19 @@ pub fn render_roll_result(map: &WorldMap, report: &RollReport, queue_pos: Option
 /// from) word-wrapped onto its own indented line(s) — kept separate so
 /// the numeric line's own width never depends on how many reasons happen
 /// to apply.
-fn push_roll_lines(lines: &mut Vec<(String, Style)>, side: Superpower, die: u8, mods: &Modifiers, total: i32, text_width: usize) {
+fn push_roll_lines(lines: &mut Vec<(String, Style)>, side: Superpower, die: u8, mods: &Modifiers, total: i32) {
     lines.push((format!("{side}  rolled {die}  {:+}  = {total}", mods.total()), Style::default()));
     let reasons = mods.reasons();
     let detail = if reasons.is_empty() { "no modifiers".to_string() } else { reasons.join(" · ") };
-    for line in wrap(&detail, text_width.saturating_sub(2)) {
-        lines.push((format!("  {line}"), Style::color(Color::Muted)));
-    }
+    lines.push((format!("  {detail}"), Style::color(Color::Muted)));
 }
 
-/// Pushes `text`, word-wrapped to `text_width`, onto `lines` — every
-/// wrapped line keeps the same `style`, so a bold/coloured outcome line
-/// stays that way across however many lines it wraps to. Used for every
-/// free-text line below the roll breakdown itself (the outcome sentence,
-/// an influence change, the control line): none of them has a fixed
-/// bound on length, since a country's own name — or, for the outcome
-/// sentence, the removed/added count — can push an otherwise-short line
-/// past the box's own width.
-fn push_text(lines: &mut Vec<(String, Style)>, text: &str, style: Style, text_width: usize) {
-    for line in wrap(text, text_width) {
-        lines.push((line, style));
-    }
+/// Pushes `text` onto `lines` with `style`; [`super::modal_box`] word-wraps it (every
+/// wrapped line keeps the style) when the box is built, so none of the free-text lines below
+/// the roll breakdown — the outcome sentence, an influence change, the control line — can run
+/// past the box however long a country name or count makes it.
+fn push_text(lines: &mut Vec<(String, Style)>, text: &str, style: Style) {
+    lines.push((text.to_string(), style));
 }
 
 fn influence_change_line(side: Superpower, country: &str, before: u8, after: u8) -> String {

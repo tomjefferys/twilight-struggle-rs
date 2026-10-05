@@ -9,16 +9,16 @@ use crate::game::Victory;
 use crate::space::{self, Perk, SpaceResult, MAX_BOX, TRACK};
 use crate::status::GameStatus;
 
-use super::{game_over_line, put_border_title, wrap, Canvas, Color, Style};
+use super::{game_over_line, put_border_title, Canvas, Color, Style, modal_box};
 
-const TRACK_WIDTH: usize = 72;
+pub(super) const TRACK_WIDTH: usize = 72;
 const RESULT_WIDTH: usize = 56;
 const CONFIRM_WIDTH: usize = 64;
 const PADDING: usize = 2;
 const US_COL: usize = 54;
 const USSR_COL: usize = 59;
 
-fn side_color(side: Superpower) -> Color {
+pub(super) fn side_color(side: Superpower) -> Color {
     match side {
         Superpower::Us => Color::Us,
         Superpower::Ussr => Color::Ussr,
@@ -136,23 +136,14 @@ pub fn render_space_confirm(status: &GameStatus, card: &Card) -> Canvas {
     let (hint, border) = match check {
         Ok(()) => ("Enter roll the die · Esc cancel".to_string(), side_color(side)),
         Err(e) => {
-            for part in wrap(&format!("Can't roll: {e}"), text_width) {
-                lines.push((part, Style::color(Color::Muted).bold()));
-            }
+            lines.push((format!("Can't roll: {e}"), Style::color(Color::Muted).bold()));
             lines.push((String::new(), Style::default()));
             ("Roll unavailable · Esc close".to_string(), Color::Muted)
         }
     };
     lines.push((format!("{hint:>text_width$}"), muted));
 
-    let height = 2 + lines.len();
-    let mut canvas = Canvas::new(CONFIRM_WIDTH, height);
-    canvas.draw_thick_box(0, 0, CONFIRM_WIDTH, height, Style::color(border));
-    put_border_title(&mut canvas, 0, 0, &title, Style::default().bold(), "", Style::default(), CONFIRM_WIDTH);
-    for (i, (line, style)) in lines.iter().enumerate() {
-        canvas.put(1 + i, 1 + PADDING, line, *style);
-    }
-    canvas
+    modal_box(&title, "", CONFIRM_WIDTH, Style::color(border), true, lines)
 }
 
 /// Draws `result` as a titled modal box, bordered in the side's colour on
@@ -197,14 +188,7 @@ pub fn render_space_result(
     };
     lines.push((format!("{hint:>text_width$}"), Style::color(Color::Muted)));
 
-    let height = 2 + lines.len();
-    let mut canvas = Canvas::new(RESULT_WIDTH, height);
-    canvas.draw_thick_box(0, 0, RESULT_WIDTH, height, Style::color(border));
-    put_border_title(&mut canvas, 0, 0, &title, Style::default().bold(), "", Style::default(), RESULT_WIDTH);
-    for (i, (line, style)) in lines.iter().enumerate() {
-        canvas.put(1 + i, 1 + PADDING, line, *style);
-    }
-    canvas
+    modal_box(&title, "", RESULT_WIDTH, Style::color(border), true, lines)
 }
 
 #[cfg(test)]

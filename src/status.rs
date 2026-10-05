@@ -135,6 +135,20 @@ fn is_zero(n: &u8) -> bool {
 }
 
 impl GameStatus {
+    /// `side`'s Military Operations so far this turn (0-5).
+    pub fn military_ops(&self, side: Superpower) -> i8 {
+        match side {
+            Superpower::Us => self.military_ops_us,
+            Superpower::Ussr => self.military_ops_ussr,
+        }
+    }
+
+    /// How far `side`'s Military Operations fall short of DEFCON — the VP the opponent gets
+    /// when the turn ends (rule 4.5).
+    pub fn military_shortfall(&self, side: Superpower) -> i8 {
+        (self.defcon as i8 - self.military_ops(side)).max(0)
+    }
+
     /// How many action rounds `side` may play this turn: the turn's usual
     /// count, plus North Sea Oil's extra round for the US — or eight, for
     /// whoever holds the Space Station box's perk.

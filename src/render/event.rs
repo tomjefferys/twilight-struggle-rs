@@ -12,7 +12,7 @@ use crate::events::EffectResult;
 use crate::game::Victory;
 use crate::map::WorldMap;
 
-use super::{game_over_line, ongoing_effect_line, put_border_title, wrap, Canvas, Color, Style};
+use super::{game_over_line, ongoing_effect_line, wrap, Canvas, Color, Style, modal_box};
 
 const EVENT_WIDTH: usize = 56;
 const PADDING: usize = 2;
@@ -50,9 +50,7 @@ pub fn render_event_result(
         lines.push((format!("{} Military Operations {:+}", result.player, result.mil_ops), Style::color(side_color(result.player))));
     }
     if let Some(contest) = &result.contest {
-        for part in wrap(&format!("Rolls: {}", crate::events::choice::describe_contest(contest)), text_width) {
-            lines.push((part, Style::color(Color::Selected)));
-        }
+        lines.push((format!("Rolls: {}", crate::events::choice::describe_contest(contest)), Style::color(Color::Selected)));
     }
     for &(side, card) in &result.discards {
         lines.push((format!("{side} discards {}", cards.card(card).name), Style::color(side_color(side))));
@@ -70,21 +68,15 @@ pub fn render_event_result(
         lines.push((format!("{side} takes {} from the discard pile (revealed)", cards.card(card).name), Style::color(side_color(side))));
     }
     if let Some(play) = result.plays {
-        for part in wrap(&format!("{} {}", cards.card(play.id).name, play_next(&play)), text_width) {
-            lines.push((part, Style::color(Color::Selected).bold()));
-        }
+        lines.push((format!("{} {}", cards.card(play.id).name, play_next(&play)), Style::color(Color::Selected).bold()));
         if play.exchange {
-            for part in wrap(&format!("{} goes to {}'s hand, to be used for operations in their next action round", cards.card(result.card).name, result.player.opponent()), text_width) {
-                lines.push((part, Style::default()));
-            }
+            lines.push((format!("{} goes to {}'s hand, to be used for operations in their next action round", cards.card(result.card).name, result.player.opponent()), Style::default()));
         }
     }
     if let Some(reveal) = &result.reveals {
         let names: Vec<&str> = reveal.cards.iter().map(|&c| cards.card(c).name.as_str()).collect();
         let shown = if names.is_empty() { "(empty)".to_string() } else { names.join(", ") };
-        for part in wrap(&format!("{} reveals their hand: {shown}", reveal.side), text_width) {
-            lines.push((part, Style::color(side_color(reveal.side))));
-        }
+        lines.push((format!("{} reveals their hand: {shown}", reveal.side), Style::color(side_color(reveal.side))));
     }
     if let Some(t) = &result.china {
         lines.push((format!("China Card → {} ({})", t.to, if t.face_up { "face up" } else { "face down" }), Style::color(side_color(t.to)).bold()));
@@ -100,9 +92,7 @@ pub fn render_event_result(
         // The box's title already names the card, so give just what it does.
         let line = ongoing_effect_line(effect);
         let what = line.split_once(": ").map_or(line.as_str(), |(_, rest)| rest);
-        for part in wrap(&format!("In effect until the turn ends: {what}"), text_width) {
-            lines.push((part, style));
-        }
+        lines.push((format!("In effect until the turn ends: {what}"), style));
     }
     if !lines.is_empty() {
         lines.push((String::new(), Style::default()));
@@ -135,14 +125,7 @@ pub fn render_event_result(
     };
     lines.push((format!("{hint:>text_width$}"), Style::color(Color::Muted)));
 
-    let height = 2 + lines.len();
-    let mut canvas = Canvas::new(EVENT_WIDTH, height);
-    canvas.draw_thick_box(0, 0, EVENT_WIDTH, height, Style::color(border));
-    put_border_title(&mut canvas, 0, 0, &title, Style::default().bold(), "", Style::default(), EVENT_WIDTH);
-    for (i, (line, style)) in lines.iter().enumerate() {
-        canvas.put(1 + i, 1 + PADDING, line, *style);
-    }
-    canvas
+    modal_box(&title, "", EVENT_WIDTH, Style::color(border), true, lines)
 }
 
 /// A modal's width for an event played in a modal of its own (Summit, Olympic Games).
@@ -160,9 +143,7 @@ pub fn render_event_session(cards: &CardCatalog, e: &crate::events::EventChoice,
     let hint;
 
     if let Some(contest) = e.contest() {
-        for part in wrap(&format!("Rolls: {}", crate::events::choice::describe_contest(contest)), text_width) {
-            lines.push((part, Style::color(Color::Selected)));
-        }
+        lines.push((format!("Rolls: {}", crate::events::choice::describe_contest(contest)), Style::color(Color::Selected)));
         lines.push((String::new(), Style::default()));
         match contest.winner() {
             Some(winner) => {
@@ -188,9 +169,7 @@ pub fn render_event_session(cards: &CardCatalog, e: &crate::events::EventChoice,
         };
     } else if e.is_participation() {
         // Olympic Games, before any roll: take part or boycott.
-        for part in wrap(&format!("{} — choose:", e.context()), text_width) {
-            lines.push((part, Style::default().bold()));
-        }
+        lines.push((format!("{} — choose:", e.context()), Style::default().bold()));
         border = side_color(e.chooser());
         lines.push((String::new(), Style::default()));
         push_modes(&mut lines, e, text_width, side_color(e.chooser()));
@@ -205,15 +184,11 @@ pub fn render_event_session(cards: &CardCatalog, e: &crate::events::EventChoice,
             hint = format!("1-{} choose", e.modes().len());
         }
     } else if e.needs_roll() {
-        for part in wrap("Each superpower rolls a die and adds 1 for every region it Dominates or Controls.", text_width) {
-            lines.push((part, Style::default()));
-        }
+        lines.push(("Each superpower rolls a die and adds 1 for every region it Dominates or Controls.".to_string(), Style::default()));
         lines.push((String::new(), Style::default()));
         push_roll_block(&mut lines, e);
         lines.push((String::new(), Style::default()));
-        for part in wrap("The winner gets 2 VP and may improve or degrade DEFCON by 1, or leave it. A tie does nothing.", text_width) {
-            lines.push((part, muted));
-        }
+        lines.push(("The winner gets 2 VP and may improve or degrade DEFCON by 1, or leave it. A tie does nothing.".to_string(), muted));
         hint = "r roll the dice · ⌫ cancel the event".to_string();
     } else if e.is_pile_pick() && e.pile().is_empty() {
         border = side_color(e.chooser());
@@ -222,9 +197,7 @@ pub fn render_event_session(cards: &CardCatalog, e: &crate::events::EventChoice,
             crate::events::choice::PileUse::Play => "No card in the discard pile has an event that can be played, so nothing happens.",
             crate::events::choice::PileUse::AskNot | crate::events::choice::PileUse::Tehran => "There are no cards to choose from, so nothing happens.",
         };
-        for part in wrap(why, text_width) {
-            lines.push((part, Style::default().bold()));
-        }
+        lines.push((why.to_string(), Style::default().bold()));
         push_result(cards, &mut lines, e, status, text_width);
         hint = "c confirm · ⌫ take the card back".to_string();
     } else if e.is_pile_pick() && e.is_multi() {
@@ -236,9 +209,7 @@ pub fn render_event_session(cards: &CardCatalog, e: &crate::events::EventChoice,
             crate::events::choice::PileUse::Tehran => format!("{} drew {} cards. Mark any to discard — the rest go back into the draw pile, which is reshuffled:", e.chooser(), e.pile().len()),
             _ => format!("{} may discard any of these {} cards (scoring cards too) and draws as many replacements:", e.chooser(), e.pile().len()),
         };
-        for part in wrap(&intro, text_width) {
-            lines.push((part, Style::default().bold()));
-        }
+        lines.push((intro, Style::default().bold()));
         lines.push((String::new(), Style::default()));
         let total = e.pile().len();
         let start = e.cursor().saturating_sub(WINDOW / 2).min(total.saturating_sub(WINDOW));
@@ -270,9 +241,7 @@ pub fn render_event_session(cards: &CardCatalog, e: &crate::events::EventChoice,
             crate::events::choice::PileUse::Play => format!("{} picks a non-scoring card from the discard pile ({} playable) and plays it as an event:", e.chooser(), e.pile().len()),
             crate::events::choice::PileUse::AskNot | crate::events::choice::PileUse::Tehran => unreachable!("marking picks have their own branch"),
         };
-        for part in wrap(&intro, text_width) {
-            lines.push((part, Style::default().bold()));
-        }
+        lines.push((intro, Style::default().bold()));
         lines.push((String::new(), Style::default()));
         let total = e.modes().len();
         let start = e.cursor().saturating_sub(WINDOW / 2).min(total.saturating_sub(WINDOW));
@@ -299,15 +268,8 @@ pub fn render_event_session(cards: &CardCatalog, e: &crate::events::EventChoice,
     lines.push((String::new(), Style::default()));
     lines.push((format!("{hint:>text_width$}"), muted));
 
-    let height = 2 + lines.len();
-    let mut canvas = Canvas::new(SESSION_WIDTH, height);
-    canvas.draw_thick_box(0, 0, SESSION_WIDTH, height, Style::color(border));
     let title = e.title().map_or_else(|| cards.card(e.card()).name.clone(), str::to_string);
-    put_border_title(&mut canvas, 0, 0, &title, Style::default().bold(), "", Style::default(), SESSION_WIDTH);
-    for (i, (line, style)) in lines.iter().enumerate() {
-        canvas.put(1 + i, 1 + PADDING, line, *style);
-    }
-    canvas
+    modal_box(&title, "", SESSION_WIDTH, Style::color(border), true, lines)
 }
 
 /// What happens to a card another event has put into play.

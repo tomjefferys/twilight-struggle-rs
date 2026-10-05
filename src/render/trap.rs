@@ -7,7 +7,7 @@ use crate::country::Superpower;
 use crate::game::TrapResult;
 use crate::ongoing::LastingEffect;
 
-use super::{put_border_title, wrap, Canvas, Color, Style};
+use super::{Canvas, Color, Style, modal_box};
 
 const WIDTH: usize = 60;
 const PADDING: usize = 2;
@@ -20,14 +20,7 @@ fn side_color(side: Superpower) -> Color {
 }
 
 fn finish(title: &str, border: Color, lines: &[(String, Style)]) -> Canvas {
-    let height = 2 + lines.len();
-    let mut canvas = Canvas::new(WIDTH, height);
-    canvas.draw_thick_box(0, 0, WIDTH, height, Style::color(border));
-    put_border_title(&mut canvas, 0, 0, title, Style::default().bold(), "", Style::default(), WIDTH);
-    for (i, (line, style)) in lines.iter().enumerate() {
-        canvas.put(1 + i, 1 + PADDING, line, *style);
-    }
-    canvas
+    modal_box(title, "", WIDTH, Style::color(border), true, lines.to_vec())
 }
 
 /// Before the roll: what discarding `card` and rolling will do.
@@ -35,13 +28,9 @@ pub fn render_trap_confirm(effect: LastingEffect, side: Superpower, card: &Card)
     let text_width = WIDTH - 2 - 2 * PADDING;
     let muted = Style::color(Color::Muted);
     let mut lines: Vec<(String, Style)> = Vec::new();
-    for part in wrap(&format!("{side} is caught in {}. Discard {} ({} ops) and roll a die: 1-4 ends the trap.", effect.label(), card.name, card.ops), text_width) {
-        lines.push((part, Style::color(side_color(side))));
-    }
+    lines.push((format!("{side} is caught in {}. Discard {} ({} ops) and roll a die: 1-4 ends the trap.", effect.label(), card.name, card.ops), Style::color(side_color(side))));
     lines.push((String::new(), Style::default()));
-    for part in wrap("Either way this action round is spent.", text_width) {
-        lines.push((part, muted));
-    }
+    lines.push(("Either way this action round is spent.".to_string(), muted));
     lines.push((String::new(), Style::default()));
     lines.push((format!("{:>text_width$}", "Enter discard and roll · Esc cancel"), muted));
     finish(&format!("{} · escape attempt", effect.label()), side_color(side), &lines)

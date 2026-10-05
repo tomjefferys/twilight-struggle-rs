@@ -236,7 +236,7 @@ time, never lose to DEFCON at once) for a game to run its full length —
   #18 Captured Nazi Scientist and #80 One Small Step use `Ctx::advance_space`
   and report `EffectResult::space`. Views: `render/space.rs`
   (`render_space_track`, `render_space_result`), a `Space n-m` label and perk
-  entries in the status bar, `t` in interactive mode shows the track as an info-only modal (`Modal::SpaceTrack`); `s` (opens `Modal::SpaceConfirm`, `render_space_confirm`: the next box, the roll needed and why a roll is unavailable if it is — Enter rolls only when `Game::can_space`, Esc cancels for free; shown even when the roll is refused), `space`/`spacerace`/
+  entries in the status bar, `t` in interactive mode shows the tracks as an info-only modal (`Modal::Tracks(TrackTab)`, ←→/Tab/[ ] cycle the tabs Space Race, Military Ops, DEFCON, VP and Turn — `render/tracks.rs`: `TrackTab`, `render_tracks` and one `render_*_track` per tab; the Military Ops tab itemises each side's shortfall against DEFCON — `GameStatus::military_shortfall`, the same number `end_turn` pays — and the net VP; REPL `tracks [space|military|defcon|vp|turn]`, `milops`); `s` (opens `Modal::SpaceConfirm`, `render_space_confirm`: the next box, the roll needed and why a roll is unavailable if it is — Enter rolls only when `Game::can_space`, Esc cancels for free; shown even when the roll is refused), `space`/`spacerace`/
   debug `track us|ussr <n>` in the REPL; test states in `data/states/space.json`.
 - **`ops`** (`src/ops/`) — the game's ops-spending operations, plus (as
   `Operation::Event`) a choice card's event in progress. Four kinds
@@ -995,6 +995,14 @@ Wired into both `main.rs` (an
     each controlled country and who holds it instead. Takes the same
     `(n, total)` queue position `render_roll_result` does, since
     `interactive.rs` queues the two kinds of modal together.
+
+  **Every modal box is built by `render::modal_box`** (`render/mod.rs`): callers push
+  whole sentences as `(String, Style)` lines and it wraps them to the box's text width
+  (`wrap_styled`, keeping each line's leading indent and style on continuation lines), sizes
+  the box to the result and draws the frame and title (`thick` for a modal, thin for the
+  info-only tracks/piles/zoomed card). Never wrap by hand or draw a modal's border yourself —
+  that is what let long lines overflow. The one deliberate exception is a hanging indent wider
+  than leading spaces (the numbered options in `push_modes`), which pre-wraps its own lines.
 
   `render_region`, `render_world_map`, and `render_country` all take an
   optional `&Operation` (`region.rs`/`worldmap.rs`/`country.rs`). `None`

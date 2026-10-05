@@ -1126,3 +1126,49 @@ fn space_track_matches_snapshot() {
     let expected = include_str!("snapshots/space_track.txt");
     assert_eq!(canvas.render(ColorMode::Never), expected.trim_end_matches('\n'));
 }
+
+#[test]
+fn military_track_shows_the_end_of_turn_consequence() {
+    use twilight_struggle::country::Superpower;
+    let status = GameStatus { defcon: 4, military_ops_us: 4, military_ops_ussr: 1, ..GameStatus::default() };
+    assert_eq!(status.military_shortfall(Superpower::Ussr), 3);
+    let text = twilight_struggle::render::render_tracks(&status, twilight_struggle::render::TrackTab::Military, "").render(ColorMode::Never);
+    assert!(text.contains("[Military Ops]"), "{text}");
+    assert!(text.contains("meets DEFCON 4"), "{text}");
+    assert!(text.contains("3 short of DEFCON 4 — USA gets 3 VP"), "{text}");
+    assert!(text.contains("Net at the end of the turn: USA +3 VP"), "{text}");
+}
+
+#[test]
+fn track_modals_wrap_inside_their_box() {
+    let status = GameStatus { defcon: 3, military_ops_us: 2, ..GameStatus::default() };
+    for tab in twilight_struggle::render::TrackTab::ALL {
+        let text = twilight_struggle::render::render_tracks(&status, tab, "←→ tab · Enter/Esc/⌫/t close").render(ColorMode::Never);
+        let widest = text.lines().map(|l| l.chars().count()).max().unwrap();
+        for line in text.lines().skip(1) {
+            if line.starts_with('│') {
+                assert!(line.trim_end().ends_with('│'), "text runs past the border: {line:?}");
+            }
+        }
+        assert!(widest <= 72, "{widest} wide: {text}");
+    }
+}
+
+#[test]
+fn defcon_vp_and_turn_tabs_say_where_the_game_stands() {
+    use twilight_struggle::render::{render_tracks, TrackTab};
+    let status = GameStatus { defcon: 3, vp: -7, turn: 5, action_round: 2, action_rounds_per_turn: 7, ..GameStatus::default() };
+    let show = |tab| render_tracks(&status, tab, "").render(ColorMode::Never);
+    let defcon = show(TrackTab::Defcon);
+    assert!(defcon.contains("◆ 3  Asia closed"), "{defcon}");
+    assert!(defcon.contains("Europe, Asia closed"), "{defcon}");
+    let vp = show(TrackTab::Vp);
+    assert!(vp.contains("7 VP to USSR"), "{vp}");
+    assert!(vp.contains('◆'), "{vp}");
+    let turn = show(TrackTab::Turn);
+    assert!(turn.contains("Turn 5 of 10 — Mid War"), "{turn}");
+    assert!(turn.contains("Action round 2 of 7"), "{turn}");
+    assert!(turn.contains("◆  5  Mid War"), "{turn}");
+    assert_eq!(TrackTab::Turn.next(), TrackTab::Space);
+    assert_eq!(TrackTab::Space.prev(), TrackTab::Turn);
+}

@@ -14,7 +14,7 @@ use crossterm::{execute, queue};
 
 use twilight_struggle::render::{
     log_entry_line, operation_abandoned_line, pile_cards, render_piles, PileTab, operation_closed_line, operation_header, render_card, render_country, render_forced_card, render_hand,
-    render_event_result, render_event_session, render_final_scoring, render_headline_confirm, render_headline_reveal, render_space_confirm, render_space_result, render_trap_confirm, render_trap_result, render_space_track_with_hint, render_war_result, render_region, render_roll_result, render_scoring_preview, render_scoring_result, render_status_bar_with, render_world_map, Canvas, RollReport, HAND_ROWS,
+    render_event_result, render_event_session, render_final_scoring, render_headline_confirm, render_headline_reveal, render_space_confirm, render_space_result, render_trap_confirm, render_trap_result, render_tracks, TrackTab, render_war_result, render_region, render_roll_result, render_scoring_preview, render_scoring_result, render_status_bar_with, render_world_map, Canvas, RollReport, HAND_ROWS,
 };
 use twilight_struggle::events::{PlayAs, EffectResult, ScoringResult, WarResult};
 use twilight_struggle::game::{Phase, Trap, TrapResult, Victory};
@@ -71,9 +71,9 @@ enum Modal {
     /// An open event that runs in a modal of its own (Summit's roll-off): drawn live from the
     /// event, keyed by `r` (roll), digits (choose), `c` (confirm and close), ⌫ (back).
     Session,
-    /// `t`: the space race track, for information only — drawn live from
+    /// `t`: the space race and Military Ops tracks (←→ switch), for information only — drawn live from
     /// the status, dismissed with Enter, Esc or `t` again.
-    SpaceTrack,
+    Tracks(TrackTab),
     /// Final scoring after turn 10: each region's swing, the China Card, the VP at the end and
     /// the game's result.
     FinalScoring(Vec<(ScoringResult, i8)>, Option<Superpower>, i8, Option<Victory>),
@@ -456,8 +456,18 @@ pub fn run(
                         KeyCode::Enter | KeyCode::Esc => {
                             modal.pop_front();
                         }
-                        KeyCode::Char('t') | KeyCode::Backspace if matches!(modal.front(), Some(Modal::SpaceTrack)) => {
+                        KeyCode::Char('t') | KeyCode::Backspace if matches!(modal.front(), Some(Modal::Tracks(_))) => {
                             modal.pop_front();
+                        }
+                        KeyCode::Right | KeyCode::Tab | KeyCode::Char(']') if matches!(modal.front(), Some(Modal::Tracks(_))) => {
+                            if let Some(Modal::Tracks(tab)) = modal.front_mut() {
+                                *tab = tab.next();
+                            }
+                        }
+                        KeyCode::Left | KeyCode::BackTab | KeyCode::Char('[') if matches!(modal.front(), Some(Modal::Tracks(_))) => {
+                            if let Some(Modal::Tracks(tab)) = modal.front_mut() {
+                                *tab = tab.prev();
+                            }
                         }
                         KeyCode::Char('q') => return Ok(()),
                         _ => {}
@@ -518,7 +528,7 @@ pub fn run(
                     KeyCode::Char('o') => message = begin(game, OperationKind::Coup),
                     KeyCode::Char('t') => {
                         zoomed = false;
-                        modal.push_back(Modal::SpaceTrack);
+                        modal.push_back(Modal::Tracks(TrackTab::Space));
                     }
                     KeyCode::Char('D') => {
                         zoomed = false;
@@ -1305,7 +1315,7 @@ fn draw(
             Modal::Event(result, vp_after, winner) => render_event_result(map, cards, result, *vp_after, *winner, queue_pos),
             Modal::War(result, vp_after, winner) => render_war_result(map, cards, result, *vp_after, *winner, queue_pos),
             Modal::Space(result, vp_after, winner) => render_space_result(cards, result, *vp_after, *winner, queue_pos),
-            Modal::SpaceTrack => render_space_track_with_hint(game.status(), "Enter/Esc/⌫/t close"),
+            Modal::Tracks(tab) => render_tracks(game.status(), *tab, "←→ tab · Enter/Esc/⌫/t close"),
             Modal::Piles { tab, cursor, zoom } => {
                 let list = pile_cards(game.hands(), *tab);
                 match list.get((*cursor).min(list.len().saturating_sub(1))) {

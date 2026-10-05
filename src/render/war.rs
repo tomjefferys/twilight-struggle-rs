@@ -10,7 +10,7 @@ use crate::events::WarResult;
 use crate::game::Victory;
 use crate::map::WorldMap;
 
-use super::{game_over_line, put_border_title, war_reasons, wrap, Canvas, Color, Style};
+use super::{game_over_line, war_reasons, Canvas, Color, Style, modal_box};
 
 const WAR_WIDTH: usize = 56;
 const PADDING: usize = 2;
@@ -39,9 +39,7 @@ pub fn render_war_result(
     let side = result.side;
 
     lines.push((format!("{side}  d6: {}   mod: {:+}   = {}", result.die, result.modifier.total(), result.modified()), Style::color(side_color(side))));
-    for part in wrap(&format!("({})", war_reasons(map, &result.modifier)), text_width) {
-        lines.push((format!("  {part}"), Style::color(Color::Muted)));
-    }
+    lines.push((format!("  ({})", war_reasons(map, &result.modifier)), Style::color(Color::Muted)));
     lines.push((format!("needs {}+ to win", result.success_min), Style::color(Color::Muted)));
     lines.push((String::new(), Style::default()));
 
@@ -50,9 +48,7 @@ pub fn render_war_result(
     } else {
         (format!("The invasion of {target} FAILS"), Style::color(Color::Muted).bold())
     };
-    for part in wrap(&outcome.0, text_width) {
-        lines.push((part, outcome.1));
-    }
+    lines.push(outcome);
     for c in &result.influence {
         lines.push((format!("{target}  {} influence {} → {}", c.side, c.before, c.after), Style::color(side_color(c.side))));
     }
@@ -78,14 +74,7 @@ pub fn render_war_result(
     };
     lines.push((format!("{hint:>text_width$}"), Style::color(Color::Muted)));
 
-    let height = 2 + lines.len();
-    let mut canvas = Canvas::new(WAR_WIDTH, height);
-    canvas.draw_thick_box(0, 0, WAR_WIDTH, height, Style::color(border));
-    put_border_title(&mut canvas, 0, 0, &title, Style::default().bold(), "", Style::default(), WAR_WIDTH);
-    for (i, (line, style)) in lines.iter().enumerate() {
-        canvas.put(1 + i, 1 + PADDING, line, *style);
-    }
-    canvas
+    modal_box(&title, "", WAR_WIDTH, Style::color(border), true, lines)
 }
 
 #[cfg(test)]

@@ -13,7 +13,7 @@ use crate::events::scoring::{ScoringKind, SideScore, Tier};
 use crate::events::ScoringResult;
 use crate::map::WorldMap;
 
-use super::{put_border_title, wrap, Canvas, Color, Style};
+use super::{Canvas, Color, Style, modal_box};
 
 /// Fixed content width, like [`super::roll::render_roll_result`]'s own
 /// `ROLL_WIDTH` — nothing about this box's width should depend on which
@@ -53,17 +53,17 @@ fn scoring_box(map: &WorldMap, cards: &CardCatalog, result: &ScoringResult, vp_a
 
     match &result.kind {
         ScoringKind::Region { region, us, ussr } => {
-            push_side_lines(&mut lines, Superpower::Us, us, text_width);
+            push_side_lines(&mut lines, Superpower::Us, us);
             lines.push((String::new(), Style::default()));
-            push_side_lines(&mut lines, Superpower::Ussr, ussr, text_width);
+            push_side_lines(&mut lines, Superpower::Ussr, ussr);
             lines.push((String::new(), Style::default()));
-            push_text(&mut lines, &format!("{region} scoring"), Style::color(Color::Muted), text_width);
+            push_text(&mut lines, &format!("{region} scoring"), Style::color(Color::Muted));
             for &card in &result.modifiers {
-                push_text(&mut lines, &format!("affected by {}", cards.card(card).name), Style::color(Color::Muted), text_width);
+                push_text(&mut lines, &format!("affected by {}", cards.card(card).name), Style::color(Color::Muted));
             }
         }
         ScoringKind::SoutheastAsia { controlled } if controlled.is_empty() => {
-            push_text(&mut lines, "no Southeast Asia country is controlled", Style::color(Color::Muted), text_width);
+            push_text(&mut lines, "no Southeast Asia country is controlled", Style::color(Color::Muted));
         }
         ScoringKind::SoutheastAsia { controlled } => {
             for &(id, side, vp) in controlled {
@@ -78,7 +78,7 @@ fn scoring_box(map: &WorldMap, cards: &CardCatalog, result: &ScoringResult, vp_a
         -1 => (format!("+{} VP to the USSR (now {vp_after})", -result.vp_delta), Style::color(Color::Ussr).bold()),
         _ => (format!("no net VP change (still {vp_after})"), Style::color(Color::Muted).bold()),
     };
-    push_text(&mut lines, &delta_line, delta_style, text_width);
+    push_text(&mut lines, &delta_line, delta_style);
 
     let mut border_color = match result.vp_delta.signum() {
         1 => Color::Us,
@@ -87,23 +87,14 @@ fn scoring_box(map: &WorldMap, cards: &CardCatalog, result: &ScoringResult, vp_a
     };
     if let Some(side) = result.automatic_victory {
         lines.push((String::new(), Style::default()));
-        push_text(&mut lines, &format!("{side} WINS THE GAME — Europe Control"), Style::color(side_color(side)).bold(), text_width);
+        push_text(&mut lines, &format!("{side} WINS THE GAME — Europe Control"), Style::color(side_color(side)).bold());
         border_color = side_color(side);
     }
 
     lines.push((String::new(), Style::default()));
     lines.push((format!("{hint:>text_width$}"), Style::color(Color::Muted)));
 
-    let box_height = 2 + lines.len();
-    let mut canvas = Canvas::new(SCORE_WIDTH, box_height);
-    canvas.draw_thick_box(0, 0, SCORE_WIDTH, box_height, Style::color(border_color));
-    put_border_title(&mut canvas, 0, 0, &title, Style::default().bold(), "", Style::default(), SCORE_WIDTH);
-
-    for (i, (line, style)) in lines.iter().enumerate() {
-        canvas.put(1 + i, 1 + PADDING, line, *style);
-    }
-
-    canvas
+    modal_box(&title, "", SCORE_WIDTH, Style::color(border_color), true, lines)
 }
 
 /// The headline reveal: both chosen cards side by side with the order they resolve in. `first`
@@ -129,7 +120,7 @@ pub fn render_headline_reveal(
     for (side, card) in [(Superpower::Ussr, ussr), (Superpower::Us, us)] {
         let struck = cancelled && side == Superpower::Ussr;
         let label = if struck { format!("{side:<5} {} — cancelled", describe(card)) } else { format!("{side:<5} {}", describe(card)) };
-        push_text(&mut lines, &label, Style::color(side_color(side)).bold(), text_width);
+        push_text(&mut lines, &label, Style::color(side_color(side)).bold());
     }
     lines.push((String::new(), Style::default()));
     let order = match (first, cancelled) {
@@ -137,21 +128,14 @@ pub fn render_headline_reveal(
         (Some(side), false) => format!("{side} resolves first — the higher Operations value, the US on a tie"),
         (None, _) => "neither side has a headline event".to_string(),
     };
-    push_text(&mut lines, &order, Style::color(Color::Muted), text_width);
+    push_text(&mut lines, &order, Style::color(Color::Muted));
     lines.push((String::new(), Style::default()));
     let hint = match queue_pos {
         Some((n, total)) => format!("Enter to continue · {n} of {total}"),
         None => "Enter to continue".to_string(),
     };
     lines.push((format!("{hint:>text_width$}"), Style::color(Color::Muted)));
-    let height = 2 + lines.len();
-    let mut canvas = Canvas::new(SCORE_WIDTH, height);
-    canvas.draw_thick_box(0, 0, SCORE_WIDTH, height, Style::color(first.map_or(Color::Muted, side_color)));
-    put_border_title(&mut canvas, 0, 0, "Headlines", Style::default().bold(), "", Style::default(), SCORE_WIDTH);
-    for (i, (line, style)) in lines.iter().enumerate() {
-        canvas.put(1 + i, 1 + PADDING, line, *style);
-    }
-    canvas
+    modal_box("Headlines", "", SCORE_WIDTH, Style::color(first.map_or(Color::Muted, side_color)), true, lines)
 }
 
 /// The confirmation before a headline card is chosen: the first card a side picks in a turn is
@@ -160,24 +144,16 @@ pub fn render_headline_confirm(side: Superpower, card: &crate::cards::Card) -> C
     let text_width = SCORE_WIDTH - 2 - 2 * PADDING;
     let mut lines: Vec<(String, Style)> = Vec::new();
     let ops = if card.scoring { "scoring".to_string() } else { format!("{} ops", card.ops) };
-    push_text(&mut lines, &format!("{side} headlines {} ({ops})", card.name), Style::color(side_color(side)).bold(), text_width);
+    push_text(&mut lines, &format!("{side} headlines {} ({ops})", card.name), Style::color(side_color(side)).bold());
     lines.push((String::new(), Style::default()));
     push_text(
         &mut lines,
         "The first card chosen each turn is the headline: only its event is played, before any action round.",
         Style::color(Color::Muted),
-        text_width,
     );
     lines.push((String::new(), Style::default()));
     lines.push((format!("{:>text_width$}", "Enter confirm · Esc cancel"), Style::color(Color::Muted)));
-    let height = 2 + lines.len();
-    let mut canvas = Canvas::new(SCORE_WIDTH, height);
-    canvas.draw_thick_box(0, 0, SCORE_WIDTH, height, Style::color(side_color(side)));
-    put_border_title(&mut canvas, 0, 0, "Headline card", Style::default().bold(), "", Style::default(), SCORE_WIDTH);
-    for (i, (line, style)) in lines.iter().enumerate() {
-        canvas.put(1 + i, 1 + PADDING, line, *style);
-    }
-    canvas
+    modal_box("Headline card", "", SCORE_WIDTH, Style::color(side_color(side)), true, lines)
 }
 
 /// The summary modal for final scoring after turn 10: each region's swing in the order it
@@ -218,10 +194,10 @@ pub fn render_final_scoring(
         -1 => (format!("final: USSR ahead by {} VP", -vp_after), Color::Ussr),
         _ => ("final: level at 0 VP".to_string(), Color::Muted),
     };
-    push_text(&mut lines, &total, Style::color(color).bold(), text_width);
+    push_text(&mut lines, &total, Style::color(color).bold());
     let mut border = color;
     if let Some(victory) = winner {
-        push_text(&mut lines, &crate::render::game_over_line(victory), Style::color(victory.side.map_or(Color::Muted, side_color)).bold(), text_width);
+        push_text(&mut lines, &crate::render::game_over_line(victory), Style::color(victory.side.map_or(Color::Muted, side_color)).bold());
         border = victory.side.map_or(Color::Muted, side_color);
     }
     lines.push((String::new(), Style::default()));
@@ -231,14 +207,7 @@ pub fn render_final_scoring(
     };
     lines.push((format!("{hint:>text_width$}"), Style::color(Color::Muted)));
 
-    let height = 2 + lines.len();
-    let mut canvas = Canvas::new(SCORE_WIDTH, height);
-    canvas.draw_thick_box(0, 0, SCORE_WIDTH, height, Style::color(border));
-    put_border_title(&mut canvas, 0, 0, "Final scoring", Style::default().bold(), "", Style::default(), SCORE_WIDTH);
-    for (i, (line, style)) in lines.iter().enumerate() {
-        canvas.put(1 + i, 1 + PADDING, line, *style);
-    }
-    canvas
+    modal_box("Final scoring", "", SCORE_WIDTH, Style::color(border), true, lines)
 }
 
 /// One side's own breakdown: a bold header line (tier, country/
@@ -246,7 +215,7 @@ pub fn render_final_scoring(
 /// itemising the VP contributions that summed to its own total — the
 /// same "wrap rather than widen the box" rule
 /// [`super::roll::render_roll_result`]'s modifier breakdown follows.
-fn push_side_lines(lines: &mut Vec<(String, Style)>, side: Superpower, score: &SideScore, text_width: usize) {
+fn push_side_lines(lines: &mut Vec<(String, Style)>, side: Superpower, score: &SideScore) {
     let header = format!("{side}  {}  ({} countries, {} battlegrounds)", tier_label(score.tier), score.countries, score.battlegrounds);
     lines.push((header, Style::color(side_color(side)).bold()));
 
@@ -262,15 +231,11 @@ fn push_side_lines(lines: &mut Vec<(String, Style)>, side: Superpower, score: &S
     }
     let detail =
         if parts.is_empty() { "0 VP".to_string() } else { format!("{} = {} VP", parts.join(" + "), score.total()) };
-    for line in wrap(&detail, text_width.saturating_sub(2)) {
-        lines.push((format!("  {line}"), Style::color(Color::Muted)));
-    }
+    lines.push((format!("  {detail}"), Style::color(Color::Muted)));
 }
 
-fn push_text(lines: &mut Vec<(String, Style)>, text: &str, style: Style, text_width: usize) {
-    for line in wrap(text, text_width) {
-        lines.push((line, style));
-    }
+fn push_text(lines: &mut Vec<(String, Style)>, text: &str, style: Style) {
+    lines.push((text.to_string(), style));
 }
 
 fn tier_label(tier: Tier) -> &'static str {

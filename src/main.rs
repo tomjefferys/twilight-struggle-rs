@@ -7,7 +7,7 @@ use rustyline::Editor;
 
 use twilight_struggle::render::{
     coup_result_line, game_over_line, log_entry_line, log_text, piles_text, render_final_scoring, PileTab, ongoing_effect_line, operation_abandoned_line, operation_balance_line, render_card,
-    render_country, render_event_result, render_space_result, render_space_track, render_war_result, render_hand, render_log, render_region, render_scoring_result, render_world, render_world_map, roll_result_line,
+    render_country, render_event_result, render_military_track, render_space_result, render_tracks, TrackTab, render_space_track, render_war_result, render_hand, render_log, render_region, render_scoring_result, render_world, render_world_map, roll_result_line,
 };
 use twilight_struggle::{
     ai, CardCatalog, CardFound, CardId, ColorMode, Dice, EventOutcome, Found, Game, GameError, GameStatus, MapLayout, Operation,
@@ -33,7 +33,7 @@ const COMMANDS: &[&str] = &[
     "map", "world", "worldmap", "wm", "region", "country", "set", "add", "remove", "clear", "blank", "load", "save", "states", "play",
     "influence", "realign", "coup", "event", "place", "roll", "undo", "confirm", "cancel", "abandon", "status", "pass", "ai", "hand",
     "card", "log", "history", "export", "seed", "width", "color", "debug", "vp", "defcon", "turn", "ar", "active", "china", "give",
-    "discard", "exile", "help", "+", "-", "take", "mode", "space", "spacerace", "track", "escape", "defuse", "piles", "headline", "new",
+    "discard", "exile", "help", "+", "-", "take", "mode", "space", "spacerace", "milops", "tracks", "track", "escape", "defuse", "piles", "headline", "new",
 ];
 
 struct Session {
@@ -716,6 +716,18 @@ fn run_command(session: &mut Session, line: &str) {
         "event" => run_event_command(session),
         "space" => run_space_command(session),
         "spacerace" => println!("{}", render_space_track(session.game.status()).render(session.color)),
+        "tracks" => {
+            let tab = words.get(1).map(|w| w.to_lowercase());
+            let found = match &tab {
+                None => Some(TrackTab::Space),
+                Some(w) => TrackTab::ALL.iter().copied().find(|t| t.label().to_lowercase().starts_with(w.as_str())),
+            };
+            match found {
+                Some(tab) => println!("{}", render_tracks(session.game.status(), tab, "").render(session.color)),
+                None => println!("tracks [space|military|defcon|vp|turn]"),
+            }
+        }
+        "milops" => println!("{}", render_military_track(session.game.status(), "").render(session.color)),
         "track" => {
             let side = match words.get(1).copied() {
                 Some("us") => Some(Superpower::Us),
@@ -1795,6 +1807,10 @@ Commands:
                           moves the marker and pays the box's VP. The card
                           is discarded either way and the turn passes.
   spacerace               show the space race track, markers and perks
+  tracks [name]           show a track: space, military, defcon, vp or turn
+                          (the interactive map's t modal has them all as tabs)
+  milops                  show the Military Operations track and what the
+                          end of the turn will cost each side
 
   escape <card>           while Bear Trap (USSR) or Quagmire (US) holds your
                           action round: discard that Operations card (worth

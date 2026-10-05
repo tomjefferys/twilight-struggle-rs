@@ -19,6 +19,7 @@ pub mod roll;
 pub mod score;
 pub mod space;
 pub mod statusbar;
+pub mod tracks;
 pub mod trap;
 pub mod war;
 pub mod world;
@@ -35,6 +36,7 @@ pub use roll::{render_roll_result, RollReport};
 pub use score::{render_final_scoring, render_headline_confirm, render_headline_reveal, render_scoring_preview, render_scoring_result};
 pub use trap::{render_trap_confirm, render_trap_result};
 pub use space::{render_space_confirm, render_space_result, render_space_track, render_space_track_with_hint};
+pub use tracks::{render_defcon_track, render_military_track, render_tracks, render_turn_track, render_vp_track, TrackTab};
 pub use statusbar::{render_status_bar, render_status_bar_with, STATUS_BAR_ROWS};
 pub use war::render_war_result;
 pub use world::render_world;
@@ -421,6 +423,52 @@ pub(crate) fn wrap(text: &str, width: usize) -> Vec<String> {
         lines.push(String::new());
     }
     lines
+}
+
+/// [`wrap`] for a modal's body: every line is wrapped to `width`, keeping its leading spaces
+/// (and its style) on each continuation line, so a modal's content can never run past its box
+/// whatever a caller writes. Blank lines stay blank.
+pub(crate) fn wrap_styled(lines: Vec<(String, Style)>, width: usize) -> Vec<(String, Style)> {
+    let mut out = Vec::new();
+    for (text, style) in lines {
+        let indent = text.chars().take_while(|c| *c == ' ').count().min(width / 2);
+        if text.chars().count() <= width {
+            out.push((text, style));
+            continue;
+        }
+        for part in wrap(&text, width - indent) {
+            out.push((format!("{}{part}", " ".repeat(indent)), style));
+        }
+    }
+    out
+}
+
+/// Side padding inside a modal box, between its border and its text.
+pub(crate) const MODAL_PADDING: usize = 2;
+
+/// The width a modal box of `width` columns leaves for text.
+pub(crate) const fn modal_text_width(width: usize) -> usize {
+    width - 2 - 2 * MODAL_PADDING
+}
+
+/// Every modal box is built here: `lines` are wrapped to the box's text width ([`wrap_styled`]),
+/// so a caller only writes the sentence it means, then the box is sized to the result and drawn
+/// with `title` (and `right_title`, if any) on the top border. `thick` is the modal frame;
+/// the thin one is for the info-only views (tracks, piles, a zoomed card).
+pub(crate) fn modal_box(title: &str, right_title: &str, width: usize, border: Style, thick: bool, lines: Vec<(String, Style)>) -> Canvas {
+    let lines = wrap_styled(lines, modal_text_width(width));
+    let height = 2 + lines.len();
+    let mut canvas = Canvas::new(width, height);
+    if thick {
+        canvas.draw_thick_box(0, 0, width, height, border);
+    } else {
+        canvas.draw_box(0, 0, width, height, border);
+    }
+    put_border_title(&mut canvas, 0, 0, title, Style::default().bold(), right_title, border, width);
+    for (i, (line, style)) in lines.iter().enumerate() {
+        canvas.put(1 + i, 1 + MODAL_PADDING, line, *style);
+    }
+    canvas
 }
 
 /// `"-"` for zero, otherwise the number — so an occupied country stands out
@@ -813,7 +861,7 @@ pub(crate) fn vp_line(vp: i8) -> String {
 /// steps rather than two different hints the caller would have to choose
 /// between. The status bar (which does know) uses its own three-state
 /// wording instead — see `statusbar.rs`.
-pub(crate) const BEGIN_HINT: &str = "p play card · i/a/o influence/realign/coup · s space race · t space track · e event · p pass";
+pub(crate) const BEGIN_HINT: &str = "p play card · i/a/o influence/realign/coup · s space race · t tracks · e event · p pass";
 
 /// One escape attempt, worded for the REPL: `Bear Trap: USSR discards Fidel, rolls 3 — escapes`.
 pub fn trap_result_line(cards: &crate::cards::CardCatalog, r: &crate::game::TrapResult) -> String {
@@ -825,4 +873,23 @@ pub fn trap_result_line(cards: &crate::cards::CardCatalog, r: &crate::game::Trap
         r.roll,
         if r.escaped { "escapes" } else { "still trapped (1-4 escapes)" }
     )
+}
+
+#[cfg(test)]
+mod modal_box_tests {
+    use super::*;
+
+    #[test]
+    fn a_long_line_wraps_inside_the_box_keeping_its_indent_and_style() {
+        let long = format!("    {}", "word ".repeat(40));
+        let canvas = modal_box("Title", "", 40, Style::default(), true, vec![(long, Style::default()), (String::new(), Style::default()), ("short".into(), Style::default())]);
+        let text = canvas.render(ColorMode::Never);
+        assert!(text.lines().count() > 5, "{text}");
+        for line in text.lines() {
+            assert_eq!(line.chars().count(), 40, "{line:?}");
+            if line.contains("word") {
+                assert!(line.starts_with("┃      word"), "indent kept: {line:?}");
+            }
+        }
+    }
 }

@@ -9,7 +9,7 @@
 
 use crate::cards::{Card, CardCatalog, CardId, CHINA_CARD};
 
-use super::{card_side_color, put_border_title, wrap, Canvas, Color, Style};
+use super::{card_side_color, modal_box, Canvas, Color, Style};
 
 /// Fixed content width for every card — the physical card's own rules
 /// text varies a lot in length, but nothing about a card's *width* should
@@ -27,27 +27,20 @@ pub fn render_card(cards: &CardCatalog, id: CardId, china_face_up: Option<bool>)
     let card = cards.card(id);
     let text_width = CARD_WIDTH - 2 - 2 * PADDING;
 
-    let mut lines: Vec<(String, Style)> = wrap(&card.text, text_width).into_iter().map(|l| (l, Style::default())).collect();
+    let mut lines: Vec<(String, Style)> = vec![(card.text.clone(), Style::default())];
 
     let flags = card_flags(card, id, china_face_up);
     if !flags.is_empty() {
         lines.push((String::new(), Style::default()));
-        // Word-wrapped like the body text above — a card can carry several
-        // flags at once (optional *and* removed-after-event *and* ongoing,
-        // say), and the joined line can run well past the box's own width.
-        for line in wrap(&flags.join(" · "), text_width) {
-            lines.push((line, Style::color(Color::Muted)));
-        }
+        // A card can carry several flags at once (optional *and* removed-after-event *and*
+        // ongoing, say); `modal_box` wraps the joined line.
+        lines.push((flags.join(" · "), Style::color(Color::Muted)));
     }
     lines.push((String::new(), Style::default()));
     let footer = format!("card #{}", card.id);
     lines.push((format!("{footer:>width$}", width = text_width), Style::color(Color::Muted)));
 
-    let box_height = 2 + lines.len();
-    let mut canvas = Canvas::new(CARD_WIDTH, box_height);
-
     let border_style = Style::color(card_side_color(card.side));
-    canvas.draw_box(0, 0, CARD_WIDTH, box_height, border_style);
 
     // The ops value, not the card's id — that's already the footer's own
     // "card #N" line, and showing it again here just duplicated it
@@ -57,13 +50,7 @@ pub fn render_card(cards: &CardCatalog, id: CardId, china_face_up: Option<bool>)
     // true but misleading.
     let title_left = if card.scoring { format!("Scoring · {}", card.name) } else { format!("Ops {} · {}", card.ops, card.name) };
     let title_right = format!("{} · {}", card.side, card.phase);
-    put_border_title(&mut canvas, 0, 0, &title_left, Style::default().bold(), &title_right, border_style, CARD_WIDTH);
-
-    for (i, (line, style)) in lines.iter().enumerate() {
-        canvas.put(1 + i, 1 + PADDING, line, *style);
-    }
-
-    canvas
+    modal_box(&title_left, &title_right, CARD_WIDTH, border_style, false, lines)
 }
 
 /// The flags row under a card's text: whichever of optional/removed/

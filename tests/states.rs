@@ -4666,6 +4666,51 @@ mod headline {
     }
 
     #[test]
+    fn five_year_plan_cannot_discard_a_headlined_card() {
+        let (map, cards, mut game) = load("five-year-plan-spares-headline");
+        let (arab_israeli, plan) = (card(&cards, "Arab-Israeli War"), card(&cards, "Five Year Plan"));
+        for _ in 0..2 {
+            let pick = if game.active() == Superpower::Ussr { arab_israeli } else { plan };
+            game.headline(&cards, pick).unwrap();
+        }
+        let mut dice = Dice::from_seed(1);
+        game.settle(&map, &cards, &mut dice);
+        let text = twilight_struggle::render::log_text(&map, &cards, game.log());
+        assert!(!text.contains("discards Arab-Israeli War"), "{text}");
+        assert!(text.contains("Five Year Plan"), "{text}");
+    }
+
+    /// Both sides headline the named cards, then the phase settles; returns the log as text.
+    fn headline_log(name: &str, ussr: &str, us: &str) -> String {
+        let (map, cards, mut game) = load(name);
+        for _ in 0..2 {
+            let pick = if game.active() == Superpower::Ussr { ussr } else { us };
+            game.headline(&cards, card(&cards, pick)).unwrap();
+        }
+        game.settle(&map, &cards, &mut Dice::from_seed(1));
+        twilight_struggle::render::log_text(&map, &cards, game.log())
+    }
+
+    #[test]
+    fn terrorism_cannot_discard_a_headlined_card() {
+        let text = headline_log("terrorism-spares-headline", "Terrorism", "Panama Canal Returned");
+        assert!(text.contains("Terrorism"), "{text}");
+        assert!(!text.contains("discards Panama Canal Returned"), "{text}");
+    }
+
+    #[test]
+    fn grain_sales_cannot_draw_a_headlined_card() {
+        let (map, cards, mut game) = load("grain-sales-spares-headline");
+        for (side, pick) in [(Superpower::Ussr, "Fidel"), (Superpower::Us, "Grain Sales to Soviets")] {
+            assert_eq!(game.active(), side);
+            game.headline(&cards, card(&cards, pick)).unwrap();
+        }
+        game.settle(&map, &cards, &mut Dice::from_seed(1));
+        let Some(twilight_struggle::Operation::Event(e)) = game.operation() else { panic!("Grain Sales should still be open") };
+        assert!(!e.prompt().contains("Fidel"), "the headlined Fidel was drawn: {}", e.prompt());
+    }
+
+    #[test]
     fn defectors_cancels_the_ussr_headline_whatever_its_value() {
         let (map, cards, mut game) = load("defectors-cancels");
         play_headlines(&map, &cards, &mut game, "Fidel", "Defectors");
