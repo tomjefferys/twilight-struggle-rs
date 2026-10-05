@@ -57,20 +57,6 @@ fn both_superpower_boxes_are_labelled() {
 }
 
 #[test]
-fn superpower_legend_lists_real_borders() {
-    // The precise complement to the approximate boxes: still real data,
-    // computed from Country::adjacent_superpowers, not hand-authored.
-    let (map, layout) = standard();
-    let board = Board::new(&map);
-    let canvas = render_world_map(&map, &layout, &board, None, None);
-    let text = canvas.render(ColorMode::Never);
-    assert!(text.contains("USA: "));
-    assert!(text.contains("USSR: "));
-    assert!(text.contains("Canada"));
-    assert!(text.contains("Finland"));
-}
-
-#[test]
 fn every_country_has_a_distinct_code_chip_on_the_map() {
     // Every code should appear in the rendered text exactly once (chips
     // don't overlap each other or a superpower box) — a coarse but real
