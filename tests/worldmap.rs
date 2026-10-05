@@ -133,18 +133,15 @@ fn no_selection_reproduces_the_plain_view_exactly() {
 }
 
 #[test]
-fn a_selection_adds_the_region_title_and_key_hints() {
+fn a_selection_adds_the_region_title() {
     let (map, layout) = standard();
     let board = Board::new(&map);
     let plain = render_world_map(&map, &layout, &board, None, None);
     let selected = render_world_map(&map, &layout, &board, Some(Region::Europe), None);
     let text = selected.render(ColorMode::Never);
     assert!(text.contains("EUROPE"), "region name missing:\n{text}");
-    assert!(text.contains("Enter open"), "key hints missing:\n{text}");
-    assert_eq!(selected.height(), plain.height() + 2, "selection should add exactly two rows");
-    for key in ["p play card", "i/a/o influence/realign/coup", "p pass"] {
-        assert!(text.contains(key), "world-map hint missing {key:?}:\n{text}");
-    }
+    assert!(!text.contains("Enter open"), "keys live in the key rows, not the view:\n{text}");
+    assert_eq!(selected.height(), plain.height() + 1, "selection should add exactly one row");
 }
 
 #[test]
@@ -212,15 +209,13 @@ fn the_placement_footer_is_not_clipped() {
     let op = Operation::Influence(placement);
     let plain = render_world_map(&map, &layout, &board, None, None);
     let with_placement = render_world_map(&map, &layout, &board, Some(Region::Europe), Some(&op));
-    assert_eq!(with_placement.height(), plain.height() + 3, "a region selection plus a placement should add exactly three rows");
+    assert_eq!(with_placement.height(), plain.height() + 2, "a region selection plus a placement should add exactly two rows");
 
     let text = with_placement.render(ColorMode::Never);
     for line in text.lines() {
         assert!(line.chars().count() <= with_placement.width(), "world map placement view exceeded its own width: {line:?}");
     }
     assert!(text.contains("USSR placing"), "the full balance line should not be clipped:\n{text}");
-    assert!(text.contains("u undo"), "the placement hint should not be clipped:\n{text}");
-    assert!(text.contains("abandon"), "the abandon hint should not be clipped:\n{text}");
 }
 
 #[test]
@@ -274,16 +269,13 @@ fn the_realignment_footer_is_not_clipped() {
 
     let plain = render_world_map(&map, &layout, &board, None, None);
     let with_realign = render_world_map(&map, &layout, &board, Some(Region::Europe), Some(&op));
-    assert_eq!(with_realign.height(), plain.height() + 3, "a region selection plus a realignment should add exactly three rows");
+    assert_eq!(with_realign.height(), plain.height() + 2, "a region selection plus a realignment should add exactly two rows");
 
     let text = with_realign.render(ColorMode::Never);
     for line in text.lines() {
         assert!(line.chars().count() <= with_realign.width(), "world map realignment view exceeded its own width: {line:?}");
     }
     assert!(text.contains("USSR realigning"), "the full balance line should not be clipped:\n{text}");
-    assert!(text.contains("r roll"), "the realign hint should not be clipped:\n{text}");
-    assert!(text.contains("abandon"), "the abandon hint should not be clipped:\n{text}");
-    assert!(!text.contains("u undo"), "the world map hint shouldn't offer undo during a realignment:\n{text}");
 }
 
 #[test]
@@ -317,14 +309,11 @@ fn the_coup_footer_is_not_clipped() {
 
     let plain = render_world_map(&map, &layout, &board, None, None);
     let with_coup = render_world_map(&map, &layout, &board, Some(Region::Europe), Some(&op));
-    assert_eq!(with_coup.height(), plain.height() + 3, "a region selection plus a coup should add exactly three rows");
+    assert_eq!(with_coup.height(), plain.height() + 2, "a region selection plus a coup should add exactly two rows");
 
     let text = with_coup.render(ColorMode::Never);
     for line in text.lines() {
         assert!(line.chars().count() <= with_coup.width(), "world map coup view exceeded its own width: {line:?}");
     }
     assert!(text.contains("USSR couping"), "the full balance line should not be clipped:\n{text}");
-    assert!(text.contains("r coup"), "the coup hint should not be clipped:\n{text}");
-    assert!(text.contains("abandon"), "the abandon hint should not be clipped:\n{text}");
-    assert!(!text.contains("u undo"), "the world map hint shouldn't offer undo during a coup:\n{text}");
 }

@@ -11,7 +11,7 @@ use twilight_struggle::render::{
 };
 use twilight_struggle::{
     ai, CardCatalog, CardFound, CardId, ColorMode, Dice, EventOutcome, Found, Game, GameError, GameStatus, MapLayout, Operation,
-    OperationKind, Region, RollOutcome, Scenario, StateLibrary, Superpower, ViewMode, WorldMap, CHINA_CARD, DEFCON_RANGE,
+    OperationKind, Region, RollOutcome, Scenario, StateLibrary, Superpower, WorldMap, CHINA_CARD, DEFCON_RANGE,
     MAX_HAND_SIZE, TURN_RANGE,
 };
 
@@ -792,13 +792,13 @@ fn run_command(session: &mut Session, line: &str) {
 fn print_country(session: &Session, query: &str) {
     match session.map.find(query) {
         Found::One(id) => {
-            let canvas = render_country(&session.map, &session.layout, session.game.view_board(), id, session.game.operation(), ViewMode::Static);
+            let canvas = render_country(&session.map, &session.layout, session.game.view_board(), id, session.game.operation());
             println!("{}", canvas.render(session.color));
         }
         Found::None => match session.layout.find_by_code(query) {
             Some(id) => {
                 let canvas =
-                    render_country(&session.map, &session.layout, session.game.view_board(), id, session.game.operation(), ViewMode::Static);
+                    render_country(&session.map, &session.layout, session.game.view_board(), id, session.game.operation());
                 println!("{}", canvas.render(session.color));
             }
             None => println!("no country matches {query:?}"),

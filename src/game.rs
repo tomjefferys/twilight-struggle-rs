@@ -1259,6 +1259,16 @@ impl Game {
         result
     }
 
+    /// Whether the open event could be backed out of right now (what [`Game::abandon`] allows).
+    pub fn event_abandonable(&self) -> bool {
+        match &self.op {
+            Some(Operation::Event(e)) => {
+                self.phase != Phase::Headline && e.is_pristine() && e.chooser() == self.status.active && !e.is_second_stage() && e.contest().is_none()
+            }
+            _ => false,
+        }
+    }
+
     fn abandon_operation(&mut self) -> Result<Operation, GameError> {
         if self.phase == Phase::Headline && self.op.is_some() {
             return Err(GameError::Trap("a headline event has to be played out — it can't be backed out of".into()));

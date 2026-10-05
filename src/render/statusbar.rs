@@ -17,11 +17,9 @@ use crate::status::GameStatus;
 use super::{game_over_line, lasting_effect_line, ongoing_effect_line, operation_balance_line, vp_line, Canvas, Color, Style};
 use crate::ongoing::short_name;
 
-/// Row 1's wording when no card is in play yet — the status bar's own
-/// three-state hint (see [`render_status_bar`]'s own doc), distinct from
-/// `BEGIN_HINT`'s card-agnostic one-liner shown by the region/world-map/
-/// country views, which never know whether a card's already been played.
-const PLAY_HINT: &str = "no card in play — [ ] select · p play";
+/// Row 1's wording when no card is in play yet. Keys live in the key rows
+/// below the map (`keys.rs`), never here.
+const PLAY_HINT: &str = "no card in play";
 
 /// The bar's height, always — with or without an operation open — so the
 /// view drawn below it never shifts up or down as one opens or closes.
@@ -33,12 +31,11 @@ pub const STATUS_BAR_ROWS: usize = 4;
 /// - A winner ([`crate::game::Game::winner`]): `GAME OVER — <side> wins
 ///   (<reason>)`, in that side's own colour — replacing the card/operation
 ///   row entirely, since there's nothing left to play.
-/// - No card in play: [`PLAY_HINT`], naming the keys to select and play
-///   one.
-/// - A card in play, no operation open yet: the card's own name, with the
-///   keys to spend it or return it — `e score` in place of the ops keys
-///   for a scoring card (it has none to spend), its own ops/keys
-///   otherwise.
+/// - No card in play: [`PLAY_HINT`].
+/// - A card in play, no operation open yet: the card's own name and ops.
+///
+/// The row names state only; the keys that act on it are in the context
+/// key row (`keys.rs`).
 /// - An operation open: the exact text `operation_balance_line` gives the
 ///   region and world-map footers (so the three can't disagree), prefixed
 ///   with the card's name — the only one of the three states that also
@@ -115,38 +112,14 @@ pub fn render_status_bar_with(
             (_, Some(Operation::Event(e))) if !e.gate_cards().is_empty() => {
                 let name = card.map(|c| c.name.as_str()).unwrap_or("?");
                 let line = match e.mode() {
-                    None if e.gate_offset() == 0 => {
-                        format!("{name} · {} {} · [ ] pick a card · space {} it · then c", e.chooser(), e.gate_prompt(), e.gate_verb())
-                    }
-                    None => format!("{name} · {} {} · [ ] pick a card · space {} it · 1 keep your cards · then c", e.chooser(), e.gate_prompt(), e.gate_verb()),
-                    Some(i) => format!("{name} · {} · c confirm · ⌫ undo · [ ] space change → {}", e.chooser(), e.modes()[i].label),
+                    None => format!("{name} · {} {}", e.chooser(), e.gate_prompt()),
+                    Some(i) => format!("{name} · {} → {}", e.chooser(), e.modes()[i].label),
                 };
                 (line, side_style(e.chooser()).bold())
             }
             (_, Some(operation @ Operation::Event(e))) => {
                 let name = card.map(|c| c.name.as_str()).unwrap_or(e.title().unwrap_or(if e.is_triggered() { "NORAD" } else { "?" }));
-                let n = e.modes().len();
-                let keys = match (e.mode(), e.is_designation()) {
-                    _ if e.is_multi() => "↑↓ move · Enter mark/unmark · c confirm · ⌫ clear marks".to_string(),
-                    _ if e.is_pile_pick() && e.pile().is_empty() => "c confirm · ⌫ take the card back".to_string(),
-                    _ if e.is_pile_pick() => "↑↓ move · Enter choose · c done · ⌫ clear".to_string(),
-                    _ if e.needs_roll() && e.is_participation() => format!("r roll the dice · 1-{n} change · ⌫ clear"),
-                    _ if e.needs_roll() => "r roll the dice · ⌫ cancel the event".to_string(),
-                    (None, false) if !e.gate_cards().is_empty() => "[ ] pick a card · space discard it · 1 keep your cards".to_string(),
-                    (Some(_), false) if !e.gate_cards().is_empty() => "[ ] pick a card · space discard it · 1 keep · c done".to_string(),
-                    (None, true) => format!("Enter on world map or 1-{n} to choose region"),
-                    (None, false) => format!("1-{n} choose mode"),
-                    (Some(_), true) => format!("Enter/1-{n} change region · ⌫ clear · c done"),
-                    (Some(_), false) if !e.picks_countries() => format!("1-{n} change · c done"),
-                    (Some(_), false) => "+ add · - remove · u undo · c done".to_string(),
-                };
-                // A choice settled by its mode alone has a long prompt (the roll-off, the options):
-                // keep its keys in front where a narrow terminal won't clip them.
-                let line = if e.is_mode_only() {
-                    format!("{name} · {keys} · {}", operation_balance_line(layout, board, operation))
-                } else {
-                    format!("{name} · {} · {keys}", operation_balance_line(layout, board, operation))
-                };
+                let line = format!("{name} · {}", operation_balance_line(layout, board, operation));
                 (line, side_style(e.chooser()).bold())
             }
             (_, Some(operation)) => {
@@ -155,16 +128,11 @@ pub fn render_status_bar_with(
             }
             (Some(card), None) if after_event.is_some() => {
                 let grant = after_event.expect("guard checked");
-                let keys: Vec<&str> = [(grant.influence, "i influence"), (grant.realign, "a realign"), (grant.coup, "o coup")]
-                    .into_iter()
-                    .filter_map(|(on, k)| on.then_some(k))
-                    .collect();
                 (
                     format!(
-                        "{} event played ({}) — {} · p skip the ops",
+                        "{} event played — {} to spend",
                         card.name,
                         grant.ops.map_or_else(|| ops_text(status, card), |o| format!("{} ops", status.effects.card_ops(o, status.active).0)),
-                        keys.join(" · ")
                     ),
                     Style::color(Color::Selected),
                 )
@@ -172,54 +140,53 @@ pub fn render_status_bar_with(
             (Some(card), None) if forced_by.is_some() => {
                 let (host, how) = forced_by.expect("guard checked");
                 let line = if host.id == card.id && how == crate::events::PlayAs::Event {
-                    format!("{} was spent on operations · its event (the opponent's) now has to be played · e play it", card.name)
+                    format!("{} was spent on operations · its event (the opponent's) now has to be played", card.name)
                 } else if host.id == card.id {
-                    format!("{} must be used for operations this round · i influence · a realign · o coup ({})", card.name, ops_text(status, card))
+                    format!("{} must be used for operations this round ({})", card.name, ops_text(status, card))
                 } else {
                     match how {
-                        crate::events::PlayAs::Event => format!("{} puts {} in play · its event has to be played now · e play it ({})", host.name, card.name, ops_text(status, card)),
+                        crate::events::PlayAs::Event => format!("{} puts {} in play · its event has to be played now ({})", host.name, card.name, ops_text(status, card)),
                         crate::events::PlayAs::Either => {
-                            format!("{} puts {} in play · play it now: e its event · i/a/o its operations ({})", host.name, card.name, ops_text(status, card))
+                            format!("{} puts {} in play · play its event or its operations ({})", host.name, card.name, ops_text(status, card))
                         }
                         crate::events::PlayAs::Ops => {
-                            format!("{} puts {} in play · an opponent's event, so use its operations: i/a/o ({})", host.name, card.name, ops_text(status, card))
+                            format!("{} puts {} in play · an opponent's event, so use its operations ({})", host.name, card.name, ops_text(status, card))
                         }
                     }
                 };
                 (line, Style::color(Color::Selected).bold())
             }
             (Some(card), None) if card.scoring => {
-                (format!("playing {} — e score · ⌫ return card", card.name), Style::color(Color::Selected))
+                (format!("playing {} (scoring card)", card.name), Style::color(Color::Selected))
             }
             (Some(card), None) if events::is_implemented(card.id) && card.side != crate::cards::CardSide::Neutral && card.side != crate::cards::side_of(status.active) => (
                 format!(
-                    "playing {} ({}) — an opponent's card: its event happens too · e event, then ops · i influence · a realign · o coup (event after){} · ⌫ return card",
+                    "playing {} ({}) — an opponent's card: its event happens too",
                     card.name,
                     ops_text(status, card),
-                    space_hint(card)
                 ),
                 Style::color(Color::Selected),
             ),
             (Some(card), None) if events::is_implemented(card.id) => (
-                format!("playing {} ({}) — e event · i influence · a realign · o coup{} · ⌫ return card", card.name, ops_text(status, card), space_hint(card)),
+                format!("playing {} ({})", card.name, ops_text(status, card)),
                 Style::color(Color::Selected),
             ),
             (Some(card), None) => (
-                format!("playing {} ({}) — i influence · a realign · o coup{} · ⌫ return card", card.name, ops_text(status, card), space_hint(card)),
+                format!("playing {} ({})", card.name, ops_text(status, card)),
                 Style::color(Color::Selected),
             ),
             (None, None) if status.in_headline() => (
-                format!("{} to choose a headline card · [ ] select · space choose it — its event only, and it can't be taken back", status.active),
+                format!("{} to choose a headline card", status.active),
                 side_style(status.active).bold(),
             ),
             (None, None) if status.forced_play.is_some_and(|(side, _)| side == status.active) => (
-                format!("{} to act · you must play Missile Envy for operations this round · [ ] select it · p play", status.active),
+                format!("{} to act · must play Missile Envy for operations this round", status.active),
                 side_style(status.active).bold(),
             ),
             (None, None) => match status.lasting.trap_on(status.active) {
                 Some(trap) => (
                     format!(
-                        "{} traps {} · space discard a 2+ ops card and roll (1-4 escapes) · no such card: play scoring cards, then p",
+                        "{} traps {} · discard a 2+ ops card and roll (1-4 escapes), or play scoring cards",
                         trap.label(),
                         status.active
                     ),
@@ -271,12 +238,6 @@ fn pile_label(piles: Option<(usize, usize)>) -> String {
         Some((deck, discard)) if deck + discard > 0 => format!(" · deck {deck} · discard {discard}"),
         _ => String::new(),
     }
-}
-
-/// ` · s space race` for any card that has ops to spend — the key opens a
-/// confirmation that explains the box, and why a roll isn't available if it isn't.
-fn space_hint(card: &Card) -> &'static str {
-    if card.scoring { "" } else { " · s space race" }
 }
 
 /// `AR 3/7`, or `Headline` before the first action round.
@@ -404,7 +365,7 @@ mod tests {
         let board = Board::new(&map);
         let text = render_status_bar(&layout, &board, &status(), None, None, None, 60).render(ColorMode::Never);
         assert!(text.contains("no card in play"), "missing play hint:\n{text}");
-        assert!(text.contains("p play"), "missing play hint:\n{text}");
+        assert!(!text.contains("p play"), "keys belong in the key rows, not the bar:\n{text}");
     }
 
     #[test]
@@ -415,21 +376,21 @@ mod tests {
         let text = render_status_bar(&layout, &board, &status(), Some(fidel(&cards)), None, None, 60).render(ColorMode::Never);
         assert!(text.contains("Fidel"), "missing the card's name:\n{text}");
         assert!(text.contains("2 ops"), "missing the card's ops:\n{text}");
-        assert!(text.contains("i influence"), "missing the operation keys:\n{text}");
-        assert!(text.contains("return card"), "missing the return-card hint:\n{text}");
+        assert!(!text.contains("i influence"), "keys belong in the key rows, not the bar:\n{text}");
+        assert!(!text.contains("return card"), "keys belong in the key rows, not the bar:\n{text}");
         assert!(!text.contains("no card in play"), "shouldn't still prompt to play a card:\n{text}");
     }
 
     #[test]
-    fn a_scoring_card_in_play_shows_the_event_key_instead_of_the_ops_keys() {
+    fn a_scoring_card_in_play_is_named_as_one() {
         let (map, layout) = fixtures();
         let board = Board::new(&map);
         let cards = CardCatalog::standard().unwrap();
         let europe_scoring = cards.id_by_name("Europe Scoring").unwrap();
         let text = render_status_bar(&layout, &board, &status(), Some(cards.card(europe_scoring)), None, None, 60).render(ColorMode::Never);
         assert!(text.contains("Europe Scoring"), "missing the card's name:\n{text}");
-        assert!(text.contains("e score"), "missing the event key:\n{text}");
-        assert!(!text.contains("i influence"), "a scoring card has no ops, so the ops keys shouldn't show:\n{text}");
+        assert!(text.contains("scoring card"), "should say it is a scoring card:\n{text}");
+        assert!(!text.contains("e score"), "keys belong in the key rows, not the bar:\n{text}");
     }
 
     #[test]
@@ -514,7 +475,7 @@ mod tests {
         assert!(first.contains("USSR to act"), "{first}");
         assert!(!first.contains("USA to act"), "{first}");
         assert!(text.contains("USSR chooses"), "{text}");
-        assert!(text.contains("+ add · - remove"), "{text}");
+        assert!(!text.contains("+ add · - remove"), "keys belong in the key rows:\n{text}");
     }
 
     // --- turn-long effects ---------------------------------------------------

@@ -39,4 +39,3 @@ Europe — battlegrounds US 1/USSR 0   countries US 1/USSR 0
 USSR chooses · 1/4 countries · add 1 USSR influence to each of 4 non-US-controlled Eastern European countries · Hungary USSR+1
 double border: can act here · dim: not eligible · ↑N/↓N: can add/remove N · +N/-N: staged
 - undo here
-←→↑↓ select · Enter open · + add · - remove · u undo · 1-9 mode · ⌫ abandon · c done
