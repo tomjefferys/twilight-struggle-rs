@@ -44,6 +44,12 @@ pub fn render_space_track(status: &GameStatus) -> Canvas {
 /// [`render_space_track`] with a right-aligned key hint on an extra row
 /// below it (the interactive modal's "Esc close"); empty adds no row.
 pub fn render_space_track_with_hint(status: &GameStatus, hint: &str) -> Canvas {
+    render_space_track_sized(status, hint, 0)
+}
+
+/// [`render_space_track_with_hint`] at least `min_height` rows tall (the tracks modal keeps
+/// every tab the same size); the attempts and hint rows stay at the bottom.
+pub fn render_space_track_sized(status: &GameStatus, hint: &str, min_height: usize) -> Canvas {
     let mut rows: Vec<(String, Style, Option<u8>)> = Vec::new();
     rows.push(("Start".to_string(), Style::default(), Some(0)));
     for (i, b) in TRACK.iter().enumerate() {
@@ -54,7 +60,7 @@ pub fn render_space_track_with_hint(status: &GameStatus, hint: &str) -> Canvas {
             rows.push((format!("     {text}"), Style::color(color), None));
         }
     }
-    let height = rows.len() + 4 + (!hint.is_empty()) as usize;
+    let height = (rows.len() + 4 + (!hint.is_empty()) as usize).max(min_height);
     let mut canvas = Canvas::new(TRACK_WIDTH, height);
     canvas.draw_box(0, 0, TRACK_WIDTH, height, Style::default());
     put_border_title(&mut canvas, 0, 0, "Space Race", Style::default().bold(), "", Style::default(), TRACK_WIDTH);

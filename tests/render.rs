@@ -1172,3 +1172,17 @@ fn defcon_vp_and_turn_tabs_say_where_the_game_stands() {
     assert_eq!(TrackTab::Turn.next(), TrackTab::Space);
     assert_eq!(TrackTab::Space.prev(), TrackTab::Turn);
 }
+
+#[test]
+fn every_tracks_tab_is_the_same_size() {
+    use twilight_struggle::render::{render_tracks, TrackTab};
+    let status = GameStatus::default();
+    let sizes: Vec<(usize, usize)> = TrackTab::ALL
+        .iter()
+        .map(|&t| {
+            let c = render_tracks(&status, t, "←→ tab · Enter/Esc/⌫/t close");
+            (c.height(), c.render(ColorMode::Never).lines().map(|l| l.chars().count()).max().unwrap())
+        })
+        .collect();
+    assert!(sizes.windows(2).all(|w| w[0] == w[1]), "{sizes:?}");
+}

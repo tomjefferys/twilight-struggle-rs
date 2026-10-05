@@ -35,7 +35,7 @@ pub use region::render_region;
 pub use roll::{render_roll_result, RollReport};
 pub use score::{render_final_scoring, render_headline_confirm, render_headline_reveal, render_scoring_preview, render_scoring_result};
 pub use trap::{render_trap_confirm, render_trap_result};
-pub use space::{render_space_confirm, render_space_result, render_space_track, render_space_track_with_hint};
+pub use space::{render_space_confirm, render_space_result, render_space_track, render_space_track_sized, render_space_track_with_hint};
 pub use tracks::{render_defcon_track, render_military_track, render_tracks, render_turn_track, render_vp_track, TrackTab};
 pub use statusbar::{render_status_bar, render_status_bar_with, STATUS_BAR_ROWS};
 pub use war::render_war_result;

@@ -6,8 +6,8 @@ use crate::country::Superpower;
 use crate::ops::defcon_banned;
 use crate::status::{hand_size_for_turn, rounds_for_turn, GameStatus};
 
-use super::space::{render_space_track_with_hint, side_color, TRACK_WIDTH};
-use super::{modal_box, modal_text_width, Canvas, Color, Style, MODAL_PADDING};
+use super::space::{render_space_track_sized, side_color, TRACK_WIDTH};
+use super::{modal_box, modal_text_width, wrap_styled, Canvas, Color, Style, MODAL_PADDING};
 
 /// One tab of the `t` tracks modal.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -59,10 +59,17 @@ fn blank() -> (String, Style) {
     (String::new(), plain())
 }
 
-/// A track tab's box: `lines` plus, when `hint` isn't empty, a right-aligned key hint.
-fn track_box(title: &str, mut lines: Vec<(String, Style)>, hint: &str) -> Canvas {
+/// A track tab's box: `lines` plus, when `hint` isn't empty, a right-aligned key hint at the
+/// bottom. Blank rows pad it out to `min_height` (the whole box, border included), so every
+/// tab of the modal is the same size.
+fn track_box(title: &str, lines: Vec<(String, Style)>, hint: &str, min_height: usize) -> Canvas {
+    let width = modal_text_width(TRACK_WIDTH);
+    let mut lines = wrap_styled(lines, width);
+    let footer = if hint.is_empty() { 0 } else { 2 };
+    while lines.len() + footer + 2 < min_height {
+        lines.push(blank());
+    }
     if !hint.is_empty() {
-        let width = modal_text_width(TRACK_WIDTH);
         lines.push(blank());
         lines.push((format!("{hint:>width$}"), muted()));
     }
@@ -71,7 +78,7 @@ fn track_box(title: &str, mut lines: Vec<(String, Style)>, hint: &str) -> Canvas
 
 /// The Military Operations track: each side's marker (0-5), DEFCON, and what the end of the
 /// turn does with them — the shortfall against DEFCON is paid to the opponent in VP.
-pub fn render_military_track(status: &GameStatus, hint: &str) -> Canvas {
+fn military_box(status: &GameStatus, hint: &str, min_height: usize) -> Canvas {
     let mut lines: Vec<(String, Style)> = Vec::new();
     lines.push((format!("DEFCON {} — each side needs that many Military Ops by the end of the turn", status.defcon), plain()));
     lines.push(blank());
@@ -97,12 +104,12 @@ pub fn render_military_track(status: &GameStatus, hint: &str) -> Canvas {
     };
     lines.push((net, Style::color(color).bold()));
     lines.push(("Both tracks reset to 0 when the turn ends. Coups add their ops (max 5); a war event adds its Military Ops too.".to_string(), muted()));
-    track_box("Military Operations", lines, hint)
+    track_box("Military Operations", lines, hint, min_height)
 }
 
 /// The DEFCON track, 5 down to 1: where it stands and which regions are closed to coups and
 /// realignments at each level (rule 6.1.3).
-pub fn render_defcon_track(status: &GameStatus, hint: &str) -> Canvas {
+fn defcon_box(status: &GameStatus, hint: &str, min_height: usize) -> Canvas {
     let mut lines: Vec<(String, Style)> = Vec::new();
     for level in (1..=5u8).rev() {
         let here = status.defcon == level;
@@ -125,11 +132,11 @@ pub fn render_defcon_track(status: &GameStatus, hint: &str) -> Canvas {
     lines.push((format!("Each side needs {} Military Ops by the end of the turn.", status.defcon), plain()));
     lines.push(blank());
     lines.push(("Influence placement is never restricted. A coup in a battleground lowers DEFCON by 1; it rises by 1 at the end of every turn (max 5).".to_string(), muted()));
-    track_box("DEFCON", lines, hint)
+    track_box("DEFCON", lines, hint, min_height)
 }
 
 /// The VP track, −20 to +20 (positive favours the USA), with the marker and who leads.
-pub fn render_vp_track(status: &GameStatus, hint: &str) -> Canvas {
+fn vp_box(status: &GameStatus, hint: &str, min_height: usize) -> Canvas {
     const CELLS: usize = 41;
     let at = (status.vp.clamp(-20, 20) + 20) as usize;
     let leader = match status.vp.signum() {
@@ -163,12 +170,12 @@ pub fn render_vp_track(status: &GameStatus, hint: &str) -> Canvas {
     lines.push((summary, leader_style));
     lines.push(blank());
     lines.push(("Reaching ±20 ends the game at once. After turn 10, final scoring is added and the side ahead wins; a tie is a draw.".to_string(), muted()));
-    track_box("Victory Points", lines, hint)
+    track_box("Victory Points", lines, hint, min_height)
 }
 
 /// The turn and action round: where the game is among the ten turns, with each turn's era,
 /// action rounds and hand size.
-pub fn render_turn_track(status: &GameStatus, hint: &str) -> Canvas {
+fn turn_box(status: &GameStatus, hint: &str, min_height: usize) -> Canvas {
     let era = |t: u8| match t {
         1..=3 => "Early War",
         4..=7 => "Mid War",
@@ -192,18 +199,40 @@ pub fn render_turn_track(status: &GameStatus, hint: &str) -> Canvas {
     }
     lines.push(blank());
     lines.push(("End of each turn: Military Ops penalty, then a scoring card still held loses the game, the China Card flips face up, DEFCON rises by 1 and both hands are dealt back up. After turn 10, final scoring.".to_string(), muted()));
-    track_box("Turn", lines, hint)
+    track_box("Turn", lines, hint, min_height)
 }
 
-/// The `t` modal: a tab strip above the chosen track.
+pub fn render_military_track(status: &GameStatus, hint: &str) -> Canvas {
+    military_box(status, hint, 0)
+}
+
+pub fn render_defcon_track(status: &GameStatus, hint: &str) -> Canvas {
+    defcon_box(status, hint, 0)
+}
+
+pub fn render_vp_track(status: &GameStatus, hint: &str) -> Canvas {
+    vp_box(status, hint, 0)
+}
+
+pub fn render_turn_track(status: &GameStatus, hint: &str) -> Canvas {
+    turn_box(status, hint, 0)
+}
+
+fn tab_box(status: &GameStatus, tab: TrackTab, hint: &str, min_height: usize) -> Canvas {
+    match tab {
+        TrackTab::Space => render_space_track_sized(status, hint, min_height),
+        TrackTab::Military => military_box(status, hint, min_height),
+        TrackTab::Defcon => defcon_box(status, hint, min_height),
+        TrackTab::Vp => vp_box(status, hint, min_height),
+        TrackTab::Turn => turn_box(status, hint, min_height),
+    }
+}
+
+/// The `t` modal: a tab strip above the chosen track. Every tab is as tall as the tallest, so
+/// switching tabs never resizes the modal.
 pub fn render_tracks(status: &GameStatus, tab: TrackTab, hint: &str) -> Canvas {
-    let body = match tab {
-        TrackTab::Space => render_space_track_with_hint(status, hint),
-        TrackTab::Military => render_military_track(status, hint),
-        TrackTab::Defcon => render_defcon_track(status, hint),
-        TrackTab::Vp => render_vp_track(status, hint),
-        TrackTab::Turn => render_turn_track(status, hint),
-    };
+    let height = TrackTab::ALL.iter().map(|&t| tab_box(status, t, hint, 0).height()).max().unwrap_or(0);
+    let body = tab_box(status, tab, hint, height);
     let strip: Vec<String> = TrackTab::ALL
         .iter()
         .map(|&t| if t == tab { format!("[{}]", t.label()) } else { format!(" {} ", t.label()) })
