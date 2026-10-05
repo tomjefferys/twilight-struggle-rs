@@ -33,7 +33,7 @@ pub use ops::{
     coup_odds, coup_resolve, coup_target_number, modifiers, odds, resolve, Coup, CoupError, CoupOdds, CoupResult, InfluencePlacement,
     Modifiers, Odds, Operation, PlacementError, RealignError, Realignment, RollResult,
 };
-pub use render::{ColorMode, ViewMode};
+pub use render::ColorMode;
 pub use scenario::{Scenario, ScenarioError};
 pub use states::{StateEntry, StateError, StateLibrary};
 pub use status::{GameStatus, StatusError, ACTION_ROUNDS_PER_TURN_RANGE, DEFCON_RANGE, TURN_RANGE, VP_RANGE};

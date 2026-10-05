@@ -14,7 +14,7 @@ use crossterm::{execute, queue};
 
 use twilight_struggle::render::{
     log_entry_line, operation_abandoned_line, pile_cards, render_piles, PileTab, operation_closed_line, operation_header, render_card, render_country, render_forced_card, render_hand,
-    render_event_result, render_event_session, render_final_scoring, render_headline_confirm, render_headline_reveal, render_space_confirm, render_space_result, render_trap_confirm, render_trap_result, render_tracks, TrackTab, render_war_result, render_region, render_roll_result, render_scoring_preview, render_scoring_result, render_status_bar_with, render_world_map, Canvas, RollReport, HAND_ROWS,
+    render_event_result, render_event_session, render_final_scoring, render_headline_confirm, render_headline_reveal, render_space_confirm, render_space_result, render_trap_confirm, render_trap_result, render_tracks, TrackTab, render_war_result, render_region, render_roll_result, render_scoring_preview, render_scoring_result, render_status_bar_with, render_world_map, Canvas, Color, Style, RollReport, HAND_ROWS, context_keys, global_keys, KeyScreen, KeyUi,
 };
 use twilight_struggle::events::{PlayAs, EffectResult, ScoringResult, WarResult};
 use twilight_struggle::game::{Phase, Trap, TrapResult, Victory};
@@ -22,7 +22,7 @@ use twilight_struggle::space::SpaceResult;
 use twilight_struggle::ops::Operation;
 use twilight_struggle::{
     ai, Ai, Board, CardCatalog, CardId, ColorMode, CountryId, Dice, Direction, Event, EventOutcome, Game, GameError, LogEntry, MapLayout,
-    OperationKind, Region, RollOutcome, Superpower, ViewMode, WorldMap, CHINA_CARD,
+    OperationKind, Region, RollOutcome, Superpower, WorldMap, CHINA_CARD,
 };
 
 /// How many cards the piles view can scroll through on `tab`.
@@ -296,7 +296,7 @@ pub fn run(
                                         if let Some(at) = entries[logged..].iter().rposition(|e| matches!(&e.event, Event::EventResolved { result, .. } if !result.takes.is_empty() || result.plays.is_some() || !result.discards.is_empty() || !result.pile_discards.is_empty())) {
                                             if let Event::EventResolved { result, .. } = &entries[logged + at].event {
                                                 let mut names: Vec<String> = result.takes.iter().map(|&(side, c)| format!("{side} takes {} from the discard pile", cards.card(c).name)).collect();
-                                                names.extend(result.plays.map(|p| format!("{} is now in play — {}", cards.card(p.id).name, match p.how { PlayAs::Event => "e to play its event", PlayAs::Either => "e event, or i/a/o", PlayAs::Ops => "i/a/o" })));
+                                                names.extend(result.plays.map(|p| format!("{} is now in play — {}", cards.card(p.id).name, match p.how { PlayAs::Event => "its event has to be played", PlayAs::Either => "event or operations", PlayAs::Ops => "operations only" })));
                                                 if !names.is_empty() {
                                                     message = Some(names.join(" · "));
                                                 }
@@ -612,7 +612,7 @@ pub fn run(
                                         && !e.picks_countries()
                                         && let Some(i) = e.mode()
                                     {
-                                        message = Some(format!("{} — c to confirm, ⌫ to undo", e.modes()[i].label));
+                                        message = Some(e.modes()[i].label.to_string());
                                     }
                                 }
                             }
@@ -667,7 +667,7 @@ pub fn run(
                         // back to the hand.
                         let gate = discard_gate_open(game);
                         message = Some(if game.clear_event_mode(map) {
-                            if gate { "choice cleared — pick a card (space) or keep your cards (1)".to_string() } else { "mode cleared — choose again, or ⌫ to abandon the event".to_string() }
+                            if gate { "choice cleared".to_string() } else { "mode cleared".to_string() }
                         } else if game.operation().is_some() {
                             match game.abandon() {
                                 Ok(op) => operation_abandoned_line(&op),
@@ -1237,6 +1237,26 @@ fn blit_centred(canvas: &mut Canvas, overlay: &Canvas) {
     canvas.blit(overlay, row, col);
 }
 
+/// The view area's height: the tallest plain screen (world map, any region, any country)
+/// plus room for an operation's extra footer rows, computed once so the layout below it
+/// never shifts while navigating. A screen taller than this still draws in full.
+static VIEW_ROWS: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
+const OP_FOOTER_ROWS: usize = 2;
+
+fn fixed_view_rows(map: &WorldMap, layout: &MapLayout, board: &Board) -> usize {
+    let mut tallest = render_world_map(map, layout, board, Some(Region::Europe), None).height();
+    for region in Region::ALL {
+        for id in layout.countries_in_region(map, region) {
+            tallest = tallest.max(render_region(map, layout, board, region, Some(id), None).height());
+            tallest = tallest.max(render_country(map, layout, board, id, None).height());
+        }
+    }
+    tallest + OP_FOOTER_ROWS
+}
+
+/// Rows the pinned key hints take under the message row.
+const KEY_ROWS: usize = 3;
+
 /// Draws the status bar, the current screen (with a zoomed card's detail,
 /// and/or the roll-result modal, blitted over it), the message row, and —
 /// pinned to the bottom, always [`HAND_ROWS`] tall — the active side's
@@ -1257,32 +1277,12 @@ fn draw(
     modal: &VecDeque<Modal>,
     color: ColorMode,
 ) -> io::Result<()> {
-    // A choice waiting only for its confirmation stays on the message row
-    // (unless something more pressing replaced it) until confirmed or undone.
-    let forced = game.forced_by().zip(game.card_in_play()).zip(game.forced_how()).map(|((host, card), how)| match how {
-        PlayAs::Event if host == card => format!("{} was spent on operations — now its event (the opponent's) has to be played: press e", cards.card(card).name),
-        _ if host == card => format!("{} has to be used for operations this action round — i, a or o", cards.card(card).name),
-        PlayAs::Event => format!("{} puts {} in play — press e to play its event (it can't be skipped or taken back)", cards.card(host).name, cards.card(card).name),
-        PlayAs::Either => format!("{} puts {} in play — play it now: e for its event, or i/a/o for its operations", cards.card(host).name, cards.card(card).name),
-        PlayAs::Ops => format!("{} puts {} in play — an opponent's event, so use its operations (i/a/o)", cards.card(host).name, cards.card(card).name),
-    });
-    let held = game.awaiting_discard().map(|side| format!("Eagle/Bear has Landed — {side} may discard one card: Space discards the selected card · p keeps them all"));
-    let headline = game.picking_headline().then(|| match (game.headline_pick_seen(), game.headline_other_has_chosen()) {
-        (Some((other, card)), _) => format!("Man in Earth Orbit — {other} headlined {}; choose yours (space)", cards.card(card).name),
-        (None, true) => format!("{} has chosen a headline card (hidden) — now {}: [ ] select, space choose", game.active().opponent(), game.active()),
-        (None, false) => format!("{}: choose your headline card — [ ] select, space choose", game.active()),
-    });
-    let reminder = pending_choice_reminder(game, cards).or(held).or(headline).or(forced).or_else(|| {
-        (hand_selected.peek && peeking_allowed(game) && !discard_gate_open(game))
-            .then(|| format!("showing the {} hand (revealed) — v to return to your own", game.active().opponent()))
-    });
-    let message = message.or(reminder.as_deref());
     let board = game.board();
     let op = game.operation();
     let mut canvas = match screen {
         Screen::World { selected } => render_world_map(map, layout, board, Some(*selected), op),
         Screen::Region { region, selected } => render_region(map, layout, board, *region, Some(*selected), op),
-        Screen::Country { selected, .. } => render_country(map, layout, board, *selected, op, ViewMode::Interactive),
+        Screen::Country { selected, .. } => render_country(map, layout, board, *selected, op),
     };
 
     let side = hand_side(game, hand_selected.peek);
@@ -1351,8 +1351,23 @@ fn draw(
     let card_in_play = game.card_in_play().map(|id| cards.card(id));
     let bar = render_status_bar_with(layout, board, game.status(), card_in_play, op, game.winner(), game.ops_after_event(), game.forced_by().zip(game.forced_how()).map(|(c, how)| (cards.card(c), how)), Some((game.hands().deck().len(), game.discards().len())), game.phase() == Phase::Setup, canvas.width());
 
-    let rows = terminal::size().map(|(_, h)| h as usize).unwrap_or(bar.height() + canvas.height() + HAND_ROWS);
-    let view_budget = rows.saturating_sub(bar.height() + message.is_some() as usize + HAND_ROWS);
+    // The two pinned key rows: what always works, then what works right now.
+    let key_screen = match screen {
+        Screen::World { .. } => KeyScreen::World,
+        Screen::Region { .. } => KeyScreen::Region,
+        Screen::Country { .. } => KeyScreen::Country,
+    };
+    let key_ui = KeyUi {
+        zoomed,
+        peeking: hand_selected.peek && peeking_allowed(game) && !discard_gate_open(game),
+        modal_open: !modal.is_empty(),
+        p_plays: p_plays(game, hand_selected),
+    };
+    let global_row = global_keys(key_screen);
+    let context_row = context_keys(game, cards, key_screen, key_ui);
+
+    let rows = terminal::size().map(|(_, h)| h as usize).unwrap_or(bar.height() + canvas.height() + HAND_ROWS + KEY_ROWS);
+    let view_budget = rows.saturating_sub(bar.height() + HAND_ROWS + KEY_ROWS);
 
     let mut out = io::stdout();
     queue!(out, Clear(ClearType::All))?;
@@ -1363,8 +1378,11 @@ fn draw(
             out.write_all(line.as_bytes())?;
             // Raw mode needs an explicit carriage return: a bare '\n'
             // only moves the cursor down a row, it doesn't return it to
-            // column 0.
-            out.write_all(b"\r\n")?;
+            // column 0. Never after the terminal's last row, though: that
+            // would scroll the whole screen up and push the status bar off.
+            if (*row as usize) + 1 < rows {
+                out.write_all(b"\r\n")?;
+            }
         }
         *row += 1;
         Ok(())
@@ -1376,11 +1394,21 @@ fn draw(
     for line in canvas.render(color).split('\n').take(view_budget) {
         emit(&mut out, &mut row, line)?;
     }
-    if let Some(message) = message {
-        emit(&mut out, &mut row, message)?;
+    // Pad the view to a fixed height (so the hand strip and key rows never move as the
+    // screen changes), then the hand, a reserved message row and the keys.
+    let fixed = *VIEW_ROWS.get_or_init(|| fixed_view_rows(map, layout, game.board()));
+    let view_rows = canvas.height().min(view_budget);
+    for _ in view_rows..fixed.min(view_budget) {
+        emit(&mut out, &mut row, "")?;
     }
     for line in hand_canvas.render(color).split('\n') {
         emit(&mut out, &mut row, line)?;
+    }
+    emit(&mut out, &mut row, message.unwrap_or(""))?;
+    for (text, style) in [(&global_row, Style::color(Color::Muted)), (&context_row, Style::color(Color::Selected))] {
+        let mut line = Canvas::new(text.chars().count().max(1), 1);
+        line.put(0, 0, text, style);
+        emit(&mut out, &mut row, &line.render(color))?;
     }
     out.flush()
 }

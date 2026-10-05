@@ -5,26 +5,7 @@ use crate::layout::MapLayout;
 use crate::map::WorldMap;
 use crate::ops::Operation;
 
-use super::mode_only_hint;
-use super::{operation_balance_line, region_color, region_tally, Canvas, Color, Style, BEGIN_HINT};
-
-/// Shown below the legend when a region is selected but no operation is
-/// in progress.
-const WORLD_HINT: &str = "←→↑↓ select · Enter open · Esc back";
-
-/// Shown instead once an [`InfluencePlacement`](crate::ops::InfluencePlacement) is in progress.
-const WORLD_PLACEMENT_HINT: &str = "←→↑↓ select · Enter open · u undo · ⌫ abandon · c confirm · Esc back";
-
-/// Shown instead once a [`Realignment`](crate::ops::Realignment) is in
-/// progress. No `u undo` — a resolved roll can't be taken back.
-const WORLD_REALIGN_HINT: &str = "←→↑↓ select · Enter open · r roll · ⌫ abandon · c done · Esc back";
-
-/// Shown instead once a [`Coup`](crate::ops::Coup) is in progress. No
-/// `u undo` — a resolved attempt can't be taken back.
-const WORLD_WAR_HINT: &str = "←→↑↓ select · Enter open · ⌫ abandon · Esc back";
-const WORLD_COUP_HINT: &str = "←→↑↓ select · Enter open · r coup · ⌫ abandon · c done · Esc back";
-const WORLD_DESIGNATE_HINT: &str = "←→↑↓ select · Enter designate · ⌫ clear/abandon · c done · Esc back";
-const WORLD_EVENT_HINT: &str = "←→↑↓ select · Enter open · u undo · ⌫ abandon · c done · Esc back";
+use super::{operation_balance_line, region_color, region_tally, Canvas, Color, Style};
 
 /// The whole world on one grid, drawn to actually look like a map: real
 /// landmass shading underneath (rasterized once from public-domain
@@ -155,24 +136,11 @@ fn footer_lines(
         && !e.is_mode_only()
     {
         let legend = if e.is_designation() {
-            "Enter (or a digit): designate the region · bold: designated · dim: not designated"
+            "bold: designated region · dim: not designated"
         } else {
             "+/- on a country: can add/remove there · ~ changed · dim: not eligible"
         };
         lines.push((legend.to_string(), Style::color(Color::Muted)));
-    }
-    if selected.is_some() {
-        let hint = match op {
-            Some(Operation::Influence(_)) => WORLD_PLACEMENT_HINT.to_string(),
-            Some(Operation::Realign(_)) => WORLD_REALIGN_HINT.to_string(),
-            Some(Operation::Coup(_)) => WORLD_COUP_HINT.to_string(),
-            Some(Operation::War(_)) => WORLD_WAR_HINT.to_string(),
-            Some(Operation::Event(e)) if e.is_designation() => WORLD_DESIGNATE_HINT.to_string(),
-            Some(Operation::Event(e)) if e.is_mode_only() => mode_only_hint(e),
-            Some(Operation::Event(_)) => WORLD_EVENT_HINT.to_string(),
-            None => format!("{WORLD_HINT} · {BEGIN_HINT}"),
-        };
-        lines.push((hint, Style::color(Color::Muted)));
     }
     lines
 }

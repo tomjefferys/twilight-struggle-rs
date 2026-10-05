@@ -6,25 +6,12 @@ use crate::layout::{Cell, GuestEntity, MapLayout};
 use crate::map::WorldMap;
 use crate::ops::Operation;
 
-use super::mode_only_hint;
 use super::chip::{ChipGrid, ChipRole, CHIP_H, REGION_CHIP_W};
 use super::{
     war_line,
     control_glyph, coup_odds_line, coup_target_line_with, modifier_line, nz, odds_line, operation_header, operation_touched_line,
-    put_border_title, Canvas, Color, Style, ViewMode, BEGIN_HINT,
+    put_border_title, Canvas, Color, Style,
 };
-
-/// Shown below the box, only under [`ViewMode::Interactive`] — a static
-/// print into scrollback has no keys to hint at. A function rather than a
-/// plain `const` since it interpolates [`BEGIN_HINT`].
-fn hint() -> String {
-    format!("←→↑↓ select · {BEGIN_HINT} · Esc back")
-}
-const PLACEMENT_HINT: &str = "←→↑↓ select · +/= place · u undo · ⌫ abandon · c confirm · Esc back";
-const REALIGN_HINT: &str = "←→↑↓ select · r roll · ⌫ abandon · c done · Esc back";
-const WAR_HINT: &str = "←→↑↓ select · r declare war · ⌫ abandon · Esc back";
-const COUP_HINT: &str = "←→↑↓ select · r coup · ⌫ abandon · c done · Esc back";
-const EVENT_HINT: &str = "←→↑↓ select · + add · - remove · u undo · 1-9 mode · ⌫ abandon · c done";
 
 /// What occupies one cell of the neighbourhood mini-map: either a country
 /// (the one viewed, or one of its neighbours) or a superpower guest chip.
@@ -115,11 +102,7 @@ fn neighbourhood(map: &WorldMap, layout: &MapLayout, id: CountryId) -> (Vec<(Cel
 /// operation with a speculative board (a placement) is read through it,
 /// the same substitution `render_region`/`render_world_map` already make,
 /// so pending influence shows here too.
-///
-/// `mode` controls whether a key-hint row is drawn below the box —
-/// [`ViewMode::Interactive`] only, since a one-shot REPL print has no
-/// keyboard listening on the other end.
-pub fn render_country(map: &WorldMap, layout: &MapLayout, board: &Board, id: CountryId, op: Option<&Operation>, mode: ViewMode) -> Canvas {
+pub fn render_country(map: &WorldMap, layout: &MapLayout, board: &Board, id: CountryId, op: Option<&Operation>) -> Canvas {
     let board = op.and_then(Operation::board).unwrap_or(board);
     let country = map.country(id);
 
@@ -253,16 +236,6 @@ pub fn render_country(map: &WorldMap, layout: &MapLayout, board: &Board, id: Cou
         (operation_header(operation), rows)
     });
 
-    let hint = (mode == ViewMode::Interactive).then(|| match op {
-        Some(Operation::Influence(_)) => PLACEMENT_HINT.to_string(),
-        Some(Operation::Realign(_)) => REALIGN_HINT.to_string(),
-        Some(Operation::Coup(_)) => COUP_HINT.to_string(),
-        Some(Operation::Event(e)) if e.is_mode_only() => mode_only_hint(e),
-        Some(Operation::Event(_)) => EVENT_HINT.to_string(),
-        Some(Operation::War(_)) => WAR_HINT.to_string(),
-        None => hint(),
-    });
-
     // --- Sizing. Every panel's content is already known above; take the
     // width the widest of it needs, since `Canvas` clips silently rather
     // than erroring on an under-sized write. ---
@@ -270,7 +243,7 @@ pub fn render_country(map: &WorldMap, layout: &MapLayout, board: &Board, id: Cou
         + country_row_count
         + 1 + grid_height + footnotes.len() // "Neighbours" divider + its grid + footnotes
         + op_panel.as_ref().map_or(0, |(_, rows)| 1 + rows.len()); // "{header}" divider + its rows
-    let height = box_height + hint.is_some() as usize;
+    let height = box_height;
 
     let content_width = [
         // Left/right border margins (2 each), the space-padded left and
@@ -283,7 +256,6 @@ pub fn render_country(map: &WorldMap, layout: &MapLayout, board: &Board, id: Cou
         op_panel.as_ref().map_or(0, |(title, rows)| {
             rows.iter().map(|(l, _)| l.chars().count() + 4).chain([title.chars().count() + 6]).max().unwrap_or(0)
         }),
-        hint.as_deref().map_or(0, |h| h.chars().count()),
         60,
     ]
     .into_iter()
@@ -361,10 +333,6 @@ pub fn render_country(map: &WorldMap, layout: &MapLayout, board: &Board, id: Cou
             canvas.put(row, 2, line, *style);
             row += 1;
         }
-    }
-
-    if let Some(hint) = &hint {
-        canvas.put(height - 1, 0, hint, Style::color(Color::Muted));
     }
 
     canvas

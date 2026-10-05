@@ -2576,7 +2576,7 @@ mod discard_or_suffer {
     fn a_discard_decision_leaves_the_map_alone() {
         use twilight_struggle::render::{render_region, render_world_map};
         use twilight_struggle::{ColorMode, MapLayout, Region};
-        let (map, _, game, _) = play("blockade", "Blockade");
+        let (map, cards, game, _) = play("blockade", "Blockade");
         let layout = MapLayout::standard(&map).unwrap();
         let op = game.operation();
         let region = render_region(&map, &layout, game.board(), Region::Europe, None, op).render(ColorMode::Never);
@@ -2585,8 +2585,9 @@ mod discard_or_suffer {
             assert!(!text.contains("not eligible") && !text.contains("can act here"), "no target legend:\n{text}");
             assert!(!text.contains('║'), "no chip is marked as live:\n{text}");
         }
-        assert!(region.contains("look around") && region.contains("space discard it"), "the hint names the card keys:\n{region}");
-        assert!(!region.contains("+ add"));
+        let keys = twilight_struggle::render::context_keys(&game, &cards, twilight_struggle::render::KeyScreen::Region, Default::default());
+        assert!(keys.contains("Space discard it"), "the key row names the card keys: {keys}");
+        assert!(!keys.contains("+ add"), "{keys}");
     }
 
     #[test]

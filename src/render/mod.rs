@@ -12,6 +12,7 @@ mod chip;
 pub mod country;
 pub mod event;
 pub mod hand;
+pub mod keys;
 pub mod log;
 pub mod piles;
 pub mod region;
@@ -29,6 +30,7 @@ pub use card::render_card;
 pub use country::render_country;
 pub use event::{render_event_result, render_event_session};
 pub use hand::{render_forced_card, render_hand, HAND_ROWS, HAND_WIDTH};
+pub use keys::{context_keys, global_keys, KeyScreen, KeyUi};
 pub use log::{log_entry_line, log_text, render_log};
 pub use piles::{pile_cards, pile_len, piles_text, render_piles, PileTab};
 pub use region::render_region;
@@ -101,18 +103,6 @@ impl Style {
 pub enum ColorMode {
     Always,
     Never,
-}
-
-/// Whether a view is being drawn once into scrollback (`Static`, the REPL's
-/// one-shot commands) or redrawn every keypress by [`crate::interactive`]
-/// (`Interactive`). The only view that reads this today is
-/// [`country::render_country`], which draws a key-hint row under
-/// `Interactive` and omits it under `Static` — there's nothing to hint at
-/// in a view that isn't listening for keys.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ViewMode {
-    Static,
-    Interactive,
 }
 
 /// Resolves a [`Style`] to an ANSI SGR sequence.
@@ -530,25 +520,6 @@ pub fn operation_balance_line(layout: &crate::layout::MapLayout, board: &crate::
     format!("{} · {}", operation_header(op), operation_touched_line(layout, board, op))
 }
 
-/// The key hint under a map screen while an event settled by its mode alone
-/// is open (a discard decision, a DEFCON level): browsing the map is still
-/// fine, but nothing on it is the event's business.
-pub(crate) fn mode_only_hint(e: &crate::events::EventChoice) -> String {
-    if e.needs_roll() && e.is_participation() {
-        "←→↑↓ look around · r roll the dice · 1-2 change · ⌫ clear".to_string()
-    } else if e.needs_roll() {
-        "←→↑↓ look around · r roll the dice · ⌫ cancel the event".to_string()
-    } else if e.gate_cards().is_empty() {
-        format!("←→↑↓ look around · 1-{} choose · ⌫ undo · c done", e.modes().len().min(9))
-    } else {
-        if e.gate_offset() == 0 {
-            "←→↑↓ look around · [ ] pick a card · space discard it · ⌫ undo · c done".to_string()
-        } else {
-            "←→↑↓ look around · [ ] pick a card · space discard it · 1 keep your cards · ⌫ undo · c done".to_string()
-        }
-    }
-}
-
 /// `GAME OVER — USSR wins (VP)` — [`statusbar::render_status_bar`]'s own
 /// winner row, shared so `main.rs`'s `status`/`event` commands print the
 /// exact same wording when there's no screen to draw it on.
@@ -853,15 +824,6 @@ pub(crate) fn vp_line(vp: i8) -> String {
         format!("USSR +{}", -(vp as i16))
     }
 }
-
-/// The keys that play a card, open an operation with it, or pass the turn
-/// — named by every view's no-operation hint. A region/world-map/country
-/// screen only ever sees `Option<&Operation>`, never whether a card is
-/// already in play, so this stays one card-agnostic sentence covering both
-/// steps rather than two different hints the caller would have to choose
-/// between. The status bar (which does know) uses its own three-state
-/// wording instead — see `statusbar.rs`.
-pub(crate) const BEGIN_HINT: &str = "p play card · i/a/o influence/realign/coup · s space race · t tracks · e event · p pass";
 
 /// One escape attempt, worded for the REPL: `Bear Trap: USSR discards Fidel, rolls 3 — escapes`.
 pub fn trap_result_line(cards: &crate::cards::CardCatalog, r: &crate::game::TrapResult) -> String {

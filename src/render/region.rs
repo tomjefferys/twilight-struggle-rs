@@ -6,41 +6,17 @@ use crate::layout::{GuestEntity, LinkTarget, MapLayout};
 use crate::map::WorldMap;
 use crate::ops::Operation;
 
-use super::mode_only_hint;
 use super::chip::{ChipGrid, ChipRole, REGION_CHIP_W};
-use super::{coup_odds_line, coup_target_line_with, modifier_line, odds_line, operation_balance_line, war_line, Canvas, Color, Style, BEGIN_HINT};
+use super::{coup_odds_line, coup_target_line_with, modifier_line, odds_line, operation_balance_line, war_line, Canvas, Color, Style};
 
 const LEFT_MARGIN: usize = 2;
 const TOP_MARGIN: usize = 2; // title line + blank
-
-/// `Enter` opens the selected country's own detail screen
-/// (`render::render_country`) — the region view keeps no roll or odds
-/// preview of its own worth a key for beyond that.
-const SELECTION_HINT: &str = "←→↑↓ select · Enter open · Esc back";
-
-/// Shown instead, once an [`InfluencePlacement`](crate::ops::InfluencePlacement) is in progress.
-/// Placement stays bound here too — it's undoable, so it doesn't need the
-/// country screen's confirmation step the way a roll does.
-const PLACEMENT_HINT: &str = "←→↑↓ select · Enter open · +/= place · u undo · ⌫ abandon · c confirm · Esc back";
-
-/// Shown instead of [`SELECTION_HINT`], once a [`Realignment`](crate::ops::Realignment)
-/// is in progress. No `r roll` here any more — a roll is irreversible the
-/// instant it's made, so it only happens on the country screen `Enter`
-/// opens, where the odds are the whole screen rather than a footer.
-const REALIGN_HINT: &str = "←→↑↓ select · Enter target · ⌫ abandon · c done · Esc back";
-
-/// Shown instead of [`SELECTION_HINT`], once a [`Coup`](crate::ops::Coup) is
-/// in progress. Same reasoning as [`REALIGN_HINT`] — the attempt itself
-/// only happens on the country screen.
-const WAR_HINT: &str = "←→↑↓ select · Enter target · ⌫ abandon · Esc back";
-const COUP_HINT: &str = "←→↑↓ select · Enter target · ⌫ abandon · c done · Esc back";
 
 /// Shown while an event's choices are open: `+`/`-` act on the selected
 /// country, `1`/`2` pick a mode on a card that has two.
 /// What the small marks on a chip mean while an event's choices are open.
 const WAR_LEGEND: &str = "double border: can be attacked · grey: not a target";
 const EVENT_LEGEND: &str = "double border: can act here · dim: not eligible · ↑N/↓N: can add/remove N · +N/-N: staged";
-const EVENT_HINT: &str = "←→↑↓ select · Enter open · + add · - remove · u undo · 1-9 mode · ⌫ abandon · c done";
 
 /// A geographic zoom into one region: every country in it drawn as a box
 /// on its layout grid cell, connected to its in-region neighbours by line
@@ -271,18 +247,6 @@ fn build_footer_lines(
         && !e.is_mode_only()
     {
         lines.push((e.hint(map, id), Style::color(Color::Selected)));
-    }
-    if selected.is_some() || op.is_some() {
-        let hint = match op {
-            Some(Operation::Influence(_)) => PLACEMENT_HINT.to_string(),
-            Some(Operation::Realign(_)) => REALIGN_HINT.to_string(),
-            Some(Operation::Coup(_)) => COUP_HINT.to_string(),
-            Some(Operation::Event(e)) if e.is_mode_only() => mode_only_hint(e),
-            Some(Operation::Event(_)) => EVENT_HINT.to_string(),
-            Some(Operation::War(_)) => WAR_HINT.to_string(),
-            None => format!("{SELECTION_HINT} · {BEGIN_HINT}"),
-        };
-        lines.push((hint, Style::color(Color::Muted)));
     }
     lines
 }
