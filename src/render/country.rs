@@ -190,49 +190,7 @@ pub fn render_country(map: &WorldMap, layout: &MapLayout, board: &Board, id: Cou
     // collected up front as plain (String, Style) pairs. ---
     let op_panel: Option<(String, Vec<(String, Style)>)> = op.map(|operation| {
         let mut rows = vec![(operation_touched_line(layout, board, operation), Style::color(Color::Muted))];
-        if !operation.is_legal_target(map, board, id) {
-            let reason = match operation {
-                Operation::Influence(_) => "no presence or adjacency here".to_string(),
-                Operation::Realign(_) | Operation::Coup(_) => {
-                    format!("no {} influence to remove", operation.side().opponent())
-                }
-                Operation::Event(e) => e.hint(map, id),
-                Operation::War(_) => "not a legal target for this war".to_string(),
-            };
-            rows.push((reason, Style::color(Color::Muted)));
-        }
-        match operation {
-            Operation::Influence(p) => {
-                let cost = p.cost(map, id);
-                rows.push((format!("{}  costs {cost} op{}", p.side(), if cost == 1 { "" } else { "s" }), Style::color(Color::Selected)));
-                let pending = p.pending(id);
-                if pending > 0 {
-                    rows.push((format!("{pending} placed here"), Style::color(Color::Muted)));
-                }
-            }
-            Operation::Event(e) => {
-                rows.push((e.prompt(), Style::color(Color::Selected)));
-                if operation.is_legal_target(map, board, id) {
-                    rows.push((e.hint(map, id), Style::color(Color::Muted)));
-                }
-            }
-            Operation::Realign(r) => {
-                let (acting, opposing, odds) = r.preview(map, board, id);
-                rows.push((modifier_line(r.side(), &acting), Style::color(Color::Selected)));
-                rows.push((modifier_line(r.side().opponent(), &opposing), Style::color(Color::Muted)));
-                rows.push((odds_line(r.side(), &odds), Style::color(Color::Muted)));
-            }
-            Operation::War(w) => {
-                if operation.is_legal_target(map, board, id) {
-                    rows.push((war_line(map, board, w, id), Style::color(Color::Selected)));
-                }
-            }
-            Operation::Coup(c) => {
-                let (target_number, odds) = c.preview(map, board, id);
-                rows.push((coup_target_line_with(c.side(), c.ops_for(map, id), c.roll_mod(map, id).map_or(0, |(_, m)| m), target_number, country.stability), Style::color(Color::Selected)));
-                rows.push((coup_odds_line(c.side(), &odds), Style::color(Color::Muted)));
-            }
-        }
+        rows.extend(operation_target_rows(map, board, operation, id));
         (operation_header(operation), rows)
     });
 
@@ -336,6 +294,58 @@ pub fn render_country(map: &WorldMap, layout: &MapLayout, board: &Board, id: Cou
     }
 
     canvas
+}
+
+/// The rows describing what `op` would do to `id`: why it isn't a legal target (if it isn't),
+/// then the operation's own preview — a placement's cost, an event's prompt and hint, a
+/// realignment's modifiers and odds, a coup's target number and odds, a war's line. Shared by
+/// the country view's Operation panel and the roll confirmation modal so the two can't drift.
+pub(crate) fn operation_target_rows(map: &WorldMap, board: &Board, operation: &Operation, id: CountryId) -> Vec<(String, Style)> {
+    let country = map.country(id);
+    let mut rows: Vec<(String, Style)> = Vec::new();
+    if !operation.is_legal_target(map, board, id) {
+        let reason = match operation {
+            Operation::Influence(_) => "no presence or adjacency here".to_string(),
+            Operation::Realign(r) => r.target_refusal(map, board, id).map_or_else(|| format!("no {} influence to remove", operation.side().opponent()), |e| e.to_string()),
+            Operation::Coup(c) => c.target_refusal(map, board, id).map_or_else(|| format!("no {} influence to remove", operation.side().opponent()), |e| e.to_string()),
+            Operation::Event(e) => e.hint(map, id),
+            Operation::War(_) => "not a legal target for this war".to_string(),
+        };
+        rows.push((reason, Style::color(Color::Muted)));
+    }
+    match operation {
+        Operation::Influence(p) => {
+            let cost = p.cost(map, id);
+            rows.push((format!("{}  costs {cost} op{}", p.side(), if cost == 1 { "" } else { "s" }), Style::color(Color::Selected)));
+            let pending = p.pending(id);
+            if pending > 0 {
+                rows.push((format!("{pending} placed here"), Style::color(Color::Muted)));
+            }
+        }
+        Operation::Event(e) => {
+            rows.push((e.prompt(), Style::color(Color::Selected)));
+            if operation.is_legal_target(map, board, id) {
+                rows.push((e.hint(map, id), Style::color(Color::Muted)));
+            }
+        }
+        Operation::Realign(r) => {
+            let (acting, opposing, odds) = r.preview(map, board, id);
+            rows.push((modifier_line(r.side(), &acting), Style::color(Color::Selected)));
+            rows.push((modifier_line(r.side().opponent(), &opposing), Style::color(Color::Muted)));
+            rows.push((odds_line(r.side(), &odds), Style::color(Color::Muted)));
+        }
+        Operation::War(w) => {
+            if operation.is_legal_target(map, board, id) {
+                rows.push((war_line(map, board, w, id), Style::color(Color::Selected)));
+            }
+        }
+        Operation::Coup(c) => {
+            let (target_number, odds) = c.preview(map, board, id);
+            rows.push((coup_target_line_with(c.side(), c.ops_for(map, id), c.roll_mod(map, id).map_or(0, |(_, m)| m), target_number, country.stability), Style::color(Color::Selected)));
+            rows.push((coup_odds_line(c.side(), &odds), Style::color(Color::Muted)));
+        }
+    }
+    rows
 }
 
 /// Draws `US <n>  <glyph>  USSR <n>` at `(row, col)`, colouring each part

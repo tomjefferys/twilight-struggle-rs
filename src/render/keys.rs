@@ -71,12 +71,9 @@ fn primary(game: &Game, cards: &CardCatalog, screen: KeyScreen, ui: KeyUi) -> St
     match game.operation() {
         Some(Operation::Influence(_)) => "+ place · - take back · u undo · c confirm · X cancel · ⌫ abandon".to_string(),
         Some(op @ (Operation::Realign(_) | Operation::Coup(_) | Operation::War(_))) => {
-            let roll = match (op, screen) {
-                (_, KeyScreen::World) => "Enter open region".to_string(),
-                (_, KeyScreen::Region) => "Enter open country to roll".to_string(),
-                (Operation::Realign(_), _) => "r roll".to_string(),
-                (Operation::Coup(_), _) => "r coup".to_string(),
-                _ => "r declare war".to_string(),
+            let roll = match screen {
+                KeyScreen::World => "Enter open region".to_string(),
+                _ => "Enter/r choose target and roll".to_string(),
             };
             match op {
                 Operation::War(_) if op.ops_spent() == 0 => format!("{roll} · ⌫ abandon"),

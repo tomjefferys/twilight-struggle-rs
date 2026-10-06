@@ -292,6 +292,24 @@ impl Coup {
         self.in_scope(map, id) && !self.banned.contains(&map.country(id).region) && board.influence(id, self.side.opponent()) > 0 && self.protected_by(map, board, id).is_none()
     }
 
+    /// Why `id` can't be coup'd right now, if it can't: out of scope, a banned region (a card or
+    /// the DEFCON level), protected, or no opposing influence — in that order, the same one
+    /// [`Coup::attempt`] refuses in, so a preview can say exactly what a roll would.
+    pub fn target_refusal(&self, map: &WorldMap, board: &Board, id: CountryId) -> Option<CoupError> {
+        let country = || map.country(id).name.clone();
+        if let Some(scope) = self.scope.filter(|s| !s.allows(map, id)) {
+            return Some(CoupError::OutOfScope { reason: scope.refusal(map, id) });
+        }
+        let region = map.country(id).region;
+        if self.banned.contains(&region) {
+            return Some(CoupError::Banned { country: country(), region });
+        }
+        if let Some(by) = self.protected_by(map, board, id) {
+            return Some(CoupError::Protected { country: country(), by });
+        }
+        (board.influence(id, self.side.opponent()) == 0).then(|| CoupError::NoOpponentInfluence { country: country(), side: self.side })
+    }
+
     /// Resolves this action's one attempt against `id`, spending every op
     /// at once and writing straight to `board`. Refused — with no die
     /// drawn and no state changed — if this action has already resolved
@@ -300,18 +318,8 @@ impl Coup {
         if self.result.is_some() {
             return Err(CoupError::AlreadyResolved { country: map.country(id).name.clone() });
         }
-        if let Some(scope) = self.scope.filter(|s| !s.allows(map, id)) {
-            return Err(CoupError::OutOfScope { reason: scope.refusal(map, id) });
-        }
-        let region = map.country(id).region;
-        if self.banned.contains(&region) {
-            return Err(CoupError::Banned { country: map.country(id).name.clone(), region });
-        }
-        if let Some(by) = self.protected_by(map, board, id) {
-            return Err(CoupError::Protected { country: map.country(id).name.clone(), by });
-        }
-        if !self.is_legal_target(map, board, id) {
-            return Err(CoupError::NoOpponentInfluence { country: map.country(id).name.clone(), side: self.side });
+        if let Some(e) = self.target_refusal(map, board, id) {
+            return Err(e);
         }
 
         let target_number = coup_target_number(map, id);

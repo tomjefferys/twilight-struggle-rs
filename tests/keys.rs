@@ -52,15 +52,15 @@ fn an_open_operation_replaces_the_play_keys() {
 }
 
 #[test]
-fn rolling_is_a_country_screen_key_and_abandon_goes_once_a_roll_is_made() {
+fn a_roll_is_made_by_choosing_a_target_and_abandon_goes_once_a_roll_is_made() {
     let (_, cards, mut game) = setup();
     let card = game.hand(game.active())[0];
     game.play_card(&cards, card).unwrap();
     game.begin(OperationKind::Realign).unwrap();
     let region = keys(&game, &cards, KeyScreen::Region);
     let country = keys(&game, &cards, KeyScreen::Country);
-    assert!(region.contains("Enter open country") && !region.contains("r roll"), "{region}");
-    assert!(country.contains("r roll") && country.contains("⌫ abandon"), "{country}");
+    assert!(region.contains("Enter/r choose target and roll") && region.contains("⌫ abandon"), "{region}");
+    assert!(country.contains("Enter/r choose target and roll") && country.contains("⌫ abandon"), "{country}");
 }
 
 #[test]

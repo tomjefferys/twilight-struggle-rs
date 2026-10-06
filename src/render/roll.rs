@@ -10,12 +10,16 @@
 //! be blitted centred over whichever screen [`crate::interactive`] is
 //! showing and dismissed with Enter — nothing here touches the terminal.
 
+use crate::board::Board;
+use crate::cards::CardCatalog;
 use crate::country::{CountryId, Superpower};
 use crate::game::RollOutcome;
 use crate::log::CoupAftermath;
 use crate::map::WorldMap;
-use crate::ops::Modifiers;
+use crate::ops::{Modifiers, Operation};
+use crate::status::GameStatus;
 
+use super::country::operation_target_rows;
 use super::{Canvas, Color, Style, modal_box};
 
 /// Fixed content width — like [`super::card::render_card`]'s own
@@ -63,11 +67,26 @@ impl RollReport {
 /// `n of total` counter to the dismiss hint, so stepping through them with
 /// Enter says how many are left.
 pub fn render_roll_result(map: &WorldMap, report: &RollReport, queue_pos: Option<(usize, usize)>) -> Canvas {
+    let text_width = ROLL_WIDTH - 2 - 2 * PADDING;
+    let (title, mut lines, border_color) = report_body(map, report);
+    lines.push((String::new(), Style::default()));
+    let hint = match queue_pos {
+        Some((n, total)) => format!("Enter to continue · {n} of {total}"),
+        None => "Enter to continue".to_string(),
+    };
+    lines.push((format!("{hint:>text_width$}"), Style::color(Color::Muted)));
+
+    modal_box(&title, "", ROLL_WIDTH, Style::color(border_color), true, lines)
+}
+
+/// The title, body lines and border colour describing one resolved roll — everything
+/// [`render_roll_result`] draws bar its dismiss hint, shared with [`render_roll_confirm`] so a
+/// result reads the same whether it stands alone or sits under a preview.
+fn report_body(map: &WorldMap, report: &RollReport) -> (String, Vec<(String, Style)>, Color) {
     let country = &map.country(report.target()).name;
     let stability = map.country(report.target()).stability;
     let (before_us, before_ussr) = report.before;
 
-    let text_width = ROLL_WIDTH - 2 - 2 * PADDING;
     let mut lines: Vec<(String, Style)> = Vec::new();
     let title;
     let after_us;
@@ -178,14 +197,112 @@ pub fn render_roll_result(map: &WorldMap, report: &RollReport, queue_pos: Option
         }
     }
 
+    (title, lines, border_color)
+}
+
+/// Whether `op` could still roll on `id` — what decides between "roll again" and "done" in the
+/// confirmation modal. A coup is a single attempt, a war closes itself, a realignment goes on
+/// while it can afford `id`.
+pub fn can_roll(map: &WorldMap, board: &Board, op: &Operation, id: CountryId) -> bool {
+    match op {
+        Operation::Realign(r) => r.is_legal_target(map, board, id) && r.can_afford(map, id),
+        Operation::Coup(c) => c.ops_spent() == 0 && c.is_legal_target(map, board, id),
+        Operation::War(w) => w.is_legal_target(map, id),
+        Operation::Influence(_) | Operation::Event(_) => false,
+    }
+}
+
+/// The confirmation shown before a realignment roll, a coup attempt or a war is rolled — the
+/// roll can't be taken back, so the odds are on screen first — and, once `last` is set, the
+/// result of the roll it just made, with the preview for another roll under it when the
+/// operation can still afford one. Drawn live from the open `op` (and the real `board`), so the
+/// odds always match the board as it stands.
+#[allow(clippy::too_many_arguments)]
+pub fn render_roll_confirm(
+    map: &WorldMap,
+    cards: &CardCatalog,
+    status: &GameStatus,
+    board: &Board,
+    op: &Operation,
+    id: CountryId,
+    last: Option<&RollReport>,
+    game_over: bool,
+) -> Canvas {
+    let country = map.country(id);
+    let side = op.side();
+    let text_width = ROLL_WIDTH - 2 - 2 * PADDING;
+    let again = !game_over && can_roll(map, board, op, id);
+    let kind = match op {
+        Operation::Realign(_) => "Realignment".to_string(),
+        Operation::Coup(_) => "Coup".to_string(),
+        Operation::War(w) => cards.card(w.card()).name.clone(),
+        Operation::Influence(_) | Operation::Event(_) => unreachable!("only a roll operation is confirmed here"),
+    };
+    let mut title = format!("{kind} · {}", country.name);
+    let mut lines: Vec<(String, Style)> = Vec::new();
+    let mut border = side_color(side);
+
+    if let Some(report) = last {
+        let (result_title, body, color) = report_body(map, report);
+        title = result_title;
+        border = color;
+        lines.extend(body);
+        if again {
+            lines.push((String::new(), Style::default()));
+            let left = match op {
+                Operation::Realign(r) => format!("Roll again? {} op{} left", r.remaining(), if r.remaining() == 1 { "" } else { "s" }),
+                _ => "Roll again?".to_string(),
+            };
+            lines.push((left, Style::default().bold()));
+        }
+    }
+
+    if last.is_none() || again {
+        let (us, ussr) = (board.influence(id, Superpower::Us), board.influence(id, Superpower::Ussr));
+        lines.push((format!("USA {us} · USSR {ussr} · stability {}", country.stability), Style::default()));
+        let rows = operation_target_rows(map, board, op, id);
+        if !op.is_legal_target(map, board, id) {
+            // Odds for a roll that can't be made would only mislead: the reason is all there is.
+            lines.extend(rows.into_iter().take(1));
+            return finish_confirm(&title, border, lines, text_width, last.is_some(), again);
+        }
+        lines.extend(rows);
+        if let Operation::Realign(r) = op {
+            let names: Vec<&str> = country.adjacent.iter().filter(|&&n| board.is_controlled_by(map, n, r.side())).map(|&n| map.country(n).name.as_str()).collect();
+            if !names.is_empty() {
+                lines.push((format!("+1 realign from {}", names.join(", ")), Style::color(Color::Selected)));
+            }
+        }
+        if let Operation::Coup(_) = op {
+            if status.effects.coup_forbidden(side) {
+                lines.push(("Cuban Missile Crisis: this coup LOSES THE GAME".to_string(), Style::color(Color::Muted).bold()));
+            } else if country.battleground {
+                if status.effects.spares_defcon(side) {
+                    lines.push(("Nuclear Subs: DEFCON unchanged".to_string(), Style::color(Color::Muted)));
+                } else if status.defcon <= 2 {
+                    lines.push((format!("DEFCON {} → {} — this coup LOSES THE GAME", status.defcon, status.defcon.saturating_sub(1)), Style::color(Color::Muted).bold()));
+                } else {
+                    lines.push((format!("Battleground: DEFCON {} → {}", status.defcon, status.defcon - 1), Style::color(Color::Muted)));
+                }
+            }
+        }
+    }
+
+    finish_confirm(&title, border, lines, text_width, last.is_some(), again)
+}
+
+/// Adds the key hint to a confirmation's `lines` and draws the box.
+fn finish_confirm(title: &str, border: Color, mut lines: Vec<(String, Style)>, text_width: usize, rolled: bool, again: bool) -> Canvas {
     lines.push((String::new(), Style::default()));
-    let hint = match queue_pos {
-        Some((n, total)) => format!("Enter to continue · {n} of {total}"),
-        None => "Enter to continue".to_string(),
+    let hint = match (rolled, again) {
+        (false, true) => "r/Enter roll · Esc back",
+        (false, false) => "Esc back",
+        (true, true) => "r roll again · Enter/Esc back to map",
+        (true, false) => "Enter done",
     };
     lines.push((format!("{hint:>text_width$}"), Style::color(Color::Muted)));
 
-    modal_box(&title, "", ROLL_WIDTH, Style::color(border_color), true, lines)
+    modal_box(title, "", ROLL_WIDTH, Style::color(border), true, lines)
 }
 
 /// Appends one side's roll to `lines`: a short `{side} rolled {die} {mod}
@@ -398,5 +515,86 @@ mod tests {
         let report = RollReport { side: Ussr, outcome: RollOutcome::Coup(result), before: (2, 0), aftermath: None };
         let text = render_roll_result(&map, &report, None).render(ColorMode::Never);
         assert!(text.contains("rolled 3 + 2 ops +1 = 6"), "{text}");
+    }
+
+    fn confirm_text(map: &WorldMap, status: &GameStatus, board: &Board, op: &Operation, id: CountryId, last: Option<&RollReport>) -> String {
+        let cards = CardCatalog::standard().unwrap();
+        let text = render_roll_confirm(map, &cards, status, board, op, id, last, false).render(ColorMode::Never);
+        for line in text.lines() {
+            assert!(line.chars().count() <= ROLL_WIDTH, "line too wide: {line:?}");
+        }
+        text
+    }
+
+    #[test]
+    fn a_realignment_confirm_shows_the_odds_and_how_to_roll() {
+        let map = map();
+        let id = poland(&map);
+        let mut board = Board::new(&map);
+        board.set_influence(id, Us, 2);
+        board.set_influence(id, Ussr, 3);
+        let op = Operation::Realign(crate::ops::Realignment::new(Ussr, 2, &board));
+        let text = confirm_text(&map, &GameStatus::default(), &board, &op, id, None);
+        assert!(text.contains("Realignment · Poland"), "{text}");
+        assert!(text.contains("USA 2 · USSR 3 · stability 3"), "{text}");
+        assert!(text.contains("r/Enter roll"), "{text}");
+    }
+
+    #[test]
+    fn a_battleground_coup_at_defcon_two_says_it_loses_the_game() {
+        let map = map();
+        let id = poland(&map);
+        let mut board = Board::new(&map);
+        board.set_influence(id, Us, 2);
+        let op = Operation::Coup(crate::ops::Coup::new(Ussr, 3, &board));
+        let status = GameStatus { defcon: 2, ..GameStatus::default() };
+        let text = confirm_text(&map, &status, &board, &op, id, None);
+        assert!(text.contains("LOSES THE GAME"), "{text}");
+        let status = GameStatus { defcon: 4, ..GameStatus::default() };
+        let text = confirm_text(&map, &status, &board, &op, id, None);
+        assert!(text.contains("DEFCON 4 → 3") && !text.contains("LOSES"), "{text}");
+    }
+
+    #[test]
+    fn a_target_with_nothing_to_remove_says_why_and_offers_no_roll() {
+        let map = map();
+        let id = poland(&map);
+        let board = Board::new(&map);
+        let op = Operation::Coup(crate::ops::Coup::new(Ussr, 3, &board));
+        let text = confirm_text(&map, &GameStatus::default(), &board, &op, id, None);
+        assert!(text.contains("USA has no influence in Poland"), "{text}");
+        assert!(!text.contains("odds"), "{text}");
+        assert!(!text.contains("r/Enter roll"), "{text}");
+    }
+
+    #[test]
+    fn after_a_coup_the_confirm_shows_the_result_and_is_done() {
+        let map = map();
+        let id = poland(&map);
+        let mut board = Board::new(&map);
+        board.set_influence(id, Us, 2);
+        let mut op = Operation::Coup(crate::ops::Coup::new(Ussr, 3, &board));
+        let Operation::Coup(c) = &mut op else { unreachable!() };
+        let result = c.attempt(&map, &mut board, id, &mut crate::dice::Dice::from_seed(7)).unwrap();
+        let report = RollReport { side: Ussr, outcome: RollOutcome::Coup(result), before: (2, 0), aftermath: None };
+        let text = confirm_text(&map, &GameStatus::default(), &board, &op, id, Some(&report));
+        assert!(text.contains("Enter done") && !text.contains("roll again"), "{text}");
+        assert!(text.contains("COUP"), "{text}");
+    }
+
+    #[test]
+    fn a_region_closed_by_defcon_says_so_rather_than_blaming_missing_influence() {
+        let map = map();
+        let id = poland(&map);
+        let mut board = Board::new(&map);
+        board.set_influence(id, Us, 2);
+        let banned = crate::ops::defcon_banned(4);
+        let coup = Operation::Coup(crate::ops::Coup::new(Ussr, 3, &board).with_banned_regions(banned.clone()));
+        let text = confirm_text(&map, &GameStatus { defcon: 4, ..GameStatus::default() }, &board, &coup, id, None);
+        assert!(text.contains("DEFCON") && !text.contains("influence to remove"), "{text}");
+        assert!(!text.contains("r/Enter roll"), "{text}");
+        let realign = Operation::Realign(crate::ops::Realignment::new(Ussr, 2, &board).with_banned_regions(banned));
+        let text = confirm_text(&map, &GameStatus { defcon: 4, ..GameStatus::default() }, &board, &realign, id, None);
+        assert!(text.contains("DEFCON bars realignment in Europe"), "{text}");
     }
 }

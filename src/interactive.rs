@@ -14,7 +14,7 @@ use crossterm::{execute, queue};
 
 use twilight_struggle::render::{
     log_entry_line, operation_abandoned_line, pile_cards, render_piles, PileTab, operation_closed_line, operation_header, render_card, render_country, render_forced_card, render_hand,
-    render_event_result, render_event_session, render_final_scoring, render_headline_confirm, render_headline_reveal, render_space_confirm, render_space_result, render_trap_confirm, render_trap_result, render_tracks, TrackTab, render_war_result, render_region, render_roll_result, render_scoring_preview, render_scoring_result, render_status_bar_with, render_world_map, Canvas, Color, Style, RollReport, HAND_ROWS, context_keys, global_keys, KeyScreen, KeyUi,
+    render_event_result, render_event_session, render_final_scoring, render_headline_confirm, render_headline_reveal, render_space_confirm, render_space_result, render_trap_confirm, render_trap_result, render_tracks, TrackTab, render_war_result, render_region, render_roll_confirm, can_roll, render_roll_result, render_scoring_preview, render_scoring_result, render_status_bar_with, render_world_map, Canvas, Color, Style, RollReport, HAND_ROWS, context_keys, global_keys, KeyScreen, KeyUi,
 };
 use twilight_struggle::events::{PlayAs, EffectResult, ScoringResult, WarResult};
 use twilight_struggle::game::{Phase, Trap, TrapResult, Victory};
@@ -83,6 +83,10 @@ enum Modal {
     /// `D`: the discard, removed and deck piles, for information only — drawn live from the
     /// game's hands. `zoom` shows the highlighted card in full instead of the list.
     Piles { tab: PileTab, cursor: usize, zoom: bool },
+    /// A country chosen for the open realignment, coup or war: the odds before the roll, `r`
+    /// rolls, and once it has (`last`) the result, with another roll offered while a
+    /// realignment can afford one. Drawn live from the open operation.
+    RollTarget { country: CountryId, last: Option<RollReport> },
 }
 
 /// Which screen is currently showing.
@@ -413,6 +417,59 @@ pub fn run(
                         draw(&screen, map, layout, cards, game, message.as_deref(), &hand_selected, zoomed, &modal, color)?;
                         continue;
                     }
+                    if let Some(&Modal::RollTarget { country, ref last }) = modal.front() {
+                        let last = last.clone();
+                        // The confirmation before an irreversible roll. `r` rolls (Enter too, until
+                        // the first roll — afterwards only `r` re-rolls, so a habitual Enter can't
+                        // throw the dice); Enter/Esc/⌫ leave, closing the operation if the roll
+                        // used it up.
+                        let again = game.winner().is_none() && game.operation().is_some_and(|op| can_roll(map, game.board(), op, country));
+                        match key.code {
+                            KeyCode::Char('r') | KeyCode::Enter if again && (last.is_none() || key.code == KeyCode::Char('r')) => {
+                                let side = game.operation().map_or(game.active(), Operation::side);
+                                let before = (game.board().influence(country, Superpower::Us), game.board().influence(country, Superpower::Ussr));
+                                match game.roll(map, country, dice) {
+                                    Ok(RollOutcome::War(result)) => {
+                                        modal.pop_front();
+                                        modal.push_back(Modal::War(result, game.status().vp, game.winner()));
+                                    }
+                                    Ok(outcome) => {
+                                        let aftermath = if matches!(outcome, RollOutcome::Coup(_)) { game.last_coup_aftermath() } else { None };
+                                        let report = RollReport { side, outcome, before, aftermath };
+                                        modal.pop_front();
+                                        modal.push_front(Modal::RollTarget { country, last: Some(report) });
+                                    }
+                                    Err(GameError::Realign(e)) => message = Some(format!("{}: {e}", map.country(country).name)),
+                                    Err(GameError::Coup(e)) => message = Some(format!("{}: {e}", map.country(country).name)),
+                                    Err(e) => message = Some(e.to_string()),
+                                }
+                            }
+                            KeyCode::Char('X') if last.is_some() || again => {
+                                modal.pop_front();
+                                message = Some(match game.cancel() {
+                                    Ok(op) => operation_closed_line(&op, true, game.decider()),
+                                    Err(e) => e.to_string(),
+                                });
+                            }
+                            KeyCode::Enter | KeyCode::Esc | KeyCode::Backspace if last.is_some() || key.code != KeyCode::Enter => {
+                                modal.pop_front();
+                                // A roll that used the operation up closes it: nothing is left to do.
+                                if last.is_some() && !again && game.winner().is_none() && game.operation().is_some() {
+                                    message = Some(match game.confirm() {
+                                        Ok(op) => operation_closed_line(&op, true, game.decider()),
+                                        Err(e) => e.to_string(),
+                                    });
+                                }
+                            }
+                            KeyCode::Char('q') => return Ok(()),
+                            _ => {}
+                        }
+                        maybe_run_ai_turn(ai_side, ai, game, map, cards, dice, &mut message, &mut sticky, &mut zoomed, &mut modal);
+                        prune_session_modal(&mut modal, game);
+                        ensure_session_modal(&mut modal, game);
+                        draw(&screen, map, layout, cards, game, message.as_deref(), &hand_selected, zoomed, &modal, color)?;
+                        continue;
+                    }
                     if matches!(modal.front(), Some(Modal::SpaceConfirm)) {
                         // A confirmation, not a result: Enter rolls (only
                         // when allowed — otherwise it does nothing and the
@@ -573,7 +630,7 @@ pub fn run(
                             message = None;
                             ensure_session_modal(&mut modal, game);
                             // A war: a lone target (Korean War) goes straight to
-                            // its country screen, ready for `r`; otherwise to a
+                            // its roll confirmation; otherwise to a
                             // region view where only the legal targets are live.
                             if let Some(Operation::War(w)) = game.operation() {
                                 let targets = twilight_struggle::events::war::eligible_targets(map, w.card());
@@ -584,7 +641,10 @@ pub fn run(
                                 let first = targets.iter().copied().find(|&t| Some(map.country(t).region) == current).or(targets.first().copied());
                                 if let Some(target) = first {
                                     let region = map.country(target).region;
-                                    screen = if targets.len() == 1 { Screen::Country { region, selected: target } } else { Screen::Region { region, selected: target } };
+                                    screen = Screen::Region { region, selected: target };
+                                    if targets.len() == 1 {
+                                        modal.push_back(Modal::RollTarget { country: target, last: None });
+                                    }
                                 }
                             }
                             // A region designation (Chernobyl) is made on the
@@ -726,6 +786,11 @@ pub fn run(
                                 }
                                 _ => {}
                             },
+                            // While a roll operation is open the country is chosen right here: its
+                            // confirmation modal replaces the country screen.
+                            KeyCode::Enter | KeyCode::Char('r') if rolling(game) => {
+                                modal.push_back(Modal::RollTarget { country: *selected, last: None });
+                            }
                             KeyCode::Enter | KeyCode::Char('r') => {
                                 screen = Screen::Country { region: *region, selected: *selected };
                             }
@@ -752,19 +817,8 @@ pub fn run(
                                 }
                                 _ => {}
                             },
-                            KeyCode::Char('r') => {
-                                let side = game.active();
-                                let before = (game.board().influence(*selected, Superpower::Us), game.board().influence(*selected, Superpower::Ussr));
-                                match game.roll(map, *selected, dice) {
-                                    Ok(RollOutcome::War(result)) => modal.push_back(Modal::War(result, game.status().vp, game.winner())),
-                                    Ok(outcome) => {
-                                        let aftermath = if matches!(outcome, RollOutcome::Coup(_)) { game.last_coup_aftermath() } else { None };
-                                        modal.push_back(Modal::Roll(RollReport { side, outcome, before, aftermath }))
-                                    }
-                                    Err(GameError::Realign(e)) => message = Some(format!("{}: {e}", map.country(*selected).name)),
-                                    Err(GameError::Coup(e)) => message = Some(format!("{}: {e}", map.country(*selected).name)),
-                                    Err(_) => {}
-                                }
+                            KeyCode::Enter | KeyCode::Char('r') if rolling(game) => {
+                                modal.push_back(Modal::RollTarget { country: *selected, last: None });
                             }
                             KeyCode::Esc => {
                                 last_selected.insert(*region, *selected);
@@ -1038,6 +1092,11 @@ fn zoom_card(game: &Game, hand_selected: &HandUi) -> Option<CardId> {
     game.card_in_play().or_else(|| selected_hand_card(game, hand_selected))
 }
 
+/// Whether the open operation is one that rolls dice on a chosen country.
+fn rolling(game: &Game) -> bool {
+    matches!(game.operation(), Some(Operation::Realign(_) | Operation::Coup(_) | Operation::War(_)))
+}
+
 /// Opens a [`Modal::Session`] for an open event that runs in one but has none showing — one the
 /// AI started, say, whose choice falls to the human.
 fn ensure_session_modal(modal: &mut VecDeque<Modal>, game: &Game) {
@@ -1048,6 +1107,9 @@ fn ensure_session_modal(modal: &mut VecDeque<Modal>, game: &Game) {
 
 /// Closes a [`Modal::Session`] whose event is no longer open (confirmed, or settled by the AI).
 fn prune_session_modal(modal: &mut VecDeque<Modal>, game: &Game) {
+    while matches!(modal.front(), Some(Modal::RollTarget { .. })) && !matches!(game.operation(), Some(Operation::Realign(_) | Operation::Coup(_) | Operation::War(_))) {
+        modal.pop_front();
+    }
     while matches!(modal.front(), Some(Modal::Session)) && !matches!(game.operation(), Some(Operation::Event(e)) if e.has_session_modal()) {
         modal.pop_front();
     }
@@ -1340,6 +1402,10 @@ fn draw(
                 None => Canvas::new(0, 0),
             },
             Modal::HeadlineConfirm(card) => render_headline_confirm(game.active(), cards.card(*card)),
+            Modal::RollTarget { country, last } => match game.operation() {
+                Some(op) => render_roll_confirm(map, cards, game.status(), game.board(), op, *country, last.as_ref(), game.winner().is_some()),
+                None => Canvas::new(0, 0),
+            },
             Modal::SpaceConfirm => match game.card_in_play() {
                 Some(id) => render_space_confirm(game.status(), cards.card(id)),
                 None => Canvas::new(0, 0),

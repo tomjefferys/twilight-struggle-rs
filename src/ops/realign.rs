@@ -374,6 +374,24 @@ impl Realignment {
         self.in_scope(map, id) && !self.banned.contains(&map.country(id).region) && board.influence(id, self.side.opponent()) > 0 && self.protected_by(map, board, id).is_none()
     }
 
+    /// Why `id` can't be realigned right now, if it can't: out of scope, a region the DEFCON
+    /// track has closed, protected, or no opposing influence — in the order [`Realignment::roll`]
+    /// refuses in (after its ops check), so a preview can say exactly what a roll would.
+    pub fn target_refusal(&self, map: &WorldMap, board: &Board, id: CountryId) -> Option<RealignError> {
+        let country = || map.country(id).name.clone();
+        if let Some(scope) = self.scope.filter(|s| !s.allows(map, id)) {
+            return Some(RealignError::OutOfScope { reason: scope.refusal(map, id) });
+        }
+        let region = map.country(id).region;
+        if self.banned.contains(&region) {
+            return Some(RealignError::Banned { country: country(), region });
+        }
+        if let Some(by) = self.protected_by(map, board, id) {
+            return Some(RealignError::Protected { country: country(), by });
+        }
+        (board.influence(id, self.side.opponent()) == 0).then(|| RealignError::NoOpponentInfluence { country: country(), side: self.side })
+    }
+
     /// Resolves one roll against `id`, charging exactly 1 op and writing
     /// straight to `board`. Refused — with no dice drawn and no state
     /// changed — if no ops remain or `id` isn't a legal target.
@@ -388,18 +406,8 @@ impl Realignment {
         if !self.can_afford(map, id) {
             return Err(RealignError::InsufficientOps { country: map.country(id).name.clone(), remaining: self.remaining() });
         }
-        if let Some(scope) = self.scope.filter(|s| !s.allows(map, id)) {
-            return Err(RealignError::OutOfScope { reason: scope.refusal(map, id) });
-        }
-        let region = map.country(id).region;
-        if self.banned.contains(&region) {
-            return Err(RealignError::Banned { country: map.country(id).name.clone(), region });
-        }
-        if let Some(by) = self.protected_by(map, board, id) {
-            return Err(RealignError::Protected { country: map.country(id).name.clone(), by });
-        }
-        if !self.is_legal_target(map, board, id) {
-            return Err(RealignError::NoOpponentInfluence { country: map.country(id).name.clone(), side: self.side });
+        if let Some(e) = self.target_refusal(map, board, id) {
+            return Err(e);
         }
 
         let acting_mods = modifiers_with(map, board, id, self.side, &self.effects);

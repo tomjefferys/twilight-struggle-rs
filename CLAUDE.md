@@ -1205,9 +1205,8 @@ Wired into both `main.rs` (an
   whole map walkable by arrow keys alone, never forced back out to the
   world map, and is also why interactive mode's region screen has no
   separate "leave the region" key of its own beyond `Esc`. From there,
-  Enter *or* `r` opens that country's own detail screen (`render_country`) — the region screen no longer rolls or attempts
-  a coup directly; it only gets you to the country screen, where the full
-  modifier/odds calculation is on screen above the key that resolves it.
+  Enter *or* `r` opens that country's own detail screen (`render_country`) — unless a realignment, coup or war is open, in which case it opens the roll confirmation modal (below) on the selected country instead, so a roll never needs the country screen.
+  **Rolling** (`Modal::RollTarget { country, last }`, `render_roll_confirm`): choosing a target with Enter/`r` (on the region or country screen; a lone war target opens it straight from `e`) shows the odds — `operation_target_rows`, the rows the country view's Operation panel also uses — plus coup warnings (battleground DEFCON drop, a DEFCON-1 or Cuban Missile Crisis loss). Enter or `r` rolls, Esc/⌫ back out for free, `X` cancels the operation. The result replaces the preview in the same modal; a realignment that can still afford the country offers `r` to roll again (Enter deliberately does not, so a habitual Enter can't throw the dice), and when the roll used the operation up (a coup, an exhausted realignment) Enter/Esc/⌫ confirm it (`Game::confirm`), so there is no separate `c`. A war's result goes to `Modal::War` as before. `render::can_roll` decides between the two.
   Each region remembers its last-selected country across visits, and the
   country screen carries the same selection back to `Region` on `Esc`.
   `run` takes `&mut Game` (not a bare `Board`/`Option<Operation>`), so
@@ -1253,9 +1252,8 @@ Wired into both `main.rs` (an
   to undo the last one on *both* the region and country screens —
   placement is undoable, so it never needs the country screen's
   confirmation step, and stays a fast, stay-on-one-screen action from the
-  region grid too. A `Realignment` or `Coup`, by contrast, only binds `r`
-  — to roll (or attempt the coup) on the selected country — on the
-  country screen, and `u` always refuses there: a resolved roll or
+  region grid too. A `Realignment` or `Coup`, by contrast, rolls only through the
+  roll confirmation modal above, and `u` always refuses: a resolved roll or
   attempt can't be taken back. `Esc`/`q` leave a still-open session
   untouched rather than clearing it, so it can be resumed from the REPL
   or by reopening the map. A roll's outcome, and a scoring event's own
