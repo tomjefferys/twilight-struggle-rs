@@ -1318,6 +1318,18 @@ Wired into both `main.rs` (an
   human's own `r`/`e` do, and leaves the message for that keypress's own
   `draw` call to show.
 
+  **Handover screen** (`Modal::Handover`, `render/handover.rs::render_handover`): whenever
+  `Game::decider()` changes to a human (`check_handover`, run at the end of `maybe_run_ai_turn`
+  so every keypress path sees it; `HandoverTracker` remembers who acted last and, per side, the
+  log length when it stopped acting) a modal is pushed to the *back* of the queue (the side that just acted still sees its own roll/score/event results first) naming the
+  side up next, the turn/era/action round (`round_line`), what it is being asked to do, DEFCON,
+  VP, its Military Ops shortfall, space race, hand size, China Card, effects in force and the
+  last 8 log lines since it last acted. Public information only. While it is up `draw` swaps the
+  hand strip for `render_hand_hidden` (face-down cards), so the incoming hand isn't shown to
+  whoever is still at the keyboard; Enter/Space dismiss it. Its summary (`render::summary_lines`: no turn/round stamps, a card's ops folded onto one line, an event shown by its own line only) replaces the per-result modals for an AI's turn (`queue_ai_modals` keeps only the headline reveal, final scoring, and anything once the game is over). In hotseat play one also shows at
+  startup; against the AI it appears only when control returns to the human (the summary is the
+  AI's moves) and never at startup.
+
   The active side's hand (`render::render_hand`) is drawn as a fixed-
   height strip pinned below every screen — global, like the status bar
   above it, not tied to any one screen. `[`/`]` cycle its selection

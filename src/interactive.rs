@@ -13,7 +13,7 @@ use crossterm::terminal::{self, Clear, ClearType, EnterAlternateScreen, LeaveAlt
 use crossterm::{execute, queue};
 
 use twilight_struggle::render::{
-    log_entry_line, operation_abandoned_line, pile_cards, render_piles, PileTab, operation_closed_line, operation_header, render_card, render_country, render_forced_card, render_hand,
+    log_entry_line, summary_lines, operation_abandoned_line, pile_cards, render_piles, PileTab, operation_closed_line, operation_header, render_card, render_country, render_forced_card, render_hand, render_hand_hidden, render_handover,
     render_event_result, render_event_session, render_final_scoring, render_headline_confirm, render_headline_reveal, render_space_confirm, render_space_result, render_trap_confirm, render_trap_result, render_tracks, TrackTab, render_war_result, render_region, render_roll_confirm, can_roll, render_roll_result, render_scoring_preview, render_scoring_result, render_status_bar_with, render_world_map, Canvas, Color, Style, RollReport, HAND_ROWS, context_keys, global_keys, KeyScreen, KeyUi,
 };
 use twilight_struggle::events::{PlayAs, EffectResult, ScoringResult, WarResult};
@@ -80,6 +80,10 @@ enum Modal {
     /// Both headline cards revealed: the USSR's, the US's, who resolves first and whether
     /// Defectors cancels the USSR's.
     Headline(Option<CardId>, Option<CardId>, Option<Superpower>, bool),
+    /// The pass-the-keyboard screen shown when the player who has to act changes: who is up and
+    /// what happened since they last acted (`earlier` more lines were trimmed). While it is up
+    /// the hand strip is drawn face-down. Enter/Space dismiss it.
+    Handover { side: Superpower, lines: Vec<String>, earlier: usize },
     /// `D`: the discard, removed and deck piles, for information only — drawn live from the
     /// game's hands. `zoom` shows the highlighted card in full instead of the list.
     Piles { tab: PileTab, cursor: usize, zoom: bool },
@@ -87,6 +91,48 @@ enum Modal {
     /// rolls, and once it has (`last`) the result, with another roll offered while a
     /// realignment can afford one. Drawn live from the open operation.
     RollTarget { country: CountryId, last: Option<RollReport> },
+}
+
+/// Notices when the player who has to act changes and queues the handover screen for them.
+struct HandoverTracker {
+    /// Whose turn to act it was at the last check (`None` before the first one).
+    last: Option<Superpower>,
+    /// Per side (`side_index`): the log length when that side last stopped being the one to act,
+    /// so its handover lists only what happened since.
+    left_at: [usize; 2],
+}
+
+/// Most log lines a handover lists.
+const HANDOVER_LINES: usize = 8;
+
+/// Queues a [`Modal::Handover`] in front of everything when `game.decider()` has changed and the
+/// new one is a human (an AI acts at once; its moves become the summary of the human's next
+/// handover). The first call shows one only in hotseat play (`ai_side` is `None`).
+#[allow(clippy::too_many_arguments)]
+fn check_handover(tracker: &mut HandoverTracker, ai_side: Option<Superpower>, game: &Game, map: &WorldMap, cards: &CardCatalog, modal: &mut VecDeque<Modal>, zoomed: &mut bool, hand_selected: &mut HandUi) {
+    if game.winner().is_some() {
+        return;
+    }
+    let now = game.decider();
+    let first = tracker.last.is_none();
+    if tracker.last == Some(now) {
+        return;
+    }
+    if let Some(prev) = tracker.last {
+        tracker.left_at[side_index(prev)] = game.log().len();
+    }
+    tracker.last = Some(now);
+    if ai_side == Some(now) || (first && ai_side.is_some()) {
+        return;
+    }
+    let since = if first { game.log().len() } else { tracker.left_at[side_index(now)] };
+    let all = summary_lines(map, cards, &game.log().entries()[since.min(game.log().len())..]);
+    let earlier = all.len().saturating_sub(HANDOVER_LINES);
+    let lines = all[earlier..].to_vec();
+    // Behind anything already queued: the side that just acted still sees its own results first.
+    modal.push_back(Modal::Handover { side: now, lines, earlier });
+    *zoomed = false;
+    hand_selected.peek = false;
 }
 
 /// Which screen is currently showing.
@@ -251,8 +297,9 @@ pub fn run(
     // while it's open, and by `c`/`X`/`p` actually handing the turn over —
     // the newly active side's own hand takes its place.
     let mut zoomed = false;
+    let mut handover = HandoverTracker { last: None, left_at: [0; 2] };
 
-    maybe_run_ai_turn(ai_side, ai, game, map, cards, dice, &mut message, &mut sticky, &mut zoomed, &mut modal);
+    maybe_run_ai_turn(ai_side, ai, game, map, cards, dice, &mut message, &mut sticky, &mut zoomed, &mut modal, &mut handover, &mut hand_selected);
     draw(&screen, map, layout, cards, game, message.as_deref(), &hand_selected, zoomed, &modal, color)?;
     loop {
         match event::read()? {
@@ -268,6 +315,19 @@ pub fn run(
                     // happens. Only Enter (and Esc, as a harmless
                     // synonym) dismiss the front of the queue; nothing
                     // else reaches the map or the hand while it's up.
+                    if matches!(modal.front(), Some(Modal::Handover { .. })) {
+                        match key.code {
+                            KeyCode::Enter | KeyCode::Char(' ') => {
+                                modal.pop_front();
+                            }
+                            KeyCode::Char('q') => return Ok(()),
+                            _ => {}
+                        }
+                        prune_session_modal(&mut modal, game);
+                        ensure_session_modal(&mut modal, game);
+                        draw(&screen, map, layout, cards, game, message.as_deref(), &hand_selected, zoomed, &modal, color)?;
+                        continue;
+                    }
                     if matches!(modal.front(), Some(Modal::Session)) {
                         match key.code {
                             KeyCode::Char('r') if matches!(game.operation(), Some(Operation::Event(e)) if e.needs_roll()) => {
@@ -328,7 +388,7 @@ pub fn run(
                             KeyCode::Char('q') => return Ok(()),
                             _ => {}
                         }
-                        maybe_run_ai_turn(ai_side, ai, game, map, cards, dice, &mut message, &mut sticky, &mut zoomed, &mut modal);
+                        maybe_run_ai_turn(ai_side, ai, game, map, cards, dice, &mut message, &mut sticky, &mut zoomed, &mut modal, &mut handover, &mut hand_selected);
                         prune_session_modal(&mut modal, game);
                         ensure_session_modal(&mut modal, game);
                         draw(&screen, map, layout, cards, game, message.as_deref(), &hand_selected, zoomed, &modal, color)?;
@@ -349,7 +409,7 @@ pub fn run(
                             KeyCode::Char('q') => return Ok(()),
                             _ => {}
                         }
-                        maybe_run_ai_turn(ai_side, ai, game, map, cards, dice, &mut message, &mut sticky, &mut zoomed, &mut modal);
+                        maybe_run_ai_turn(ai_side, ai, game, map, cards, dice, &mut message, &mut sticky, &mut zoomed, &mut modal, &mut handover, &mut hand_selected);
                         draw(&screen, map, layout, cards, game, message.as_deref(), &hand_selected, zoomed, &modal, color)?;
                         continue;
                     }
@@ -378,7 +438,7 @@ pub fn run(
                             KeyCode::Char('q') => return Ok(()),
                             _ => {}
                         }
-                        maybe_run_ai_turn(ai_side, ai, game, map, cards, dice, &mut message, &mut sticky, &mut zoomed, &mut modal);
+                        maybe_run_ai_turn(ai_side, ai, game, map, cards, dice, &mut message, &mut sticky, &mut zoomed, &mut modal, &mut handover, &mut hand_selected);
                         prune_session_modal(&mut modal, game);
                         ensure_session_modal(&mut modal, game);
                         draw(&screen, map, layout, cards, game, message.as_deref(), &hand_selected, zoomed, &modal, color)?;
@@ -411,7 +471,7 @@ pub fn run(
                             KeyCode::Char('q') => return Ok(()),
                             _ => {}
                         }
-                        maybe_run_ai_turn(ai_side, ai, game, map, cards, dice, &mut message, &mut sticky, &mut zoomed, &mut modal);
+                        maybe_run_ai_turn(ai_side, ai, game, map, cards, dice, &mut message, &mut sticky, &mut zoomed, &mut modal, &mut handover, &mut hand_selected);
                         prune_session_modal(&mut modal, game);
                         ensure_session_modal(&mut modal, game);
                         draw(&screen, map, layout, cards, game, message.as_deref(), &hand_selected, zoomed, &modal, color)?;
@@ -464,7 +524,7 @@ pub fn run(
                             KeyCode::Char('q') => return Ok(()),
                             _ => {}
                         }
-                        maybe_run_ai_turn(ai_side, ai, game, map, cards, dice, &mut message, &mut sticky, &mut zoomed, &mut modal);
+                        maybe_run_ai_turn(ai_side, ai, game, map, cards, dice, &mut message, &mut sticky, &mut zoomed, &mut modal, &mut handover, &mut hand_selected);
                         prune_session_modal(&mut modal, game);
                         ensure_session_modal(&mut modal, game);
                         draw(&screen, map, layout, cards, game, message.as_deref(), &hand_selected, zoomed, &modal, color)?;
@@ -488,6 +548,7 @@ pub fn run(
                             KeyCode::Char('q') => return Ok(()),
                             _ => {}
                         }
+                        maybe_run_ai_turn(ai_side, ai, game, map, cards, dice, &mut message, &mut sticky, &mut zoomed, &mut modal, &mut handover, &mut hand_selected);
                         draw(&screen, map, layout, cards, game, message.as_deref(), &hand_selected, zoomed, &modal, color)?;
                         continue;
                     }
@@ -828,7 +889,7 @@ pub fn run(
                         },
                     },
                 }
-                maybe_run_ai_turn(ai_side, ai, game, map, cards, dice, &mut message, &mut sticky, &mut zoomed, &mut modal);
+                maybe_run_ai_turn(ai_side, ai, game, map, cards, dice, &mut message, &mut sticky, &mut zoomed, &mut modal, &mut handover, &mut hand_selected);
                 prune_session_modal(&mut modal, game);
                 ensure_session_modal(&mut modal, game);
                 draw(&screen, map, layout, cards, game, message.as_deref(), &hand_selected, zoomed, &modal, color)?;
@@ -864,6 +925,8 @@ fn maybe_run_ai_turn(
     sticky: &mut bool,
     zoomed: &mut bool,
     modal: &mut VecDeque<Modal>,
+    handover: &mut HandoverTracker,
+    hand_selected: &mut HandUi,
 ) {
     // What the last action round set off (NORAD) needs the map to settle.
     let before = game.log().len();
@@ -892,7 +955,7 @@ fn maybe_run_ai_turn(
         if let Err(e) = outcome {
             lines.push(format!("AI error: {e}"));
         }
-        queue_turn_modals(modal, game.board(), new_entries);
+        queue_ai_modals(modal, game, new_entries);
     }
     if played {
         let side = ai_side.expect("played implies an AI side");
@@ -900,6 +963,7 @@ fn maybe_run_ai_turn(
         *sticky = true;
         *zoomed = false;
     }
+    check_handover(handover, ai_side, game, map, cards, modal, zoomed, hand_selected);
 }
 
 /// Whether an open event only designates a region (Chernobyl), so the
@@ -970,6 +1034,17 @@ fn reconstruct_roll_reports(board: &Board, entries: &[LogEntry]) -> Vec<RollRepo
         reports.push_front(RollReport { side, outcome, before, aftermath });
     }
     reports.into_iter().collect()
+}
+
+/// [`queue_turn_modals`] for an AI's turn. Its rolls, scoring and event results are left out: the
+/// handover screen's summary already says what it did, so a human isn't shown each twice. The
+/// exceptions are a finished game, which has no handover to carry the result, and the
+/// headline reveal and final scoring, which the summary only abbreviates.
+fn queue_ai_modals(modal: &mut VecDeque<Modal>, game: &Game, entries: &[LogEntry]) {
+    let mut all = VecDeque::new();
+    queue_turn_modals(&mut all, game.board(), entries);
+    let over = game.winner().is_some();
+    modal.extend(all.into_iter().filter(|m| over || matches!(m, Modal::Headline(..) | Modal::FinalScoring(..))));
 }
 
 /// Walks one turn's new log entries in the order they actually happened,
@@ -1354,6 +1429,10 @@ fn draw(
     let item_count = hand.len() + china.is_some() as usize;
     let selected_idx = (item_count > 0).then(|| hand_selected.selected[side_index(side)].min(item_count - 1));
     let hand_canvas = match (game.forced_by(), game.card_in_play(), game.forced_how()) {
+        _ if modal.iter().any(|m| matches!(m, Modal::Handover { .. })) => {
+            let up = modal.iter().find_map(|m| if let Modal::Handover { side, .. } = m { Some(*side) } else { None }).unwrap_or(side);
+            render_hand_hidden(up, game.hand(up).len(), status.china_card == up)
+        }
         (Some(host), Some(card), Some(how)) if host != card => render_forced_card(cards, card, host, how, game.active()),
         _ => render_hand(cards, hand, china, side, selected_idx, game.card_in_play_slot().filter(|_| side == game.active())),
     };
@@ -1377,6 +1456,7 @@ fn draw(
             Modal::Event(result, vp_after, winner) => render_event_result(map, cards, result, *vp_after, *winner, queue_pos),
             Modal::War(result, vp_after, winner) => render_war_result(map, cards, result, *vp_after, *winner, queue_pos),
             Modal::Space(result, vp_after, winner) => render_space_result(cards, result, *vp_after, *winner, queue_pos),
+            Modal::Handover { side, lines, earlier } => render_handover(game, cards, *side, lines, *earlier),
             Modal::Tracks(tab) => render_tracks(game.status(), *tab, "←→ tab · Enter/Esc/⌫/t close"),
             Modal::Piles { tab, cursor, zoom } => {
                 let list = pile_cards(game.hands(), *tab);

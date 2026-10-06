@@ -117,6 +117,28 @@ pub fn render_hand(cards: &CardCatalog, hand: &[CardId], china: Option<bool>, si
     canvas
 }
 
+/// The strip with every card face-down, drawn while the handover screen is up so the incoming
+/// player's hand isn't visible to whoever is still at the keyboard. Same size as
+/// [`render_hand`]; only the card count (and the China Card's presence) shows.
+pub fn render_hand_hidden(side: Superpower, count: usize, china: bool) -> Canvas {
+    let mut canvas = Canvas::new(HAND_WIDTH, HAND_ROWS);
+    let color = match side {
+        Superpower::Us => Color::Us,
+        Superpower::Ussr => Color::Ussr,
+    };
+    canvas.put(0, 0, &format!("{side} hand hidden · Enter to reveal"), Style::color(color).bold());
+    let total = (count + china as usize).min(SLOTS_PER_PAGE);
+    for idx in 0..total {
+        let row = 1 + (idx / HAND_COLS) * SLOT_H;
+        let col = (idx % HAND_COLS) * SLOT_W;
+        canvas.draw_box(row, col, SLOT_W, SLOT_H, Style::color(color).dim());
+        for r in 1..SLOT_H - 1 {
+            canvas.put(row + r, col + 1, &"░".repeat(SLOT_W - 2), Style::color(Color::Muted));
+        }
+    }
+    canvas
+}
+
 /// The strip while a card another event put into play waits to have its event played: just that
 /// card, so nothing else in the hand competes with it, and a header saying where it came from.
 pub fn render_forced_card(cards: &CardCatalog, card: CardId, host: CardId, how: crate::events::PlayAs, side: Superpower) -> Canvas {

@@ -1075,3 +1075,27 @@ fn every_tracks_tab_is_the_same_size() {
         .collect();
     assert!(sizes.windows(2).all(|w| w[0] == w[1]), "{sizes:?}");
 }
+
+#[test]
+fn hidden_hand_is_the_same_size_and_shows_no_card_names() {
+    use twilight_struggle::render::{render_hand_hidden, HAND_ROWS, HAND_WIDTH};
+    let hidden = render_hand_hidden(Superpower::Ussr, 8, true);
+    assert_eq!((hidden.width(), hidden.height()), (HAND_WIDTH, HAND_ROWS));
+    let text = hidden.render(ColorMode::Never);
+    assert!(text.contains("USSR hand hidden"));
+    assert!(!text.contains("Ops") && !text.contains("China"));
+}
+
+#[test]
+fn handover_names_the_side_and_the_round() {
+    use twilight_struggle::render::render_handover;
+    use twilight_struggle::{Dice, Game};
+    let (map, _) = standard();
+    let cards = cards();
+    let game = Game::new_game(&map, &cards, &mut Dice::from_seed(7));
+    let text = render_handover(&game, &cards, Superpower::Ussr, &["USSR plays something".to_string()], 2).render(ColorMode::Never);
+    assert!(text.contains("USSR to play"), "{text}");
+    assert!(text.contains("Turn 1 of 10 · Early War"), "{text}");
+    assert!(text.contains("Setup: opening placement"), "{text}");
+    assert!(text.contains("… 2 earlier") && text.contains("USSR plays something"), "{text}");
+}

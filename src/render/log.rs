@@ -95,6 +95,100 @@ pub fn render_log(map: &WorldMap, cards: &CardCatalog, log: &GameLog, tail: Opti
     canvas
 }
 
+/// The log condensed for the handover screen: no turn/round stamp, one line per card played (its
+/// operations folded onto the card's own line, `Closed` bookkeeping dropped) and, for an event,
+/// just the event's own line — it already names the card, so the `Selected` entry is not
+/// repeated. A side prefix appears only when the entries belong to more than one side.
+pub fn summary_lines(map: &WorldMap, cards: &CardCatalog, entries: &[LogEntry]) -> Vec<String> {
+    let mixed = entries.iter().filter_map(|e| e.side).collect::<std::collections::HashSet<_>>().len() > 1;
+    let tag = |side: Option<Superpower>| if mixed { side.map_or(String::new(), |s| format!("{s}: ")) } else { String::new() };
+    // The card whose operations are being gathered: its header, who played it, what it did so far.
+    struct Play {
+        header: String,
+        side: Option<Superpower>,
+        parts: Vec<String>,
+    }
+    let mut out: Vec<String> = Vec::new();
+    let mut cur: Option<Play> = None;
+    let flush = |cur: &mut Option<Play>, out: &mut Vec<String>| {
+        if let Some(p) = cur.take() {
+            let body = if p.parts.is_empty() { "no operations".to_string() } else { p.parts.join("; ") };
+            out.push(format!("{}{} · {body}", tag(p.side), p.header));
+        }
+    };
+    for entry in entries {
+        match &entry.event {
+            Event::Selected { card } => {
+                flush(&mut cur, &mut out);
+                cur = Some(Play { header: selected_detail(cards, *card), side: entry.side, parts: Vec::new() });
+            }
+            Event::Placed { countries } => {
+                if let Some(p) = cur.as_mut() {
+                    p.parts.push(format!("influence {}", placed_detail(map, countries)));
+                }
+            }
+            Event::Realign(r) => {
+                if let (Some(p), Some(side)) = (cur.as_mut(), entry.side) {
+                    let acting = r.acting_die as i16 + r.acting_mods.total() as i16;
+                    let opposing = r.opposing_die as i16 + r.opposing_mods.total() as i16;
+                    let outcome = r.loser.map_or("no change".to_string(), |l| format!("{l} -{}", r.removed));
+                    p.parts.push(format!("realign {} ({side} {acting} v {} {opposing}): {outcome}", map.country(r.target).name, side.opponent()));
+                }
+            }
+            Event::Coup(c) => {
+                if let (Some(p), Some(side)) = (cur.as_mut(), entry.side) {
+                    let outcome = if !c.success() {
+                        "failed".to_string()
+                    } else {
+                        let mut gains = Vec::new();
+                        if c.removed > 0 {
+                            gains.push(format!("{} -{}", side.opponent(), c.removed));
+                        }
+                        if c.added > 0 {
+                            gains.push(format!("{side} +{}", c.added));
+                        }
+                        gains.join(", ")
+                    };
+                    let sum = c.die as i16 + c.ops as i16 + c.modifier as i16;
+                    p.parts.push(format!("coup {} ({sum} v {}): {outcome}", map.country(c.target).name, c.target_number));
+                }
+            }
+            Event::CoupAftermath(a) => {
+                let text = aftermath_detail(a);
+                if let Some(last) = cur.as_mut().and_then(|p| p.parts.last_mut()) {
+                    last.push_str(&format!(" ({text})"));
+                }
+            }
+            Event::Closed { .. } | Event::Edit { .. } | Event::Note(_) => {}
+            Event::Pass => {
+                flush(&mut cur, &mut out);
+                out.push(format!("{}passes", tag(entry.side)));
+            }
+            // The event's own line names its card, so the header that announced it is dropped.
+            Event::Scored { .. } | Event::EventResolved { .. } | Event::War { .. } | Event::Space { .. } => {
+                if cur.as_ref().is_some_and(|p| p.parts.is_empty()) {
+                    cur = None;
+                }
+                flush(&mut cur, &mut out);
+                let (_, detail) = action_and_detail(map, cards, entry);
+                out.push(format!("{}{detail}", tag(entry.side)));
+            }
+            Event::Headline { .. } | Event::TurnEnd(_) | Event::FinalScoring { .. } => {
+                flush(&mut cur, &mut out);
+                let (_, detail) = action_and_detail(map, cards, entry);
+                out.push(detail);
+            }
+            _ => {
+                flush(&mut cur, &mut out);
+                let (action, detail) = action_and_detail(map, cards, entry);
+                out.push(format!("{}{action}: {detail}", tag(entry.side)));
+            }
+        }
+    }
+    flush(&mut cur, &mut out);
+    out
+}
+
 fn header_lines() -> Vec<String> {
     vec!["# twilight-struggle game log".to_string(), "# turn ar   side action   detail".to_string()]
 }
@@ -106,7 +200,7 @@ fn side_label(side: Option<Superpower>) -> String {
 /// The action keyword and the detail text for one entry. Split out from
 /// [`log_entry_line`] so [`render_log`] can style the two parts
 /// differently without duplicating the match.
-fn action_and_detail(map: &WorldMap, cards: &CardCatalog, entry: &LogEntry) -> (&'static str, String) {
+pub(super) fn action_and_detail(map: &WorldMap, cards: &CardCatalog, entry: &LogEntry) -> (&'static str, String) {
     match &entry.event {
         // The first thing a turn does — logged, once irrevocable, before
         // the operation it funds has necessarily closed (see

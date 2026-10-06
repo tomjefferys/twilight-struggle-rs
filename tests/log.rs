@@ -205,3 +205,32 @@ fn realign_and_coup_lines_tag_every_number_with_its_source() {
     assert!(coup_line.contains("sum:6"), "sum (4+2) should appear tagged sum: {coup_line:?}");
     assert!(coup_line.contains("target:6"), "target number (6) should appear tagged target: {coup_line:?}");
 }
+
+#[test]
+fn summary_folds_a_play_onto_one_line_without_stamps_or_closed_entries() {
+    use twilight_struggle::render::summary_lines;
+    use twilight_struggle::{Event, LogEntry};
+    let map = WorldMap::standard().unwrap();
+    let cards = CardCatalog::standard().unwrap();
+    let id = match cards.find("Fidel") {
+        twilight_struggle::CardFound::One(c) => c,
+        _ => panic!("expected one match"),
+    };
+    let cuba = map.id_by_name("Cuba").unwrap();
+    let entry = |event| LogEntry { turn: 3, action_round: 5, side: Some(Superpower::Ussr), event };
+    let ops = [
+        entry(Event::Selected { card: id }),
+        entry(Event::Placed { countries: vec![(cuba, 2)] }),
+        entry(Event::Closed { kind: OperationKind::Influence, committed: true, rolls: 0, ops_spent: 2, ops_total: 2 }),
+        entry(Event::Pass),
+    ];
+    let lines = summary_lines(&map, &cards, &ops);
+    assert_eq!(lines.len(), 2, "{lines:?}");
+    assert!(lines[0].contains("Fidel") && lines[0].contains("influence Cuba +2"), "{lines:?}");
+    assert!(!lines.iter().any(|l| l.contains("T3") || l.contains("AR5") || l.contains("confirm")), "{lines:?}");
+    assert_eq!(lines[1], "passes");
+
+    // A card spent on nothing says so.
+    let idle = summary_lines(&map, &cards, &[entry(Event::Selected { card: id })]);
+    assert!(idle[0].ends_with("no operations"), "{idle:?}");
+}
