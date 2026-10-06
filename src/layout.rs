@@ -745,7 +745,8 @@ impl MapLayout {
     /// when it was reached via a guest chip; the caller (`interactive.rs`)
     /// is what follows the jump by rewriting which region is on screen.
     /// A guest superpower is never a candidate — there's no screen to
-    /// jump to for one.
+    /// jump to for one — and a guest country is one only when `from`
+    /// really borders it, so no step crosses a region without a border.
     ///
     /// The region grids are sparse (Africa is over half empty, with holes
     /// in the interior, not just the edges), so a bare row±1/col±1 step
@@ -756,9 +757,12 @@ impl MapLayout {
     pub fn step_country(&self, map: &WorldMap, region: Region, from: CountryId, dir: Direction) -> Option<CountryId> {
         let from_cell = self.cell(from);
         let native = self.countries_in_region(map, region).into_iter().filter(|&id| id != from).map(|id| (self.cell(id), id));
+        // A guest chip is only a way across if `from` really borders it: it may sit near other
+        // countries on the grid without being their neighbour (Libya next to Zaire's column).
+        let from_country = map.country(from);
         let guest_countries = self.guests(region).iter().filter_map(|g| match g.entity {
-            GuestEntity::Country(id) => Some((g.cell, id)),
-            GuestEntity::Superpower(_) => None,
+            GuestEntity::Country(id) if from_country.adjacent.contains(&id) => Some((g.cell, id)),
+            _ => None,
         });
         native
             .chain(guest_countries)

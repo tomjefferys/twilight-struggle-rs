@@ -48,23 +48,32 @@ time, never lose to DEFCON at once) for a game to run its full length —
   with a native one here. A `Guest`'s `GuestEntity` is `Country(CountryId)`
   or `Superpower(Superpower)`; one entity can have more than one guest
   cell in the same region when no single cell is grid-adjacent to every
-  native country it borders there (USSR appears three times in Europe's
-  grid: once diagonally between Finland and Poland, covering both, and
-  once by Romania). A guest's cell is hand-picked, not just any free
-  adjacent one: it's placed on whichever side of its bordering native
-  country matches that adjacency's real compass direction (compared via
-  both countries' `world_cell`), so an arrow key toward a guest points
-  the way you'd actually expect — the reason this matters enough to
-  choose deliberately, not arbitrarily, is that the *wrong* side makes
-  the two feel like they're on opposite sides of the map, and stepping
-  back and forth between them (an ordinary, expected way to use a
-  bidirectional connector) reads as broken rather than as "go back the
-  way you came." The one exception is Europe's Algeria and USA guests:
-  France's and Canada's other five and two real neighbours already fill
-  every cell around them but one, so each is forced onto that single
-  leftover cell regardless of which way it actually points from there.
+  native country it borders there (USSR appears twice in Europe's
+  grid: once between Finland and Poland, covering both, and once by
+  Hungary's side for Romania). The whole grid follows real geography, not
+  only the guests: a country sits on the side of each bordering neighbour
+  that the real map puts it on (compared via both countries' `world_cell`),
+  so an arrow key toward a neighbour points the way you'd actually expect —
+  the *wrong* side makes the two feel like they're on opposite sides of the
+  map, and stepping back and forth between them reads as broken rather than
+  as "go back the way you came." Grids are allowed to spread out for this
+  (some cells are empty), but every border must still be a one-step
+  connector between adjacent cells, and two diagonals in one 2×2 square
+  merge into a `╳`, so layouts are hand-checked for both.
+  `tests/layout.rs::bordering_countries_are_on_the_correct_side_of_each_other`
+  pins it; its one allowed exception is Romania/Turkey (the Balkan borders
+  can't all get their true side with one-step connectors, so Romania sits
+  north-east of Turkey rather than north-west).
+  A border between two regions is drawn on both screens and the two agree
+  (`cross_region_links_point_opposite_ways_on_their_two_screens`): if
+  Tunisia is left of Libya on the Africa screen, Libya's step back to
+  Tunisia on the Middle East screen is left too, so crossing and returning
+  is one reversible move. That is why the Middle East grid is one column
+  wider than it needs to be (room for Tunisia west of Libya).
   `MapLayout::step_country` treats a region's country
-  guests as extra candidates alongside its natives — never a guest
+  guests as extra candidates alongside its natives — but only the ones
+  the country stepping *actually borders* (a guest chip merely nearby on the
+  grid isn't a way across), and never a guest
   superpower, which is never selectable — so its return value may belong
   to a different region than the one passed in; the caller is what acts
   on that (see `interactive.rs` below). Validated at load time (unique

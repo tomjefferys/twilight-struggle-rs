@@ -1,26 +1,26 @@
   TURN 5   AR 3/7 (USSR)   DEFCON 3   VP US +4   Space US 4 USSR 2   MilOps US 2 USSR 3   China Card: US
 
 ┌ Europe  bg 3-2  ctry 7-5 ───────────────────────┐  ┌ Asia  bg 4-1  ctry 6-3 ─────────────────────────┐
-│  Norway    2:-   Sweden    -:-   Finland   -:1  │  │  Afghanist ->2  *Pakistan  2<-  *North Kor ->3  │
-│  Canada    2:-   UK        5<-   Benelux   3<-  │  │ *South Kor 3<-  *Japan     4<-  *India     2:1  │
-│  Denmark   3<-  *France    4<-  *West Germ 5<-  │  │  Burma     -:-   Laos/Camb -:-   Philippin 2<-  │
-│ *East Germ ->4  *Poland    ->4   Spain/Por -:-  │  │  Taiwan    -:-  *Thailand  2<-   Vietnam   ->2  │
-│ *Italy     3<1   Austria   1:1   Czechoslo ->3  │  │  Indonesia 1:1   Malaysia  -:-   Australia 4<-  │
-│  Greece    1:2   Yugoslavi -:2   Hungary   -:1  │  │                                                 │
-│  Bulgaria  ->3   Turkey    2<-   Romania   ->3  │  │                                                 │
+│  Finland   -:1   Sweden    -:-   Norway    2:-  │  │ *North Kor ->3  *South Kor 3<-   Afghanist ->2  │
+│  Denmark   3<-  *East Germ ->4  *Poland    ->4  │  │  Taiwan    -:-  *Japan     4<-  *Pakistan  2<-  │
+│  Canada    2:-   UK        5<-   Benelux   3<-  │  │  Burma     -:-   Laos/Camb -:-   Vietnam   ->2  │
+│ *West Germ 5<-   Austria   1:1   Czechoslo ->3  │  │  Philippin 2<-  *India     2:1  *Thailand  2<-  │
+│ *France    4<-  *Italy     3<1   Yugoslavi -:2  │  │  Malaysia  -:-   Indonesia 1:1   Australia 4<-  │
+│  Hungary   -:1   Spain/Por -:-   Greece    1:2  │  │                                                 │
+│  Bulgaria  ->3   Romania   ->3   Turkey    2<-  │  │                                                 │
 └─────────────────────────────────────────────────┘  └─────────────────────────────────────────────────┘
 ┌ Middle East  bg 1-1  ctry 1-2 ──────────────────┐  ┌ Africa  bg 1-2  ctry 1-2 ───────────────────────┐
-│  Lebanon   -:-   Syria     ->2  *Libya     -:1  │  │  Morocco   1:-  *Algeria   1:2   Tunisia   -:-  │
-│ *Egypt     ->3  *Israel    4<-   Jordan    -:-  │  │  West Afri -:-   Ivory Coa -:-   Saharan S -:-  │
-│ *Iraq      -:2  *Iran      2:1  *Saudi Ara -:-  │  │  Sudan     -:-  *Nigeria   2<-   Cameroon  -:-  │
-│  Gulf Stat -:-                                  │  │  Ethiopia  -:-   Somalia   -:-  *South Afr -:-  │
-│                                                 │  │ *Angola    ->2  *Zaire     ->1   Kenya     -:-  │
-│                                                 │  │  Botswana  -:-   Zimbabwe  -:-   SE Africa -:-  │
+│  Syria     ->2  *Israel    4<-   Lebanon   -:-  │  │  Morocco   1:-  *Algeria   1:2   Tunisia   -:-  │
+│ *Iran      2:1  *Libya     -:1  *Egypt     ->3  │  │  West Afri -:-   Saharan S -:-   Sudan     -:-  │
+│  Jordan    -:-  *Iraq      -:2  *Saudi Ara -:-  │  │  Ivory Coa -:-  *Nigeria   2<-   Ethiopia  -:-  │
+│  Gulf Stat -:-                                  │  │  Somalia   -:-   Cameroon  -:-   Kenya     -:-  │
+│                                                 │  │ *Zaire     ->1   SE Africa -:-  *Angola    ->2  │
+│                                                 │  │  Botswana  -:-   Zimbabwe  -:-  *South Afr -:-  │
 └─────────────────────────────────────────────────┘  └─────────────────────────────────────────────────┘
 ┌ Central America  bg 2-1  ctry 3-1 ──────────────┐  ┌ South America  bg 3-0  ctry 3-0 ────────────────┐
-│ *Mexico    2<-   Guatemala -:-   Haiti     1<-  │  │  Colombia  -:-   Ecuador   -:-  *Venezuela 2<-  │
-│  Dominican -:-   El Salvad -:-   Honduras  -:-  │  │  Peru      -:-   Bolivia   -:-  *Brazil    2<-  │
-│ *Cuba      ->3   Nicaragua 1:1   Costa Ric -:-  │  │ *Chile     3<-   Paraguay  -:-   Uruguay   -:-  │
+│ *Mexico    2<-  *Cuba      ->3   Haiti     1<-  │  │  Ecuador   -:-   Colombia  -:-  *Venezuela 2<-  │
+│  Dominican -:-   Guatemala -:-   Honduras  -:-  │  │  Peru      -:-   Bolivia   -:-  *Brazil    2<-  │
+│  Nicaragua 1:1   El Salvad -:-   Costa Ric -:-  │  │ *Chile     3<-   Paraguay  -:-   Uruguay   -:-  │
 │ *Panama    2<-                                  │  │ *Argentina 1:1                                  │
 └─────────────────────────────────────────────────┘  └─────────────────────────────────────────────────┘
 

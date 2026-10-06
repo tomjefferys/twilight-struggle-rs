@@ -1,38 +1,38 @@
   TURN 5   AR 3/7 (USSR)   DEFCON 3   VP US +4   Space US 4 USSR 2   MilOps US 2
 
 ┌ Europe  bg 3-2  ctry 7-5 ───────────────────────────────────────┐
-│  Norway    2:-   Sweden    -:-   Finland   -:1   Canada    2:-  │
-│  UK        5<-   Benelux   3<-   Denmark   3<-  *France    4<-  │
-│ *West Germ 5<-  *East Germ ->4  *Poland    ->4   Spain/Por -:-  │
-│ *Italy     3<1   Austria   1:1   Czechoslo ->3   Greece    1:2  │
-│  Yugoslavi -:2   Hungary   -:1   Bulgaria  ->3   Turkey    2<-  │
-│  Romania   ->3                                                  │
+│  Finland   -:1   Sweden    -:-   Norway    2:-   Denmark   3<-  │
+│ *East Germ ->4  *Poland    ->4   Canada    2:-   UK        5<-  │
+│  Benelux   3<-  *West Germ 5<-   Austria   1:1   Czechoslo ->3  │
+│ *France    4<-  *Italy     3<1   Yugoslavi -:2   Hungary   -:1  │
+│  Spain/Por -:-   Greece    1:2   Bulgaria  ->3   Romania   ->3  │
+│  Turkey    2<-                                                  │
 └─────────────────────────────────────────────────────────────────┘
 ┌ Asia  bg 4-1  ctry 6-3 ─────────────────────────────────────────┐
-│  Afghanist ->2  *Pakistan  2<-  *North Kor ->3  *South Kor 3<-  │
-│ *Japan     4<-  *India     2:1   Burma     -:-   Laos/Camb -:-  │
-│  Philippin 2<-   Taiwan    -:-  *Thailand  2<-   Vietnam   ->2  │
-│  Indonesia 1:1   Malaysia  -:-   Australia 4<-                  │
+│ *North Kor ->3  *South Kor 3<-   Afghanist ->2   Taiwan    -:-  │
+│ *Japan     4<-  *Pakistan  2<-   Burma     -:-   Laos/Camb -:-  │
+│  Vietnam   ->2   Philippin 2<-  *India     2:1  *Thailand  2<-  │
+│  Malaysia  -:-   Indonesia 1:1   Australia 4<-                  │
 └─────────────────────────────────────────────────────────────────┘
 ┌ Middle East  bg 1-1  ctry 1-2 ──────────────────────────────────┐
-│  Lebanon   -:-   Syria     ->2  *Libya     -:1  *Egypt     ->3  │
-│ *Israel    4<-   Jordan    -:-  *Iraq      -:2  *Iran      2:1  │
+│  Syria     ->2  *Israel    4<-   Lebanon   -:-  *Iran      2:1  │
+│ *Libya     -:1  *Egypt     ->3   Jordan    -:-  *Iraq      -:2  │
 │ *Saudi Ara -:-   Gulf Stat -:-                                  │
 └─────────────────────────────────────────────────────────────────┘
 ┌ Africa  bg 1-2  ctry 1-2 ───────────────────────────────────────┐
 │  Morocco   1:-  *Algeria   1:2   Tunisia   -:-   West Afri -:-  │
-│  Ivory Coa -:-   Saharan S -:-   Sudan     -:-  *Nigeria   2<-  │
-│  Cameroon  -:-   Ethiopia  -:-   Somalia   -:-  *South Afr -:-  │
-│ *Angola    ->2  *Zaire     ->1   Kenya     -:-   Botswana  -:-  │
-│  Zimbabwe  -:-   SE Africa -:-                                  │
+│  Saharan S -:-   Sudan     -:-   Ivory Coa -:-  *Nigeria   2<-  │
+│  Ethiopia  -:-   Somalia   -:-   Cameroon  -:-   Kenya     -:-  │
+│ *Zaire     ->1   SE Africa -:-  *Angola    ->2   Botswana  -:-  │
+│  Zimbabwe  -:-  *South Afr -:-                                  │
 └─────────────────────────────────────────────────────────────────┘
 ┌ Central America  bg 2-1  ctry 3-1 ──────────────────────────────┐
-│ *Mexico    2<-   Guatemala -:-   Haiti     1<-   Dominican -:-  │
-│  El Salvad -:-   Honduras  -:-  *Cuba      ->3   Nicaragua 1:1  │
+│ *Mexico    2<-  *Cuba      ->3   Haiti     1<-   Dominican -:-  │
+│  Guatemala -:-   Honduras  -:-   Nicaragua 1:1   El Salvad -:-  │
 │  Costa Ric -:-  *Panama    2<-                                  │
 └─────────────────────────────────────────────────────────────────┘
 ┌ South America  bg 3-0  ctry 3-0 ────────────────────────────────┐
-│  Colombia  -:-   Ecuador   -:-  *Venezuela 2<-   Peru      -:-  │
+│  Ecuador   -:-   Colombia  -:-  *Venezuela 2<-   Peru      -:-  │
 │  Bolivia   -:-  *Brazil    2<-  *Chile     3<-   Paraguay  -:-  │
 │  Uruguay   -:-  *Argentina 1:1                                  │
 └─────────────────────────────────────────────────────────────────┘

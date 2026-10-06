@@ -153,7 +153,7 @@ fn rejects_duplicate_cell_within_a_region() {
     // UK and Canada are both Europe; force Canada onto UK's region-view
     // cell (keeping Canada's own code/world_cell intact, so only the cell
     // collision trips).
-    raw["countries"]["Canada"]["cell"] = serde_json::json!([1, 1]);
+    raw["countries"]["Canada"]["cell"] = serde_json::json!([3, 1]);
     let json = serde_json::to_string(&raw).unwrap();
     match MapLayout::load(&map, &json) {
         Err(LayoutError::DuplicateCell { .. }) => {}
@@ -487,6 +487,114 @@ fn step_country_never_returns_the_starting_country() {
                     "{} stepping {dir:?} in {region} returned itself",
                     map.country(id).name
                 );
+            }
+        }
+    }
+}
+
+/// Every region grid places a bordering country on the side of its neighbour that the real
+/// map does (judged by `world_cell`): if the world map clearly puts B north/south/east/west of
+/// A, B's cell on the grid is never on the opposite side. "Clearly" is ≥3 rows or ≥6 columns
+/// apart on the world map (a column is about half a row's size), so near-ties don't trip it.
+/// Superpowers are skipped — they have no point on the map to compare against.
+#[test]
+fn bordering_countries_are_on_the_correct_side_of_each_other() {
+    // One-step connectors can't give every Balkan border its true side: Greece, Bulgaria,
+    // Romania and Turkey are all pulled between Italy/Yugoslavia and each other, so Romania
+    // goes north-east of Turkey rather than north-west. The one known compromise.
+    const ALLOWED: &[(&str, &str)] = &[("Romania", "Turkey")];
+    let (map, layout) = standard();
+    let mut inversions = Vec::new();
+    for &region in &Region::ALL {
+        let mut placed: Vec<(twilight_struggle::CountryId, twilight_struggle::Cell)> =
+            layout.countries_in_region(&map, region).into_iter().map(|id| (id, layout.cell(id))).collect();
+        for guest in layout.guests(region) {
+            if let GuestEntity::Country(id) = guest.entity {
+                placed.push((id, guest.cell));
+            }
+        }
+        for &(a, a_cell) in &placed {
+            for &(b, b_cell) in &placed {
+                if a >= b || !map.country(a).adjacent.contains(&b) {
+                    continue;
+                }
+                // Native-native, or a native with a guest: the pair's grid cells must be adjacent.
+                let grid_dr = b_cell.row as i32 - a_cell.row as i32;
+                let grid_dc = b_cell.col as i32 - a_cell.col as i32;
+                if grid_dr.abs().max(grid_dc.abs()) != 1 {
+                    continue; // a different chip stands for this link, checked on its own
+                }
+                let (wa, wb) = (layout.world_cell(a), layout.world_cell(b));
+                let world_dr = wb.row as i32 - wa.row as i32;
+                let world_dc = wb.col as i32 - wa.col as i32;
+                let flipped = (world_dr.abs() >= 3 && grid_dr * world_dr < 0) || (world_dc.abs() >= 6 && grid_dc * world_dc < 0);
+                if flipped {
+                    let names = (map.country(a).name.as_str(), map.country(b).name.as_str());
+                    let allowed = ALLOWED.iter().any(|&(x, y)| (x, y) == names || (y, x) == names);
+                    if !allowed {
+                        inversions.push(format!("{region}: {} / {}", names.0, names.1));
+                    }
+                }
+            }
+        }
+    }
+    assert!(inversions.is_empty(), "grid puts these bordering countries on the wrong side of each other: {inversions:#?}");
+}
+
+/// A border between two regions is drawn on both regions' screens (each as a guest chip), and
+/// the two must agree: if B is up-left of A on A's screen, A is down-right of B on B's. This is
+/// what makes stepping across a region boundary and back land where you started and feel like
+/// one reversible move.
+#[test]
+fn cross_region_links_point_opposite_ways_on_their_two_screens() {
+    use twilight_struggle::Cell;
+    let (map, layout) = standard();
+    let step = |from: Cell, to: Cell| (to.row as i32 - from.row as i32, to.col as i32 - from.col as i32);
+    // Offsets from `a`'s cell to each guest chip standing for `b` that touches it.
+    let offsets = |region: Region, a, b| -> Vec<(i32, i32)> {
+        layout
+            .guests(region)
+            .iter()
+            .filter(|g| g.entity == GuestEntity::Country(b))
+            .map(|g| step(layout.cell(a), g.cell))
+            .filter(|&(dr, dc)| dr.abs().max(dc.abs()) == 1)
+            .collect()
+    };
+    let mut mismatches = Vec::new();
+    for (a, country) in map.iter() {
+        for &b in &country.adjacent {
+            if a >= b || map.country(b).region == country.region {
+                continue;
+            }
+            let from_a = offsets(country.region, a, b);
+            let from_b = offsets(map.country(b).region, b, a);
+            let agree = from_a.iter().any(|&(dr, dc)| from_b.contains(&(-dr, -dc)));
+            if !agree {
+                mismatches.push(format!("{} ({:?}) / {} ({:?})", country.name, from_a, map.country(b).name, from_b));
+            }
+        }
+    }
+    assert!(mismatches.is_empty(), "cross-region links disagree between their two screens: {mismatches:#?}");
+}
+
+/// Stepping onto a different region's country is only ever along a real border: from a country
+/// to a guest it doesn't border (Zaire "north" to Libya, the UK "down" to Algeria) must not land.
+#[test]
+fn stepping_never_crosses_a_region_without_a_border() {
+    let (map, layout) = standard();
+    for &region in &Region::ALL {
+        for &id in &layout.countries_in_region(&map, region) {
+            for dir in [Direction::Up, Direction::Down, Direction::Left, Direction::Right] {
+                if let Some(next) = layout.step_country(&map, region, id, dir) {
+                    if map.country(next).region != region {
+                        assert!(
+                            map.country(id).adjacent.contains(&next),
+                            "{} stepped {dir:?} onto {}, which it doesn't border",
+                            map.country(id).name,
+                            map.country(next).name
+                        );
+                    }
+                }
             }
         }
     }
