@@ -82,7 +82,7 @@ pub fn render_roll_result(map: &WorldMap, report: &RollReport, queue_pos: Option
 /// The title, body lines and border colour describing one resolved roll — everything
 /// [`render_roll_result`] draws bar its dismiss hint, shared with [`render_roll_confirm`] so a
 /// result reads the same whether it stands alone or sits under a preview.
-fn report_body(map: &WorldMap, report: &RollReport) -> (String, Vec<(String, Style)>, Color) {
+pub(crate) fn report_body(map: &WorldMap, report: &RollReport) -> (String, Vec<(String, Style)>, Color) {
     let country = &map.country(report.target()).name;
     let stability = map.country(report.target()).stability;
     let (before_us, before_ussr) = report.before;
@@ -227,6 +227,7 @@ pub fn render_roll_confirm(
     id: CountryId,
     last: Option<&RollReport>,
     game_over: bool,
+    ai: Option<&str>,
 ) -> Canvas {
     let country = map.country(id);
     let side = op.side();
@@ -241,6 +242,10 @@ pub fn render_roll_confirm(
     let mut title = format!("{kind} · {}", country.name);
     let mut lines: Vec<(String, Style)> = Vec::new();
     let mut border = side_color(side);
+    if let (Some(play), None) = (ai, last) {
+        lines.push((format!("{side} (AI) {play}"), Style::color(side_color(side)).bold()));
+        lines.push((String::new(), Style::default()));
+    }
 
     if let Some(report) = last {
         let (result_title, body, color) = report_body(map, report);
@@ -258,43 +263,59 @@ pub fn render_roll_confirm(
     }
 
     if last.is_none() || again {
-        let (us, ussr) = (board.influence(id, Superpower::Us), board.influence(id, Superpower::Ussr));
-        lines.push((format!("USA {us} · USSR {ussr} · stability {}", country.stability), Style::default()));
-        let rows = operation_target_rows(map, board, op, id);
-        if !op.is_legal_target(map, board, id) {
-            // Odds for a roll that can't be made would only mislead: the reason is all there is.
-            lines.extend(rows.into_iter().take(1));
-            return finish_confirm(&title, border, lines, text_width, last.is_some(), again);
-        }
-        lines.extend(rows);
-        if let Operation::Realign(r) = op {
-            let names: Vec<&str> = country.adjacent.iter().filter(|&&n| board.is_controlled_by(map, n, r.side())).map(|&n| map.country(n).name.as_str()).collect();
-            if !names.is_empty() {
-                lines.push((format!("+1 realign from {}", names.join(", ")), Style::color(Color::Selected)));
-            }
-        }
-        if let Operation::Coup(_) = op {
-            if status.effects.coup_forbidden(side) {
-                lines.push(("Cuban Missile Crisis: this coup LOSES THE GAME".to_string(), Style::color(Color::Muted).bold()));
-            } else if country.battleground {
-                if status.effects.spares_defcon(side) {
-                    lines.push(("Nuclear Subs: DEFCON unchanged".to_string(), Style::color(Color::Muted)));
-                } else if status.defcon <= 2 {
-                    lines.push((format!("DEFCON {} → {} — this coup LOSES THE GAME", status.defcon, status.defcon.saturating_sub(1)), Style::color(Color::Muted).bold()));
-                } else {
-                    lines.push((format!("Battleground: DEFCON {} → {}", status.defcon, status.defcon - 1), Style::color(Color::Muted)));
-                }
-            }
+        let (preview, legal) = target_preview(map, status, board, op, id);
+        lines.extend(preview);
+        if !legal {
+            return finish_confirm(&title, border, lines, text_width, last.is_some(), again, ai);
         }
     }
 
-    finish_confirm(&title, border, lines, text_width, last.is_some(), again)
+    finish_confirm(&title, border, lines, text_width, last.is_some(), again, ai)
+}
+
+/// The rows describing a roll on `id` before it is made: the influence and stability, the
+/// operation's odds rows, a realignment's adjacent-control note and a coup's DEFCON warnings.
+/// The flag is whether the target can be rolled on at all (when it can't, only the reason is
+/// given, since odds for a roll that can't be made would only mislead).
+pub(crate) fn target_preview(map: &WorldMap, status: &GameStatus, board: &Board, op: &Operation, id: CountryId) -> (Vec<(String, Style)>, bool) {
+    let country = map.country(id);
+    let side = op.side();
+    let mut lines: Vec<(String, Style)> = Vec::new();
+    let (us, ussr) = (board.influence(id, Superpower::Us), board.influence(id, Superpower::Ussr));
+    lines.push((format!("USA {us} · USSR {ussr} · stability {}", country.stability), Style::default()));
+    let rows = operation_target_rows(map, board, op, id);
+    if !op.is_legal_target(map, board, id) {
+        lines.extend(rows.into_iter().take(1));
+        return (lines, false);
+    }
+    lines.extend(rows);
+    if let Operation::Realign(r) = op {
+        let names: Vec<&str> = country.adjacent.iter().filter(|&&n| board.is_controlled_by(map, n, r.side())).map(|&n| map.country(n).name.as_str()).collect();
+        if !names.is_empty() {
+            lines.push((format!("+1 realign from {}", names.join(", ")), Style::color(Color::Selected)));
+        }
+    }
+    if let Operation::Coup(_) = op {
+        if status.effects.coup_forbidden(side) {
+            lines.push(("Cuban Missile Crisis: this coup LOSES THE GAME".to_string(), Style::color(Color::Muted).bold()));
+        } else if country.battleground {
+            if status.effects.spares_defcon(side) {
+                lines.push(("Nuclear Subs: DEFCON unchanged".to_string(), Style::color(Color::Muted)));
+            } else if status.defcon <= 2 {
+                lines.push((format!("DEFCON {} → {} — this coup LOSES THE GAME", status.defcon, status.defcon.saturating_sub(1)), Style::color(Color::Muted).bold()));
+            } else {
+                lines.push((format!("Battleground: DEFCON {} → {}", status.defcon, status.defcon - 1), Style::color(Color::Muted)));
+            }
+        }
+    }
+    (lines, true)
 }
 
 /// Adds the key hint to a confirmation's `lines` and draws the box.
-fn finish_confirm(title: &str, border: Color, mut lines: Vec<(String, Style)>, text_width: usize, rolled: bool, again: bool) -> Canvas {
+fn finish_confirm(title: &str, border: Color, mut lines: Vec<(String, Style)>, text_width: usize, rolled: bool, again: bool, ai: Option<&str>) -> Canvas {
     lines.push((String::new(), Style::default()));
     let hint = match (rolled, again) {
+        _ if ai.is_some() => if rolled { "Enter to continue" } else { "Enter to roll" },
         (false, true) => "r/Enter roll · Esc back",
         (false, false) => "Esc back",
         (true, true) => "r roll again · Enter/Esc back to map",
@@ -330,7 +351,7 @@ fn influence_change_line(side: Superpower, country: &str, before: u8, after: u8)
     format!("{side} influence in {country}: {before} → {after}")
 }
 
-fn side_color(side: Superpower) -> Color {
+pub(crate) fn side_color(side: Superpower) -> Color {
     match side {
         Superpower::Us => Color::Us,
         Superpower::Ussr => Color::Ussr,
@@ -519,7 +540,7 @@ mod tests {
 
     fn confirm_text(map: &WorldMap, status: &GameStatus, board: &Board, op: &Operation, id: CountryId, last: Option<&RollReport>) -> String {
         let cards = CardCatalog::standard().unwrap();
-        let text = render_roll_confirm(map, &cards, status, board, op, id, last, false).render(ColorMode::Never);
+        let text = render_roll_confirm(map, &cards, status, board, op, id, last, false, None).render(ColorMode::Never);
         for line in text.lines() {
             assert!(line.chars().count() <= ROLL_WIDTH, "line too wide: {line:?}");
         }

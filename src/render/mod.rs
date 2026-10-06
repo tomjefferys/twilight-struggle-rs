@@ -7,6 +7,7 @@
 //! presented (a REPL printing to stdout today, perhaps a full-screen TUI
 //! later) entirely outside this module.
 
+pub mod ai;
 pub mod card;
 mod chip;
 pub mod country;
@@ -27,6 +28,7 @@ pub mod war;
 pub mod world;
 pub mod worldmap;
 
+pub use ai::{render_ai_realign, render_ai_step};
 pub use card::render_card;
 pub use country::render_country;
 pub use event::{render_event_result, render_event_session};

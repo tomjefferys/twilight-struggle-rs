@@ -69,6 +69,9 @@ struct Session {
     /// so the REPL loop can never drive both sides without a human typing
     /// anything. `None` means every turn is typed at the prompt as usual.
     ai_side: Option<Superpower>,
+    /// Interactive map only: the AI plays its turn straight through and the player gets just
+    /// the handover summary, instead of a modal for each thing it does (`--fast`, `f`, `ai fast`).
+    ai_fast: bool,
     /// Whether debug-mode state editing (`set`/`add`/`remove`/`clear`/
     /// `vp`/`defcon`/`turn`/`ar`/`active`/`china`/`give`/`discard`/
     /// `exile`/`blank`) is unlocked — off by default, so a normal game
@@ -102,6 +105,7 @@ fn main() {
     let mut state_ref: Option<String> = None;
     let mut new_game_flag = false;
     let mut ai_kind = ai::AiKind::default();
+    let mut ai_fast = false;
     let mut command_words = Vec::new();
 
     while let Some(arg) = args.next() {
@@ -131,6 +135,7 @@ fn main() {
                 state_ref = args.next();
             }
             "--new" => new_game_flag = true,
+            "--fast" => ai_fast = true,
             "--ai-kind" => match args.next().as_deref().and_then(ai::AiKind::parse) {
                 Some(kind) => ai_kind = kind,
                 None => eprintln!("--ai-kind takes heuristic or random"),
@@ -178,6 +183,7 @@ fn main() {
         ai,
         ai_kind,
         ai_side,
+        ai_fast,
         debug: false,
         states: StateLibrary::standard(),
     };
@@ -307,6 +313,10 @@ fn run_ai_command(session: &mut Session, words: &[&str]) {
             session.ai_side = None;
             println!("AI auto-play off");
         }
+        Some("fast") => {
+            session.ai_fast = !matches!(words.get(2).copied(), Some("off"));
+            println!("AI moves in the interactive map: {}", if session.ai_fast { "fast (summary only)" } else { "step by step" });
+        }
         Some("kind") => match words.get(2).copied() {
             None => println!("AI kind: {}", session.ai_kind.name()),
             Some(k) => match ai::AiKind::parse(k) {
@@ -328,7 +338,7 @@ fn run_ai_command(session: &mut Session, words: &[&str]) {
                 session.ai_side = Some(side);
                 println!("AI ({}) now plays {side} automatically", session.ai_kind.name());
             }
-            None => println!("usage: ai [us|ussr [heuristic|random]|kind [heuristic|random]|off]"),
+            None => println!("usage: ai [us|ussr [heuristic|random]|kind [heuristic|random]|fast [on|off]|off]"),
         },
     }
 }
@@ -382,6 +392,7 @@ fn run_command(session: &mut Session, line: &str) {
                     session.color,
                     session.ai_side,
                     session.ai.as_mut(),
+                    &mut session.ai_fast,
                 ) {
                     Ok(()) => {
                         if let Some(op) = session.game.operation() {
@@ -1777,6 +1788,7 @@ Commands:
                           map alike) — `--ai us|ussr` sets this at launch
   ai us|ussr heuristic|random   ... with that kind of AI (default: heuristic)
   ai kind [heuristic|random]    show or change which AI plays (`--ai-kind` at launch)
+  ai fast [on|off]             interactive map: AI plays straight through, summary only (`--fast`, key `f`)
   ai off                  turn automatic AI play back off
 
   play <id|name>          take a card from the active side's hand (id,

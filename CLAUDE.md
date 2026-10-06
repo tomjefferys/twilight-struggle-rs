@@ -1296,27 +1296,28 @@ Wired into both `main.rs` (an
   changed) and the rest are muted. The footers carry a legend, and the region footer/country panel spell out what `+`/`-`
   would do on the selected one (`EventChoice::hint`). Confirming queues
   the same `Modal::Event` an immediate effect card does.
-  `run` also takes `ai_side: Option<Superpower>` and `&mut RandomAi`,
-  threaded through from `Session` — `maybe_run_ai_turn` runs before the
-  very first draw and again after every handled keypress, and, whenever
-  `ai_side` matches `Game::active` *and* `Game::winner` isn't already set
-  (otherwise `Game::active` would still name the AI's side forever, with
-  nothing left to play, and this would try to replay an already-finished
-  turn on every later keypress), plays that whole turn via
-  `ai::play_turn`, folds its log entries into one message line (closing
-  any open zoom overlay and marking the message `sticky`, the one
-  remaining use of that flag — the one-extra-keypress survival the AI's
-  own summary line still needs, now that a roll's or a scoring event's
-  outcome has its own modal instead), queues a `Modal` for each
-  realignment roll, coup attempt, or scoring event the turn made
-  (`queue_turn_modals`, walking the turn's own new log entries forward
-  and pairing each roll off against `reconstruct_roll_reports`'s own
-  output — which recovers each roll's "before" state, the one thing the
-  log doesn't carry, by walking in reverse from the real board — while a
-  `Scored` entry needs no reconstruction, since it already carries both
-  the result and the VP it landed on) and queues them the same way the
-  human's own `r`/`e` do, and leaves the message for that keypress's own
-  `draw` call to show.
+  `run` also takes `ai_side: Option<Superpower>`, `&mut dyn Ai` and `ai_fast: &mut bool`,
+  threaded through from `Session`. `maybe_run_ai_turn` runs before the very first draw and
+  after every handled keypress; whenever `ai_side` matches `Game::decider` and `Game::winner`
+  isn't set it lets the AI act, in one of two ways (`AiUi { fast, pending }`):
+  **Step by step** (the default; `step_ai`) drives one action at a time via
+  `ai.choose` + `Game::apply` and stops at a modal before anything the human should see coming:
+  `Modal::AiStep { pre: true }` for a card's event, a space attempt, a trap escape or a roll-off
+  (Enter runs the chosen action, kept in `AiUi::pending`), `Modal::AiRoll` before a coup or war
+  roll (the live `render_roll_confirm` with an AI heading; the *same* modal then shows the
+  result, so a coup is a before and an after) and `Modal::AiRealign`, one modal for a whole
+  realignment (earlier rolls one line each, the latest in full, the next target's odds; Enter
+  rolls it, and it stays open until the operation closes). Results (scoring, events, wars,
+  space, traps, the headline) come from the log through `queue_ai_step_modals` (=
+  `queue_turn_modals` minus `Modal::Roll`, plus a `Modal::AiStep` note for a placement or pass);
+  nothing else is queued meanwhile, and the AI carries on once the queue empties
+  (`advance_ai_modal` handles Enter, `maybe_run_ai_turn` resumes). **Fast** (`--fast`, `ai fast
+  [on|off]` in the REPL, the `f` key on the map or in an AI modal; `toggle_fast`) plays the whole turn
+  with `ai::play_turn` and shows only the handover summary (`queue_ai_modals` keeps the headline
+  reveal and final scoring). There is no longer a message-row line for the AI's moves. Views:
+  `render/ai.rs` (`render_ai_step`, `render_ai_realign`; `roll.rs::target_preview` is the shared
+  odds rows). `tests::the_stepping_ai_announces_each_roll_before_making_it_and_never_stalls`
+  soaks it.
 
   **Handover screen** (`Modal::Handover`, `render/handover.rs::render_handover`): whenever
   `Game::decider()` changes to a human (`check_handover`, run at the end of `maybe_run_ai_turn`
@@ -1432,6 +1433,8 @@ cargo run -- --state scoring/europe-ussr-control-wins
                                     # jump straight into a named test state
 cargo run -- --new                 # a real game: deal, opening placement, headline, ...
 cargo run -- --new --ai ussr       # ... against the heuristic AI
+cargo run -- --new --ai ussr --fast
+                                    # ... skipping the AI's step-by-step modals (key `f` toggles)
 cargo run -- --new --ai ussr --ai-kind random
                                     # ... against the (careful) random AI
 SOAK_SEEDS=5000 cargo test --release --test full_game

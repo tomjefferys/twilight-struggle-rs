@@ -13,13 +13,14 @@ use crossterm::terminal::{self, Clear, ClearType, EnterAlternateScreen, LeaveAlt
 use crossterm::{execute, queue};
 
 use twilight_struggle::render::{
-    log_entry_line, summary_lines, operation_abandoned_line, pile_cards, render_piles, PileTab, operation_closed_line, operation_header, render_card, render_country, render_forced_card, render_hand, render_hand_hidden, render_handover,
-    render_event_result, render_event_session, render_final_scoring, render_headline_confirm, render_headline_reveal, render_space_confirm, render_space_result, render_trap_confirm, render_trap_result, render_tracks, TrackTab, render_war_result, render_region, render_roll_confirm, can_roll, render_roll_result, render_scoring_preview, render_scoring_result, render_status_bar_with, render_world_map, Canvas, Color, Style, RollReport, HAND_ROWS, context_keys, global_keys, KeyScreen, KeyUi,
+    summary_lines, operation_abandoned_line, pile_cards, render_piles, PileTab, operation_closed_line, operation_header, render_card, render_country, render_forced_card, render_hand, render_hand_hidden, render_handover,
+    render_ai_realign, render_ai_step, render_event_result, render_event_session, render_final_scoring, render_headline_confirm, render_headline_reveal, render_space_confirm, render_space_result, render_trap_confirm, render_trap_result, render_tracks, TrackTab, render_war_result, render_region, render_roll_confirm, can_roll, render_roll_result, render_scoring_preview, render_scoring_result, render_status_bar_with, render_world_map, Canvas, Color, Style, RollReport, HAND_ROWS, context_keys, global_keys, KeyScreen, KeyUi,
 };
 use twilight_struggle::events::{PlayAs, EffectResult, ScoringResult, WarResult};
 use twilight_struggle::game::{Phase, Trap, TrapResult, Victory};
 use twilight_struggle::space::SpaceResult;
 use twilight_struggle::ops::Operation;
+use twilight_struggle::Action;
 use twilight_struggle::{
     ai, Ai, Board, CardCatalog, CardId, ColorMode, CountryId, Dice, Direction, Event, EventOutcome, Game, GameError, LogEntry, MapLayout,
     OperationKind, Region, RollOutcome, Superpower, WorldMap, CHINA_CARD,
@@ -91,6 +92,25 @@ enum Modal {
     /// rolls, and once it has (`last`) the result, with another roll offered while a
     /// realignment can afford one. Drawn live from the open operation.
     RollTarget { country: CountryId, last: Option<RollReport> },
+    /// A step of the AI's turn shown as a note: a card or die announced before the step runs
+    /// (`pre`: Enter runs it, [`AiUi::pending`]) or something that already happened (a
+    /// placement, a pass), dismissed with Enter.
+    AiStep { side: Superpower, title: String, body: Vec<String>, hint: &'static str, pre: bool, focus: Option<CountryId> },
+    /// The AI is about to make a coup attempt or war roll on `country` (`last` is `None`: Enter
+    /// rolls), then the same modal shows what it rolled. `play` says what funded it.
+    AiRoll { country: CountryId, last: Option<RollReport>, play: String },
+    /// One AI realignment, all in a single modal: the rolls so far, then the next target (`next`,
+    /// Enter rolls it) until the operation closes (`done`).
+    AiRealign { side: Superpower, card: String, history: Vec<RollReport>, next: Option<CountryId>, done: bool },
+}
+
+/// What the interactive loop remembers about the AI between keypresses.
+struct AiUi {
+    /// Skip the step-by-step modals: the AI plays its turn straight through and the player only
+    /// gets the handover summary.
+    fast: bool,
+    /// The action the AI has chosen but that waits for Enter on its announcement modal.
+    pending: Option<Action>,
 }
 
 /// Notices when the player who has to act changes and queues the handover screen for them.
@@ -136,6 +156,7 @@ fn check_handover(tracker: &mut HandoverTracker, ai_side: Option<Superpower>, ga
 }
 
 /// Which screen is currently showing.
+#[derive(Clone, Copy)]
 enum Screen {
     /// The to-scale world map, with `selected` picked by the arrow keys.
     World { selected: Region },
@@ -261,6 +282,7 @@ pub fn run(
     color: ColorMode,
     ai_side: Option<Superpower>,
     ai: &mut dyn Ai,
+    ai_fast: &mut bool,
 ) -> io::Result<()> {
     let _guard = TerminalGuard::enter()?;
     let mut screen = Screen::World { selected: Region::Europe };
@@ -277,7 +299,7 @@ pub fn run(
     // reflects those). Kept here rather than threaded into `render/`,
     // which never touches the terminal or takes free-text messages.
     let mut message: Option<String> = None;
-    let mut sticky = false;
+    let mut aiui = AiUi { fast: *ai_fast, pending: None };
     // A resolved realignment roll or coup attempt is shown as its own
     // modal (`render::render_roll_result`) rather than a message-row line
     // — it's the one event in the whole session that's both irreversible
@@ -298,9 +320,17 @@ pub fn run(
     // the newly active side's own hand takes its place.
     let mut zoomed = false;
     let mut handover = HandoverTracker { last: None, left_at: [0; 2] };
+    // The screen the player was on when the AI's turn pulled the view to where it is acting.
+    let mut saved_screen: Option<Screen> = None;
+    macro_rules! redraw {
+        () => {{
+            follow_ai(&mut screen, &mut saved_screen, map, game, &modal, ai_side);
+            draw(&screen, map, layout, cards, game, message.as_deref(), &hand_selected, zoomed, &modal, color, ai_side.map(|s| (s, aiui.fast)))?
+        }};
+    }
 
-    maybe_run_ai_turn(ai_side, ai, game, map, cards, dice, &mut message, &mut sticky, &mut zoomed, &mut modal, &mut handover, &mut hand_selected);
-    draw(&screen, map, layout, cards, game, message.as_deref(), &hand_selected, zoomed, &modal, color)?;
+    maybe_run_ai_turn(ai_side, ai, game, map, cards, dice, &mut message, &mut aiui, &mut zoomed, &mut modal, &mut handover, &mut hand_selected);
+    redraw!();
     loop {
         match event::read()? {
             TermEvent::Key(key) if key.kind == KeyEventKind::Press => {
@@ -324,8 +354,25 @@ pub fn run(
                             _ => {}
                         }
                         prune_session_modal(&mut modal, game);
-                        ensure_session_modal(&mut modal, game);
-                        draw(&screen, map, layout, cards, game, message.as_deref(), &hand_selected, zoomed, &modal, color)?;
+                        ensure_session_modal(&mut modal, game, ai_side);
+                        redraw!();
+                        continue;
+                    }
+                    if matches!(modal.front(), Some(Modal::AiStep { .. } | Modal::AiRoll { .. } | Modal::AiRealign { .. })) {
+                        match key.code {
+                            KeyCode::Enter | KeyCode::Char(' ') | KeyCode::Char('r') => {
+                                if let Some(m) = advance_ai_modal(game, map, cards, dice, &mut modal, &mut aiui) {
+                                    message = Some(m);
+                                }
+                            }
+                            KeyCode::Char('f') => toggle_fast(ai_fast, &mut aiui, game, map, cards, dice, &mut modal, &mut message),
+                            KeyCode::Char('q') => return Ok(()),
+                            _ => {}
+                        }
+                        maybe_run_ai_turn(ai_side, ai, game, map, cards, dice, &mut message, &mut aiui, &mut zoomed, &mut modal, &mut handover, &mut hand_selected);
+                        prune_session_modal(&mut modal, game);
+                        ensure_session_modal(&mut modal, game, ai_side);
+                        redraw!();
                         continue;
                     }
                     if matches!(modal.front(), Some(Modal::Session)) {
@@ -388,10 +435,10 @@ pub fn run(
                             KeyCode::Char('q') => return Ok(()),
                             _ => {}
                         }
-                        maybe_run_ai_turn(ai_side, ai, game, map, cards, dice, &mut message, &mut sticky, &mut zoomed, &mut modal, &mut handover, &mut hand_selected);
+                        maybe_run_ai_turn(ai_side, ai, game, map, cards, dice, &mut message, &mut aiui, &mut zoomed, &mut modal, &mut handover, &mut hand_selected);
                         prune_session_modal(&mut modal, game);
-                        ensure_session_modal(&mut modal, game);
-                        draw(&screen, map, layout, cards, game, message.as_deref(), &hand_selected, zoomed, &modal, color)?;
+                        ensure_session_modal(&mut modal, game, ai_side);
+                        redraw!();
                         continue;
                     }
                     if let Some(&Modal::TrapConfirm(card)) = modal.front() {
@@ -409,8 +456,8 @@ pub fn run(
                             KeyCode::Char('q') => return Ok(()),
                             _ => {}
                         }
-                        maybe_run_ai_turn(ai_side, ai, game, map, cards, dice, &mut message, &mut sticky, &mut zoomed, &mut modal, &mut handover, &mut hand_selected);
-                        draw(&screen, map, layout, cards, game, message.as_deref(), &hand_selected, zoomed, &modal, color)?;
+                        maybe_run_ai_turn(ai_side, ai, game, map, cards, dice, &mut message, &mut aiui, &mut zoomed, &mut modal, &mut handover, &mut hand_selected);
+                        redraw!();
                         continue;
                     }
                     if let Some(&Modal::HeadlineConfirm(card)) = modal.front() {
@@ -438,10 +485,10 @@ pub fn run(
                             KeyCode::Char('q') => return Ok(()),
                             _ => {}
                         }
-                        maybe_run_ai_turn(ai_side, ai, game, map, cards, dice, &mut message, &mut sticky, &mut zoomed, &mut modal, &mut handover, &mut hand_selected);
+                        maybe_run_ai_turn(ai_side, ai, game, map, cards, dice, &mut message, &mut aiui, &mut zoomed, &mut modal, &mut handover, &mut hand_selected);
                         prune_session_modal(&mut modal, game);
-                        ensure_session_modal(&mut modal, game);
-                        draw(&screen, map, layout, cards, game, message.as_deref(), &hand_selected, zoomed, &modal, color)?;
+                        ensure_session_modal(&mut modal, game, ai_side);
+                        redraw!();
                         continue;
                     }
                     if let Some(&Modal::ScoreConfirm(card)) = modal.front() {
@@ -471,10 +518,10 @@ pub fn run(
                             KeyCode::Char('q') => return Ok(()),
                             _ => {}
                         }
-                        maybe_run_ai_turn(ai_side, ai, game, map, cards, dice, &mut message, &mut sticky, &mut zoomed, &mut modal, &mut handover, &mut hand_selected);
+                        maybe_run_ai_turn(ai_side, ai, game, map, cards, dice, &mut message, &mut aiui, &mut zoomed, &mut modal, &mut handover, &mut hand_selected);
                         prune_session_modal(&mut modal, game);
-                        ensure_session_modal(&mut modal, game);
-                        draw(&screen, map, layout, cards, game, message.as_deref(), &hand_selected, zoomed, &modal, color)?;
+                        ensure_session_modal(&mut modal, game, ai_side);
+                        redraw!();
                         continue;
                     }
                     if let Some(&Modal::RollTarget { country, ref last }) = modal.front() {
@@ -524,10 +571,10 @@ pub fn run(
                             KeyCode::Char('q') => return Ok(()),
                             _ => {}
                         }
-                        maybe_run_ai_turn(ai_side, ai, game, map, cards, dice, &mut message, &mut sticky, &mut zoomed, &mut modal, &mut handover, &mut hand_selected);
+                        maybe_run_ai_turn(ai_side, ai, game, map, cards, dice, &mut message, &mut aiui, &mut zoomed, &mut modal, &mut handover, &mut hand_selected);
                         prune_session_modal(&mut modal, game);
-                        ensure_session_modal(&mut modal, game);
-                        draw(&screen, map, layout, cards, game, message.as_deref(), &hand_selected, zoomed, &modal, color)?;
+                        ensure_session_modal(&mut modal, game, ai_side);
+                        redraw!();
                         continue;
                     }
                     if matches!(modal.front(), Some(Modal::SpaceConfirm)) {
@@ -548,8 +595,8 @@ pub fn run(
                             KeyCode::Char('q') => return Ok(()),
                             _ => {}
                         }
-                        maybe_run_ai_turn(ai_side, ai, game, map, cards, dice, &mut message, &mut sticky, &mut zoomed, &mut modal, &mut handover, &mut hand_selected);
-                        draw(&screen, map, layout, cards, game, message.as_deref(), &hand_selected, zoomed, &modal, color)?;
+                        maybe_run_ai_turn(ai_side, ai, game, map, cards, dice, &mut message, &mut aiui, &mut zoomed, &mut modal, &mut handover, &mut hand_selected);
+                        redraw!();
                         continue;
                     }
                     if let Some(Modal::Piles { tab, cursor, zoom }) = modal.front_mut() {
@@ -567,7 +614,7 @@ pub fn run(
                             KeyCode::Char('z') if *tab != PileTab::Deck && len > 0 => *zoom = !*zoom,
                             _ => {}
                         }
-                        draw(&screen, map, layout, cards, game, message.as_deref(), &hand_selected, zoomed, &modal, color)?;
+                        redraw!();
                         continue;
                     }
                     match key.code {
@@ -588,14 +635,14 @@ pub fn run(
                             }
                         }
                         KeyCode::Char('q') => return Ok(()),
+                        KeyCode::Char('f') if ai_side.is_some() => toggle_fast(ai_fast, &mut aiui, game, map, cards, dice, &mut modal, &mut message),
                         _ => {}
                     }
-                    draw(&screen, map, layout, cards, game, message.as_deref(), &hand_selected, zoomed, &modal, color)?;
+                    maybe_run_ai_turn(ai_side, ai, game, map, cards, dice, &mut message, &mut aiui, &mut zoomed, &mut modal, &mut handover, &mut hand_selected);
+                    redraw!();
                     continue;
                 }
-                if !std::mem::take(&mut sticky) {
-                    message = None;
-                }
+                message = None;
                 // `c` still confirms a choice that's waiting for it (a discard decision, say)
                 // while a card is zoomed: the player is usually looking at the card they picked.
                 let confirming = key.code == KeyCode::Char('c') && pending_choice_reminder(game, cards).is_some();
@@ -615,7 +662,7 @@ pub fn run(
                         }
                         _ => {}
                     }
-                    draw(&screen, map, layout, cards, game, message.as_deref(), &hand_selected, zoomed, &modal, color)?;
+                    redraw!();
                     continue;
                 }
                 match key.code {
@@ -644,6 +691,7 @@ pub fn run(
                     KeyCode::Char('i') => message = begin(game, OperationKind::Influence),
                     KeyCode::Char('a') => message = begin(game, OperationKind::Realign),
                     KeyCode::Char('o') => message = begin(game, OperationKind::Coup),
+                    KeyCode::Char('f') if ai_side.is_some() => toggle_fast(ai_fast, &mut aiui, game, map, cards, dice, &mut modal, &mut message),
                     KeyCode::Char('t') => {
                         zoomed = false;
                         modal.push_back(Modal::Tracks(TrackTab::Space));
@@ -689,7 +737,7 @@ pub fn run(
                         Ok(EventOutcome::Pending { .. }) => {
                             zoomed = false;
                             message = None;
-                            ensure_session_modal(&mut modal, game);
+                            ensure_session_modal(&mut modal, game, ai_side);
                             // A war: a lone target (Korean War) goes straight to
                             // its roll confirmation; otherwise to a
                             // region view where only the legal targets are live.
@@ -889,30 +937,28 @@ pub fn run(
                         },
                     },
                 }
-                maybe_run_ai_turn(ai_side, ai, game, map, cards, dice, &mut message, &mut sticky, &mut zoomed, &mut modal, &mut handover, &mut hand_selected);
+                maybe_run_ai_turn(ai_side, ai, game, map, cards, dice, &mut message, &mut aiui, &mut zoomed, &mut modal, &mut handover, &mut hand_selected);
                 prune_session_modal(&mut modal, game);
-                ensure_session_modal(&mut modal, game);
-                draw(&screen, map, layout, cards, game, message.as_deref(), &hand_selected, zoomed, &modal, color)?;
+                ensure_session_modal(&mut modal, game, ai_side);
+                redraw!();
             }
-            TermEvent::Resize(_, _) => draw(&screen, map, layout, cards, game, message.as_deref(), &hand_selected, zoomed, &modal, color)?,
+            TermEvent::Resize(_, _) => redraw!(),
             _ => {}
         }
     }
 }
 
-/// If `ai_side` names whoever's active right now, plays that whole turn
-/// via [`ai::play_turn`] — a no-op otherwise (no AI side set, it's the
-/// human's turn, or [`Game::winner`] is already set — once it is,
-/// `Game::active` never changes again, so without this check every
-/// later keypress would see the same AI side still "active" and try to
-/// replay an already-finished turn). Turns the turn's own log entries
-/// into the next message (joined by `\n`, marked `sticky` since — like
-/// the modal queue below — it isn't otherwise recoverable from the
-/// screen the way a refusal or a confirm/cancel/pass report already is),
-/// queues a [`Modal`] for every realignment roll, coup attempt, or
-/// scoring event the turn made ([`queue_turn_modals`]) — the human and
-/// the AI share the same queue, dismissed the same way — and closes any
-/// open zoom overlay, the same way `c`/`X`/`p` do for a human-ended turn.
+/// Lets the AI act when `ai_side` is whoever has to decide right now (a no-op otherwise, or
+/// once [`Game::winner`] is set). Two ways, by `aiui.fast`:
+///
+/// - **fast**: [`ai::play_turn`] runs the turn straight through; what it did is left to the
+///   handover summary, plus the few modals worth showing anyway ([`queue_ai_modals`]).
+/// - **step by step**: [`step_ai`] plays one action at a time, stopping at a modal before
+///   anything the human would rather see coming (a card's event, a die) and queueing a modal
+///   for each result. A step that waits on Enter is [`AiUi::pending`].
+///
+/// Either way it closes any open zoom overlay, the same way `c`/`X`/`p` do for a human-ended
+/// turn, and finishes by checking whether the keyboard has changed hands ([`check_handover`]).
 #[allow(clippy::too_many_arguments)]
 fn maybe_run_ai_turn(
     ai_side: Option<Superpower>,
@@ -922,7 +968,7 @@ fn maybe_run_ai_turn(
     cards: &CardCatalog,
     dice: &mut Dice,
     message: &mut Option<String>,
-    sticky: &mut bool,
+    aiui: &mut AiUi,
     zoomed: &mut bool,
     modal: &mut VecDeque<Modal>,
     handover: &mut HandoverTracker,
@@ -931,17 +977,41 @@ fn maybe_run_ai_turn(
     // What the last action round set off (NORAD) needs the map to settle.
     let before = game.log().len();
     game.settle(map, cards, dice);
-    let settled: Vec<String> = game.log().entries()[before..].iter().map(|e| log_entry_line(map, cards, e)).collect();
-    if !settled.is_empty() {
+    if game.log().len() > before {
         queue_turn_modals(modal, game.board(), &game.log().entries()[before..]);
-        *message = Some(settled.join(" · "));
-        *sticky = true;
         *zoomed = false;
     }
-    // `decider`, not `active`: an event's chooser is the card's own side. A
-    // few rounds, since one human move can hand the AI an event to resolve
-    // and then its own turn straight after.
-    let mut lines: Vec<String> = Vec::new();
+    if aiui.fast {
+        // Nothing the AI chose earlier can still be waiting on a modal.
+        aiui.pending = None;
+        run_ai_fast(ai_side, ai, game, map, cards, dice, message, zoomed, modal, handover);
+    } else {
+        if let Some(e) = step_ai(ai_side, ai, game, map, cards, dice, modal, aiui) {
+            *message = Some(e);
+        }
+        if matches!(modal.front(), Some(Modal::AiStep { .. } | Modal::AiRoll { .. } | Modal::AiRealign { .. })) {
+            *zoomed = false;
+        }
+    }
+    check_handover(handover, ai_side, game, map, cards, modal, zoomed, hand_selected);
+}
+
+/// Fast mode: the AI's whole turn at once. `decider`, not `active`: an event's chooser is the
+/// card's own side. A few rounds, since one human move can hand the AI an event to resolve and
+/// then its own turn straight after.
+#[allow(clippy::too_many_arguments)]
+fn run_ai_fast(
+    ai_side: Option<Superpower>,
+    ai: &mut dyn Ai,
+    game: &mut Game,
+    map: &WorldMap,
+    cards: &CardCatalog,
+    dice: &mut Dice,
+    message: &mut Option<String>,
+    zoomed: &mut bool,
+    modal: &mut VecDeque<Modal>,
+    handover: &mut HandoverTracker,
+) {
     let mut played = false;
     let ai_started_at = game.log().len();
     for _ in 0..3 {
@@ -951,12 +1021,10 @@ fn maybe_run_ai_turn(
         played = true;
         let before = game.log().len();
         let outcome = ai::play_turn(ai, game, map, cards, dice);
-        let new_entries = &game.log().entries()[before..];
-        lines.extend(new_entries.iter().map(|entry| log_entry_line(map, cards, entry)));
+        queue_ai_modals(modal, game, &game.log().entries()[before..]);
         if let Err(e) = outcome {
-            lines.push(format!("AI error: {e}"));
+            *message = Some(format!("AI error: {e}"));
         }
-        queue_ai_modals(modal, game, new_entries);
     }
     if played {
         let side = ai_side.expect("played implies an AI side");
@@ -968,11 +1036,243 @@ fn maybe_run_ai_turn(
             }
             handover.last = Some(side);
         }
-        *message = Some(format!("{side} (AI) plays: {}", lines.join(" · ")));
-        *sticky = true;
         *zoomed = false;
     }
-    check_handover(handover, ai_side, game, map, cards, modal, zoomed, hand_selected);
+}
+
+/// Step-by-step mode: plays the AI's actions until one needs the human to look first, or the
+/// turn passes to the human. Returns an error line if the game refused an action.
+#[allow(clippy::too_many_arguments)]
+fn step_ai(
+    ai_side: Option<Superpower>,
+    ai: &mut dyn Ai,
+    game: &mut Game,
+    map: &WorldMap,
+    cards: &CardCatalog,
+    dice: &mut Dice,
+    modal: &mut VecDeque<Modal>,
+    aiui: &mut AiUi,
+) -> Option<String> {
+    for _ in 0..1000 {
+        let side = game.decider();
+        if ai_side != Some(side) || game.winner().is_some() || aiui.pending.is_some() {
+            return None;
+        }
+        // Wait while anything else is showing; an AI realignment between rolls is the exception.
+        match modal.front() {
+            None | Some(Modal::AiRealign { next: None, done: false, .. }) => {}
+            Some(_) => return None,
+        }
+        let legal = game.legal_actions(map, cards);
+        if legal.is_empty() {
+            return None;
+        }
+        let action = ai.choose(game, map, cards, &legal);
+        let card_name = game.card_in_play().map(|c| cards.card(c).name.clone());
+        let ops = game.operation().map(Operation::ops_total);
+        let stop = |title: String, body: Vec<String>, hint: &'static str| Modal::AiStep { side, title, body, hint, pre: true, focus: None };
+        let pre = match (&action, game.operation()) {
+            (Action::Event, _) => card_name.as_deref().zip(game.card_in_play()).map(|(name, id)| {
+                let text = cards.card(id).text.clone();
+                stop(format!("plays {name}"), vec![format!("{side} plays {name} for its event"), text], "Enter to resolve")
+            }),
+            (Action::Space, _) => card_name.as_deref().map(|name| stop("space race".into(), vec![format!("{side} spends {name} on a space race attempt")], "Enter to roll")),
+            (Action::Escape(card), _) => Some(stop("trapped".into(), vec![format!("{side} discards {} and rolls to escape", cards.card(*card).name)], "Enter to roll")),
+            (Action::RollContest, _) => card_name.as_deref().map(|name| stop(format!("{name} roll-off"), vec![format!("{name}: both sides throw a die")], "Enter to roll")),
+            (Action::Roll(country), Some(op @ (Operation::Coup(_) | Operation::War(_)))) => {
+                let play = match (op, &card_name) {
+                    (Operation::Coup(_), Some(name)) => format!("coups with {name} ({} ops)", ops.unwrap_or(0)),
+                    (_, Some(name)) => format!("plays {name}"),
+                    (_, None) => "rolls".to_string(),
+                };
+                Some(Modal::AiRoll { country: *country, last: None, play })
+            }
+            (Action::Roll(country), Some(Operation::Realign(_))) => {
+                if let Some(Modal::AiRealign { next, .. }) = modal.front_mut() {
+                    *next = Some(*country);
+                    None
+                } else {
+                    Some(Modal::AiRealign { side, card: card_name.clone().unwrap_or_default(), history: vec![], next: Some(*country), done: false })
+                }
+            }
+            _ => None,
+        };
+        let realign_pending = matches!(&action, Action::Roll(_)) && matches!(game.operation(), Some(Operation::Realign(_)));
+        if pre.is_some() || realign_pending {
+            aiui.pending = Some(action);
+            if let Some(m) = pre {
+                modal.push_back(m);
+            }
+            return None;
+        }
+        if let Err(e) = apply_ai_action(action, game, map, cards, dice, modal) {
+            return Some(format!("AI error: {e}"));
+        }
+        // An AI realignment whose operation just closed keeps its modal for a last look.
+        if let Some(Modal::AiRealign { done, .. }) = modal.front_mut()
+            && !matches!(game.operation(), Some(Operation::Realign(_)))
+        {
+            *done = true;
+        }
+    }
+    Some("AI error: too many actions in one turn".to_string())
+}
+
+/// Applies one AI action, queueing modals for what it logged.
+fn apply_ai_action(action: Action, game: &mut Game, map: &WorldMap, cards: &CardCatalog, dice: &mut Dice, modal: &mut VecDeque<Modal>) -> Result<(), GameError> {
+    let before = game.log().len();
+    let result = game.apply(action, map, cards, dice);
+    queue_ai_step_modals(map, modal, game, &game.log().entries()[before..]);
+    result
+}
+
+/// [`queue_turn_modals`] for a step the human watched happen: rolls are left out (the AI's
+/// own roll modals showed them) and a placement or pass, which have no result modal, get a
+/// note instead.
+fn queue_ai_step_modals(map: &WorldMap, modal: &mut VecDeque<Modal>, game: &Game, entries: &[LogEntry]) {
+    let mut all = VecDeque::new();
+    queue_turn_modals(&mut all, game.board(), entries);
+    modal.extend(all.into_iter().filter(|m| !matches!(m, Modal::Roll(_))));
+    for entry in entries {
+        let Some(side) = entry.side else { continue };
+        match &entry.event {
+            Event::Placed { countries } => {
+                let mut body = vec![format!("{side} places influence")];
+                body.extend(countries.iter().map(|&(id, n)| format!("{} +{n}", map.country(id).name)));
+                modal.push_back(Modal::AiStep { side, title: "influence".into(), body, hint: "Enter to continue", pre: false, focus: countries.first().map(|&(id, _)| id) });
+            }
+            Event::Pass => modal.push_back(Modal::AiStep { side, title: "pass".into(), body: vec![format!("{side} passes")], hint: "Enter to continue", pre: false, focus: None }),
+            _ => {}
+        }
+    }
+}
+
+/// Enter on an AI modal: runs the step it announced (if it is still waiting) or dismisses it.
+/// Returns an error line if the game refused the step.
+fn advance_ai_modal(game: &mut Game, map: &WorldMap, cards: &CardCatalog, dice: &mut Dice, modal: &mut VecDeque<Modal>, aiui: &mut AiUi) -> Option<String> {
+    let mut error = None;
+    match modal.front() {
+        Some(Modal::AiStep { pre: true, .. }) => {
+            modal.pop_front();
+            if let Some(action) = aiui.pending.take() {
+                error = apply_ai_action(action, game, map, cards, dice, modal).err().map(|e| e.to_string());
+            }
+        }
+        Some(Modal::AiStep { pre: false, .. }) | Some(Modal::AiRoll { last: Some(_), .. }) | Some(Modal::AiRealign { done: true, .. }) => {
+            modal.pop_front();
+        }
+        Some(&Modal::AiRoll { country, last: None, .. }) => {
+            let Some(action) = aiui.pending.take() else {
+                modal.pop_front();
+                return None;
+            };
+            let side = game.operation().map_or(game.active(), Operation::side);
+            let before = (game.board().influence(country, Superpower::Us), game.board().influence(country, Superpower::Ussr));
+            let log_before = game.log().len();
+            if let Err(e) = game.apply(action, map, cards, dice) {
+                error = Some(e.to_string());
+            }
+            let entries = &game.log().entries()[log_before..];
+            let report = reconstruct_roll_reports(game.board(), entries).into_iter().next().map(|mut r| {
+                r.side = side;
+                r.before = before;
+                r
+            });
+            let mut after = VecDeque::new();
+            queue_ai_step_modals(map, &mut after, game, entries);
+            match report {
+                Some(report) => {
+                    if let Some(Modal::AiRoll { last, .. }) = modal.front_mut() {
+                        *last = Some(report);
+                    }
+                }
+                None => {
+                    // A war: its own result modal replaces the preview.
+                    modal.pop_front();
+                }
+            }
+            modal.extend(after);
+        }
+        Some(&Modal::AiRealign { next: Some(country), .. }) => {
+            let Some(action) = aiui.pending.take() else {
+                modal.pop_front();
+                return None;
+            };
+            let before = (game.board().influence(country, Superpower::Us), game.board().influence(country, Superpower::Ussr));
+            let log_before = game.log().len();
+            if let Err(e) = game.apply(action, map, cards, dice) {
+                error = Some(e.to_string());
+            }
+            let entries = &game.log().entries()[log_before..];
+            let report = reconstruct_roll_reports(game.board(), entries).into_iter().next().map(|mut r| {
+                r.before = before;
+                r
+            });
+            let mut after = VecDeque::new();
+            queue_ai_step_modals(map, &mut after, game, entries);
+            if let Some(Modal::AiRealign { history, next, .. }) = modal.front_mut() {
+                history.extend(report);
+                *next = None;
+            }
+            modal.extend(after);
+        }
+        Some(Modal::AiRealign { .. }) => {
+            modal.pop_front();
+        }
+        _ => {}
+    }
+    error
+}
+
+/// `f`: flips between step-by-step and fast AI moves. Going fast finishes whatever step is
+/// waiting for Enter and closes the AI's modals, so the turn runs on to the handover summary.
+#[allow(clippy::too_many_arguments)]
+fn toggle_fast(ai_fast: &mut bool, aiui: &mut AiUi, game: &mut Game, map: &WorldMap, cards: &CardCatalog, dice: &mut Dice, modal: &mut VecDeque<Modal>, message: &mut Option<String>) {
+    aiui.fast = !aiui.fast;
+    *ai_fast = aiui.fast;
+    if aiui.fast {
+        while matches!(modal.front(), Some(Modal::AiStep { .. } | Modal::AiRoll { .. } | Modal::AiRealign { .. })) {
+            modal.pop_front();
+        }
+        if let Some(action) = aiui.pending.take()
+            && let Err(e) = game.apply(action, map, cards, dice)
+        {
+            *message = Some(e.to_string());
+            return;
+        }
+    }
+    *message = Some(if aiui.fast { "AI moves: fast — you get a summary when it's your turn" } else { "AI moves: step by step" }.to_string());
+}
+
+/// The country an AI modal (or the result of an AI action) is about, so the map can show it.
+fn modal_focus(m: &Modal) -> Option<CountryId> {
+    match m {
+        Modal::AiStep { focus, .. } => *focus,
+        Modal::AiRoll { country, .. } => Some(*country),
+        Modal::AiRealign { history, next, .. } => next.or_else(|| history.last().map(RollReport::target)),
+        Modal::Roll(report) => Some(report.target()),
+        Modal::Event(result, ..) => result.influence.first().map(|c| c.country),
+        Modal::War(result, ..) => Some(result.target),
+        _ => None,
+    }
+}
+
+/// While the AI plays step by step, points the map at the country its current modal is about
+/// (the region view, with that country selected), remembering where the player was; once no
+/// modal is about the AI's move any more, puts the player's view back.
+fn follow_ai(screen: &mut Screen, saved: &mut Option<Screen>, map: &WorldMap, game: &Game, modal: &VecDeque<Modal>, ai_side: Option<Superpower>) {
+    let from_ai = |m: &Modal| matches!(m, Modal::AiStep { .. } | Modal::AiRoll { .. } | Modal::AiRealign { .. });
+    // The front modal decides where to look: an AI modal, or the result of an AI move once the
+    // view has already followed it (never the player's own roll results).
+    let front = modal.front().filter(|m| saved.is_some() || from_ai(m)).and_then(modal_focus);
+    if let Some(id) = front {
+        saved.get_or_insert(*screen);
+        *screen = Screen::Region { region: map.country(id).region, selected: id };
+    } else if !modal.iter().any(|m| modal_focus(m).is_some()) && ai_side != Some(game.decider())
+        && let Some(back) = saved.take()
+    {
+        *screen = back;
+    }
 }
 
 /// Whether an open event only designates a region (Chernobyl), so the
@@ -1183,8 +1483,8 @@ fn rolling(game: &Game) -> bool {
 
 /// Opens a [`Modal::Session`] for an open event that runs in one but has none showing — one the
 /// AI started, say, whose choice falls to the human.
-fn ensure_session_modal(modal: &mut VecDeque<Modal>, game: &Game) {
-    if matches!(game.operation(), Some(Operation::Event(e)) if e.has_session_modal()) && !modal.iter().any(|m| matches!(m, Modal::Session)) {
+fn ensure_session_modal(modal: &mut VecDeque<Modal>, game: &Game, ai_side: Option<Superpower>) {
+    if ai_side != Some(game.decider()) && matches!(game.operation(), Some(Operation::Event(e)) if e.has_session_modal()) && !modal.iter().any(|m| matches!(m, Modal::Session)) {
         modal.push_back(Modal::Session);
     }
 }
@@ -1422,6 +1722,7 @@ fn draw(
     zoomed: bool,
     modal: &VecDeque<Modal>,
     color: ColorMode,
+    ai: Option<(Superpower, bool)>,
 ) -> io::Result<()> {
     let board = game.board();
     let op = game.operation();
@@ -1443,6 +1744,8 @@ fn draw(
             render_hand_hidden(up, game.hand(up).len(), status.china_card == up)
         }
         (Some(host), Some(card), Some(how)) => render_forced_card(cards, card, host, how, game.active()),
+        // The AI's own hand is never shown while it plays (only one an event has revealed, via `v`).
+        _ if ai.is_some_and(|(s, _)| s == side) && !(hand_selected.peek && peeking_allowed(game)) => render_hand_hidden(side, hand.len(), china.is_some()),
         _ => render_hand(cards, hand, china, side, selected_idx, game.card_in_play_slot().filter(|_| side == game.active())),
     };
 
@@ -1492,9 +1795,18 @@ fn draw(
             },
             Modal::HeadlineConfirm(card) => render_headline_confirm(game.active(), cards.card(*card)),
             Modal::RollTarget { country, last } => match game.operation() {
-                Some(op) => render_roll_confirm(map, cards, game.status(), game.board(), op, *country, last.as_ref(), game.winner().is_some()),
+                Some(op) => render_roll_confirm(map, cards, game.status(), game.board(), op, *country, last.as_ref(), game.winner().is_some(), None),
                 None => Canvas::new(0, 0),
             },
+            Modal::AiStep { side, title, body, hint, .. } => render_ai_step(*side, title, body, hint),
+            Modal::AiRoll { country, last, play } => match game.operation() {
+                Some(op) => render_roll_confirm(map, cards, game.status(), game.board(), op, *country, last.as_ref(), game.winner().is_some(), Some(play)),
+                None => match last {
+                    Some(report) => render_roll_result(map, report, None),
+                    None => Canvas::new(0, 0),
+                },
+            },
+            Modal::AiRealign { side, card, history, next, done } => render_ai_realign(map, game.status(), game.board(), game.operation(), *side, card, history, *next, *done),
             Modal::SpaceConfirm => match game.card_in_play() {
                 Some(id) => render_space_confirm(game.status(), cards.card(id)),
                 None => Canvas::new(0, 0),
@@ -1518,7 +1830,10 @@ fn draw(
         modal_open: !modal.is_empty(),
         p_plays: p_plays(game, hand_selected),
     };
-    let global_row = global_keys(key_screen);
+    let mut global_row = global_keys(key_screen);
+    if let Some((_, fast)) = ai {
+        global_row.push_str(if fast { " · f AI: fast" } else { " · f AI: step" });
+    }
     let context_row = context_keys(game, cards, key_screen, key_ui);
 
     let rows = terminal::size().map(|(_, h)| h as usize).unwrap_or(bar.height() + canvas.height() + HAND_ROWS + KEY_ROWS);
@@ -1566,4 +1881,67 @@ fn draw(
         emit(&mut out, &mut row, &line.render(color))?;
     }
     out.flush()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use twilight_struggle::RandomAi;
+
+    fn count_rolls(game: &Game) -> usize {
+        game.log().entries().iter().filter(|e| e.side == Some(Superpower::Ussr) && matches!(e.event, Event::Realign(_) | Event::Coup(_) | Event::War { .. })).count()
+    }
+
+    /// Plays whole seeded games with the USSR driven by the step-by-step AI — Enter pressed on
+    /// every AI modal — and the US by a plain AI. Every die the AI throws must be announced by a
+    /// modal first, with the step it announced still unrun, and the game must keep moving.
+    #[test]
+    fn the_stepping_ai_announces_each_roll_before_making_it_and_never_stalls() {
+        let map = WorldMap::standard().unwrap();
+        let cards = CardCatalog::standard().unwrap();
+        let mut rolls_seen = 0;
+        for seed in 0..6u64 {
+            let mut dice = Dice::from_seed(seed);
+            let mut game = Game::new_game(&map, &cards, &mut dice);
+            let mut ussr = RandomAi::from_seed(seed).careful();
+            let mut us = RandomAi::from_seed(seed + 100).careful();
+            let mut aiui = AiUi { fast: false, pending: None };
+            let mut modal: VecDeque<Modal> = VecDeque::new();
+            let mut known_rolls = 0;
+            for _ in 0..4000 {
+                if game.winner().is_some() {
+                    break;
+                }
+                game.settle(&map, &cards, &mut dice);
+                if game.decider() == Superpower::Us && modal.is_empty() {
+                    let _ = twilight_struggle::play_turn(&mut us, &mut game, &map, &cards, &mut dice);
+                    continue;
+                }
+                if let Some(e) = step_ai(Some(Superpower::Ussr), &mut ussr, &mut game, &map, &cards, &mut dice, &mut modal, &mut aiui) {
+                    panic!("{e}");
+                }
+                if aiui.pending.is_some() {
+                    let announced = matches!(
+                        modal.front(),
+                        Some(Modal::AiStep { pre: true, .. } | Modal::AiRoll { last: None, .. } | Modal::AiRealign { next: Some(_), .. })
+                    );
+                    assert!(announced, "a pending AI step has no announcing modal");
+                    if matches!(aiui.pending, Some(Action::Roll(_))) {
+                        rolls_seen += 1;
+                        // Nothing is rolled until Enter.
+                        assert_eq!(count_rolls(&game), known_rolls, "rolled before the announcement");
+                    }
+                }
+                if !modal.is_empty() {
+                    advance_ai_modal(&mut game, &map, &cards, &mut dice, &mut modal, &mut aiui);
+                    known_rolls = count_rolls(&game);
+                    // Result modals of other kinds are dismissed too.
+                    while matches!(modal.front(), Some(m) if !matches!(m, Modal::AiStep { pre: true, .. } | Modal::AiRoll { last: None, .. } | Modal::AiRealign { next: Some(_), .. })) {
+                        modal.pop_front();
+                    }
+                }
+            }
+        }
+        assert!(rolls_seen > 0, "no AI roll was exercised");
+    }
 }
