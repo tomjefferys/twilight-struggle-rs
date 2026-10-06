@@ -83,7 +83,7 @@ enum Modal {
     /// The pass-the-keyboard screen shown when the player who has to act changes: who is up and
     /// what happened since they last acted (`earlier` more lines were trimmed). While it is up
     /// the hand strip is drawn face-down. Enter/Space dismiss it.
-    Handover { side: Superpower, lines: Vec<String>, earlier: usize },
+    Handover { side: Superpower, lines: Vec<String>, earlier: usize, hide: bool },
     /// `D`: the discard, removed and deck piles, for information only — drawn live from the
     /// game's hands. `zoom` shows the highlighted card in full instead of the list.
     Piles { tab: PileTab, cursor: usize, zoom: bool },
@@ -130,7 +130,7 @@ fn check_handover(tracker: &mut HandoverTracker, ai_side: Option<Superpower>, ga
     let earlier = all.len().saturating_sub(HANDOVER_LINES);
     let lines = all[earlier..].to_vec();
     // Behind anything already queued: the side that just acted still sees its own results first.
-    modal.push_back(Modal::Handover { side: now, lines, earlier });
+    modal.push_back(Modal::Handover { side: now, lines, earlier, hide: ai_side.is_none() });
     *zoomed = false;
     hand_selected.peek = false;
 }
@@ -943,6 +943,7 @@ fn maybe_run_ai_turn(
     // and then its own turn straight after.
     let mut lines: Vec<String> = Vec::new();
     let mut played = false;
+    let ai_started_at = game.log().len();
     for _ in 0..3 {
         if ai_side != Some(game.decider()) || game.winner().is_some() {
             break;
@@ -959,6 +960,14 @@ fn maybe_run_ai_turn(
     }
     if played {
         let side = ai_side.expect("played implies an AI side");
+        // The AI acted and control came back within this one call, so the tracker never saw it
+        // as the decider: record that, or the human's handover (its summary) would be skipped.
+        if handover.last != Some(side) {
+            if let Some(prev) = handover.last {
+                handover.left_at[side_index(prev)] = ai_started_at;
+            }
+            handover.last = Some(side);
+        }
         *message = Some(format!("{side} (AI) plays: {}", lines.join(" · ")));
         *sticky = true;
         *zoomed = false;
@@ -1429,11 +1438,11 @@ fn draw(
     let item_count = hand.len() + china.is_some() as usize;
     let selected_idx = (item_count > 0).then(|| hand_selected.selected[side_index(side)].min(item_count - 1));
     let hand_canvas = match (game.forced_by(), game.card_in_play(), game.forced_how()) {
-        _ if modal.iter().any(|m| matches!(m, Modal::Handover { .. })) => {
-            let up = modal.iter().find_map(|m| if let Modal::Handover { side, .. } = m { Some(*side) } else { None }).unwrap_or(side);
+        _ if modal.iter().any(|m| matches!(m, Modal::Handover { hide: true, .. })) => {
+            let up = modal.iter().find_map(|m| if let Modal::Handover { side, hide: true, .. } = m { Some(*side) } else { None }).unwrap_or(side);
             render_hand_hidden(up, game.hand(up).len(), status.china_card == up)
         }
-        (Some(host), Some(card), Some(how)) if host != card => render_forced_card(cards, card, host, how, game.active()),
+        (Some(host), Some(card), Some(how)) => render_forced_card(cards, card, host, how, game.active()),
         _ => render_hand(cards, hand, china, side, selected_idx, game.card_in_play_slot().filter(|_| side == game.active())),
     };
 
@@ -1456,7 +1465,7 @@ fn draw(
             Modal::Event(result, vp_after, winner) => render_event_result(map, cards, result, *vp_after, *winner, queue_pos),
             Modal::War(result, vp_after, winner) => render_war_result(map, cards, result, *vp_after, *winner, queue_pos),
             Modal::Space(result, vp_after, winner) => render_space_result(cards, result, *vp_after, *winner, queue_pos),
-            Modal::Handover { side, lines, earlier } => render_handover(game, cards, *side, lines, *earlier),
+            Modal::Handover { side, lines, earlier, .. } => render_handover(game, cards, *side, lines, *earlier),
             Modal::Tracks(tab) => render_tracks(game.status(), *tab, "←→ tab · Enter/Esc/⌫/t close"),
             Modal::Piles { tab, cursor, zoom } => {
                 let list = pile_cards(game.hands(), *tab);
