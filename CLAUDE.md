@@ -1192,6 +1192,18 @@ Wired into both `main.rs` (an
   `Session.dice` (xored with a constant salt when `--seed` is given), so
   `--seed`/`seed <n>` keep controlling realignment and coup rolls only,
   never which moves the AI picks.
+- **Launch, `splash.rs` and `render/splash.rs`** — `cargo run` on a TTY opens the
+  title screen (`main.rs::run_menu_loop`): `splash::Menu` is a pure state machine
+  (Main: Resume game when a game exists / One player / Two players / Command console /
+  Quit; One player asks USA / USSR / Random), `splash::run` draws
+  `render::render_splash` (block-letter title between a US and a Soviet missile, DEFCON
+  strip, menu; fixed `SPLASH_WIDTH`, centred by the caller; `splash` REPL command and
+  `tests/snapshots/splash.txt` pin it) and a choice starts `start_new_game` (the human's
+  side gets the AI on the other; Random uses `Session.dice`) then `run_map`. Quitting the
+  map returns to the menu. `parse_args` → `LaunchOptions` holds every flag: `--new` /
+  `--play us|ussr|random` / `--state` go straight to the map, `--repl` (alone or with any
+  of those) gives the old line console (`run_repl`), a one-shot command or non-TTY stdio
+  never shows the menu. `interactive::TerminalGuard` is shared by the menu and the map.
 - **`interactive.rs`** — the terminal-driving code for `worldmap`/`wm`
   when run interactively (a real TTY, not one-shot mode): raw mode, the
   alternate screen, and the arrow/Enter/Esc event loop over three screens
@@ -1426,12 +1438,14 @@ deliberate exception, for debug-mode test states specifically.
 ## Useful commands
 
 ```
-cargo run                          # interactive REPL
+cargo run                          # splash screen + start menu, then the interactive map
+cargo run -- --repl                # the line-based REPL instead
+cargo run -- --play ussr           # new game vs the AI, you as the USSR (us | ussr | random)
 cargo run -- worldmap              # one-shot: the whole-world map
 cargo run -- region europe         # one-shot: zoom into a region
 cargo run -- --state scoring/europe-ussr-control-wins
-                                    # jump straight into a named test state
-cargo run -- --new                 # a real game: deal, opening placement, headline, ...
+                                    # jump straight into a named test state (add --repl for the console)
+cargo run -- --new                 # a real game on the map: deal, opening placement, headline, ...
 cargo run -- --new --ai ussr       # ... against the heuristic AI
 cargo run -- --new --ai ussr --fast
                                     # ... skipping the AI's step-by-step modals (key `f` toggles)

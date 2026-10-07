@@ -7,7 +7,7 @@ use rustyline::Editor;
 
 use twilight_struggle::render::{
     coup_result_line, game_over_line, log_entry_line, log_text, piles_text, render_final_scoring, PileTab, ongoing_effect_line, operation_abandoned_line, operation_balance_line, render_card,
-    render_country, render_event_result, render_military_track, render_space_result, render_tracks, TrackTab, render_space_track, render_war_result, render_hand, render_log, render_region, render_scoring_result, render_world, render_world_map, roll_result_line,
+    render_country, render_event_result, render_military_track, render_space_result, render_tracks, TrackTab, render_space_track, render_war_result, render_hand, render_log, render_region, render_scoring_result, render_splash, SplashItem, SplashMenu, render_world, render_world_map, roll_result_line,
 };
 use twilight_struggle::{
     ai, CardCatalog, CardFound, CardId, ColorMode, Dice, EventOutcome, Found, Game, GameError, GameStatus, MapLayout, Operation,
@@ -19,6 +19,7 @@ use completion::TsHelper;
 
 mod completion;
 mod interactive;
+mod splash;
 
 /// Every first-word command the REPL recognises, for the line editor's
 /// completion ([`completion::candidates`]) — kept in step with
@@ -33,7 +34,7 @@ const COMMANDS: &[&str] = &[
     "map", "world", "worldmap", "wm", "region", "country", "set", "add", "remove", "clear", "blank", "load", "save", "states", "play",
     "influence", "realign", "coup", "event", "place", "roll", "undo", "confirm", "cancel", "abandon", "status", "pass", "ai", "hand",
     "card", "log", "history", "export", "seed", "width", "color", "debug", "vp", "defcon", "turn", "ar", "active", "china", "give",
-    "discard", "exile", "help", "+", "-", "take", "mode", "space", "spacerace", "milops", "tracks", "track", "escape", "defuse", "piles", "headline", "new",
+    "discard", "exile", "help", "+", "-", "take", "mode", "space", "spacerace", "milops", "tracks", "track", "escape", "defuse", "piles", "headline", "new", "splash",
 ];
 
 struct Session {
@@ -86,6 +87,75 @@ struct Session {
     states: StateLibrary,
 }
 
+/// Everything the command line can ask for, parsed by [`parse_args`].
+struct LaunchOptions {
+    width: Option<usize>,
+    color: Option<ColorMode>,
+    seed: Option<u64>,
+    ai_side: Option<Superpower>,
+    state_ref: Option<String>,
+    new_game: bool,
+    /// `--play us|ussr|random`: a new game with the AI on the other side.
+    play: Option<splash::SideChoice>,
+    /// `--repl`: the line-based console instead of the splash screen / map.
+    repl: bool,
+    ai_kind: ai::AiKind,
+    ai_fast: bool,
+    command_words: Vec<String>,
+}
+
+fn parse_args(args: impl Iterator<Item = String>) -> LaunchOptions {
+    let mut args = args.peekable();
+    let mut o = LaunchOptions {
+        width: None,
+        color: None,
+        seed: None,
+        ai_side: None,
+        state_ref: None,
+        new_game: false,
+        play: None,
+        repl: false,
+        ai_kind: ai::AiKind::default(),
+        ai_fast: false,
+        command_words: Vec::new(),
+    };
+    while let Some(arg) = args.next() {
+        match arg.as_str() {
+            "--width" => o.width = args.next().and_then(|s| s.parse().ok()).or(o.width),
+            "--color" => match args.next().as_deref() {
+                Some("always") => o.color = Some(ColorMode::Always),
+                Some("never") => o.color = Some(ColorMode::Never),
+                _ => {}
+            },
+            "--seed" => o.seed = args.next().and_then(|s| s.parse().ok()).or(o.seed),
+            "--ai" => {
+                if let Some(side) = args.next().as_deref().and_then(parse_superpower) {
+                    o.ai_side = Some(side);
+                }
+            }
+            "--play" => match args.next().as_deref().map(str::to_lowercase).as_deref() {
+                Some("random") => o.play = Some(splash::SideChoice::Random),
+                Some(s) => match parse_superpower(s) {
+                    Some(Superpower::Us) => o.play = Some(splash::SideChoice::Us),
+                    Some(Superpower::Ussr) => o.play = Some(splash::SideChoice::Ussr),
+                    None => eprintln!("--play takes us, ussr or random"),
+                },
+                None => eprintln!("--play takes us, ussr or random"),
+            },
+            "--state" => o.state_ref = args.next(),
+            "--new" => o.new_game = true,
+            "--repl" => o.repl = true,
+            "--fast" => o.ai_fast = true,
+            "--ai-kind" => match args.next().as_deref().and_then(ai::AiKind::parse) {
+                Some(kind) => o.ai_kind = kind,
+                None => eprintln!("--ai-kind takes heuristic or random"),
+            },
+            other => o.command_words.push(other.to_string()),
+        }
+    }
+    o
+}
+
 fn main() {
     let map = WorldMap::standard().expect("standard map should be valid");
     let layout = MapLayout::standard(&map).expect("standard layout should be valid");
@@ -93,58 +163,11 @@ fn main() {
     let scenario = Scenario::demo(&map, &cards).expect("demo scenario should be valid");
     let game = Game::from_scenario(&scenario);
 
-    let mut args = std::env::args().skip(1).peekable();
-    let mut width = detect_width();
-    let mut color = if std::env::var_os("NO_COLOR").is_some() {
-        ColorMode::Never
-    } else {
-        ColorMode::Always
-    };
-    let mut seed: Option<u64> = None;
-    let mut ai_side: Option<Superpower> = None;
-    let mut state_ref: Option<String> = None;
-    let mut new_game_flag = false;
-    let mut ai_kind = ai::AiKind::default();
-    let mut ai_fast = false;
-    let mut command_words = Vec::new();
-
-    while let Some(arg) = args.next() {
-        match arg.as_str() {
-            "--width" => {
-                if let Some(w) = args.next().and_then(|s| s.parse().ok()) {
-                    width = w;
-                }
-            }
-            "--color" => match args.next().as_deref() {
-                Some("always") => color = ColorMode::Always,
-                Some("never") => color = ColorMode::Never,
-                Some("auto") | None => {}
-                Some(_) => {}
-            },
-            "--seed" => {
-                if let Some(s) = args.next().and_then(|s| s.parse().ok()) {
-                    seed = Some(s);
-                }
-            }
-            "--ai" => {
-                if let Some(side) = args.next().as_deref().and_then(parse_superpower) {
-                    ai_side = Some(side);
-                }
-            }
-            "--state" => {
-                state_ref = args.next();
-            }
-            "--new" => new_game_flag = true,
-            "--fast" => ai_fast = true,
-            "--ai-kind" => match args.next().as_deref().and_then(ai::AiKind::parse) {
-                Some(kind) => ai_kind = kind,
-                None => eprintln!("--ai-kind takes heuristic or random"),
-            },
-            other => command_words.push(other.to_string()),
-        }
-    }
-
-    let one_shot = !command_words.is_empty();
+    let opts = parse_args(std::env::args().skip(1));
+    let width = opts.width.unwrap_or_else(detect_width);
+    let color = opts.color.unwrap_or(if std::env::var_os("NO_COLOR").is_some() { ColorMode::Never } else { ColorMode::Always });
+    let seed = opts.seed;
+    let one_shot = !opts.command_words.is_empty();
     // One-shot mode defaults to a fixed seed rather than entropy, so the
     // documented snapshot-regeneration workflow (`cargo run -- --color
     // never <command>`) stays reproducible; the REPL defaults to entropy
@@ -164,7 +187,7 @@ fn main() {
         None if one_shot => Some(AI_SEED_SALT),
         None => None,
     };
-    let ai = ai_kind.build(ai_seed);
+    let ai = opts.ai_kind.build(ai_seed);
 
     // Built before `map`/`cards` move into `session`, for the line
     // editor's completer (`completion::TsHelper`) below.
@@ -181,41 +204,104 @@ fn main() {
         interactive_ok: !one_shot,
         dice,
         ai,
-        ai_kind,
-        ai_side,
-        ai_fast,
+        ai_kind: opts.ai_kind,
+        ai_side: opts.ai_side,
+        ai_fast: opts.ai_fast,
         debug: false,
         states: StateLibrary::standard(),
     };
 
-    if new_game_flag {
-        session.game = Game::new_game(&session.map, &session.cards, &mut session.dice);
-        session.game.record_note("new game");
+    let mut started = false;
+    if opts.new_game || opts.play.is_some() {
+        start_new_game(&mut session, opts.play);
+        started = true;
     }
-    if let Some(reference) = &state_ref {
+    if let Some(reference) = &opts.state_ref {
         run_load_state_command(&mut session, reference);
+        started = true;
     }
 
     if one_shot {
         // One-shot mode: run a single command and exit, so scripts and
         // tests can invoke a view without driving the REPL.
-        run_command(&mut session, &command_words.join(" "));
+        run_command(&mut session, &opts.command_words.join(" "));
         return;
     }
 
-    println!("Twilight Struggle — terminal map. Type `help` for commands, `quit` to exit.");
-    maybe_run_ai_turn(&mut session);
-
-    let mut rl = Editor::<TsHelper, DefaultHistory>::new().expect("rustyline editor should initialize");
-    rl.set_helper(Some(TsHelper {
+    let helper = TsHelper {
         commands: COMMANDS.iter().map(|s| s.to_string()).collect(),
         cards: card_names,
         countries: country_names,
         states: StateLibrary::standard(),
-    }));
+    };
+    // The splash menu and the map need a real terminal; piped input gets the REPL.
+    let tty = io::stdin().is_terminal() && io::stdout().is_terminal();
+    if tty && !opts.repl {
+        run_menu_loop(&mut session, started, helper);
+    } else {
+        run_repl(&mut session, helper);
+    }
+}
+
+/// Replaces the game with a fresh deal. `human` is the side the person
+/// plays (the AI takes the other); `None` leaves `ai_side` as it was — two
+/// players at one keyboard, or whatever `--ai` asked for.
+fn start_new_game(session: &mut Session, human: Option<splash::SideChoice>) {
+    use splash::SideChoice;
+    session.game = Game::new_game(&session.map, &session.cards, &mut session.dice);
+    session.game.record_note("new game");
+    session.debug = false;
+    let human = match human {
+        Some(SideChoice::Us) => Some(Superpower::Us),
+        Some(SideChoice::Ussr) => Some(Superpower::Ussr),
+        Some(SideChoice::Random) => Some(if session.dice.index(2) == 0 { Superpower::Us } else { Superpower::Ussr }),
+        None => None,
+    };
+    if let Some(h) = human {
+        session.ai_side = Some(h.opponent());
+    }
+}
+
+/// The start menu, looping: quitting the map comes back here (with "Resume
+/// game" once a game exists); "Command console" hands over to the REPL.
+fn run_menu_loop(session: &mut Session, mut started: bool, helper: TsHelper) {
+    use splash::MenuChoice;
+    if started {
+        run_map(session);
+    }
+    loop {
+        match splash::run(session.color, started) {
+            Ok(MenuChoice::Resume) => run_map(session),
+            Ok(MenuChoice::NewGame { human }) => {
+                // The menu's choice is the whole answer: two players clears any `--ai`.
+                session.ai_side = None;
+                start_new_game(session, human);
+                started = true;
+                run_map(session);
+            }
+            Ok(MenuChoice::Repl) => {
+                run_repl(session, helper);
+                return;
+            }
+            Ok(MenuChoice::Quit) => return,
+            Err(e) => {
+                println!("start menu failed: {e}");
+                return;
+            }
+        }
+    }
+}
+
+/// The line-based console.
+fn run_repl(session: &mut Session, helper: TsHelper) {
+    println!("Twilight Struggle — terminal map. Type `help` for commands, `wm` for the map, `quit` to exit.");
+    maybe_run_ai_turn(session);
+
+    let mut rl = Editor::<TsHelper, DefaultHistory>::new().expect("rustyline editor should initialize");
+    rl.set_helper(Some(helper));
 
     loop {
-        match rl.readline(&prompt(&session)) {
+        match rl.readline(&prompt(session)) {
             Ok(line) => {
                 let line = line.trim();
                 if line.is_empty() {
@@ -225,8 +311,8 @@ fn main() {
                 if matches!(line, "quit" | "exit" | "q") {
                     break;
                 }
-                run_command(&mut session, line);
-                maybe_run_ai_turn(&mut session);
+                run_command(session, line);
+                maybe_run_ai_turn(session);
             }
             // Before rustyline, Ctrl-C had no handler at all and fell
             // through to the terminal's own default SIGINT behaviour,
@@ -242,6 +328,38 @@ fn main() {
                 break;
             }
         }
+    }
+}
+
+/// Runs the interactive map on the session's game.
+fn run_map(session: &mut Session) {
+    // Turns can change hands any number of times inside the map
+    // now — i/a/o/p/c/X all stay on screen — so there's nothing
+    // left to report on return but the one state the next
+    // prompt won't show on its own: a session left open.
+    match interactive::run(
+        &session.map,
+        &session.layout,
+        &session.cards,
+        &mut session.game,
+        &mut session.dice,
+        session.color,
+        session.ai_side,
+        session.ai.as_mut(),
+        &mut session.ai_fast,
+    ) {
+        Ok(()) => {
+            if let Some(op) = session.game.operation() {
+                println!(
+                    "left the map — {} {} still open ({} of {} ops left): confirm or cancel",
+                    op.side(),
+                    op.verb(),
+                    op.remaining(),
+                    op.ops_total(),
+                );
+            }
+        }
+        Err(e) => println!("interactive mode failed: {e}"),
     }
 }
 
@@ -379,34 +497,7 @@ fn run_command(session: &mut Session, line: &str) {
         }
         "worldmap" | "wm" => {
             if session.interactive_ok && io::stdin().is_terminal() && io::stdout().is_terminal() {
-                // Turns can change hands any number of times inside the map
-                // now — i/a/o/p/c/X all stay on screen — so there's nothing
-                // left to report on return but the one state the next
-                // prompt won't show on its own: a session left open.
-                match interactive::run(
-                    &session.map,
-                    &session.layout,
-                    &session.cards,
-                    &mut session.game,
-                    &mut session.dice,
-                    session.color,
-                    session.ai_side,
-                    session.ai.as_mut(),
-                    &mut session.ai_fast,
-                ) {
-                    Ok(()) => {
-                        if let Some(op) = session.game.operation() {
-                            println!(
-                                "left the map — {} {} still open ({} of {} ops left): confirm or cancel",
-                                op.side(),
-                                op.verb(),
-                                op.remaining(),
-                                op.ops_total(),
-                            );
-                        }
-                    }
-                    Err(e) => println!("interactive mode failed: {e}"),
-                }
+                run_map(session);
             } else {
                 let canvas = render_world_map(&session.map, &session.layout, session.game.view_board(), None, session.game.operation());
                 println!("{}", canvas.render(session.color));
@@ -794,6 +885,18 @@ fn run_command(session: &mut Session, line: &str) {
             Some(&"off") => session.color = ColorMode::Never,
             _ => println!("usage: color on|off"),
         },
+        "splash" => {
+            let menu = SplashMenu {
+                title: "Main menu".to_string(),
+                items: ["One player (vs AI)", "Two players (hotseat)", "Command console (REPL)", "Quit"]
+                    .iter()
+                    .enumerate()
+                    .map(|(i, l)| SplashItem { label: format!("{}  {l}", i + 1), enabled: true })
+                    .collect(),
+                selected: 0,
+            };
+            println!("{}", render_splash(&menu).render(session.color));
+        }
         "help" | "?" => print_help(),
         _ if cmd.starts_with('/') => print_country(session, &cmd[1..]),
         _ => println!("unknown command {cmd:?}. Type `help` for commands."),
@@ -1746,7 +1849,18 @@ fn region_by_index(n: u8) -> Option<Region> {
 /// promises, checked rather than codegen'd (the prose here doesn't
 /// reduce to a flat list the way `COMMANDS` does).
 const HELP_TEXT: &str = "\
+Launching:
+  (no arguments)          the splash screen and start menu: 1 player (pick the USA,
+                          the USSR or a random side) or 2 players, then the map
+  --new                   straight into a new game on the map  (--ai us|ussr: the AI's side)
+  --play us|ussr|random   a new game against the AI, you on that side
+  --state <file>/<name>   straight into a named test state
+  --repl                  this console instead (alone, or with any of the above)
+  <command>               one-shot: run a single command and exit
+  --seed <n> --color always|never --width <n> --ai-kind heuristic|random --fast
+
 Commands:
+  splash                  print the title screen
   map, world              the six-region dashboard
   worldmap, wm            the whole world as one geographic map (codes, no names);
                           arrow keys select a region, Enter zooms in, Esc backs out
@@ -1768,7 +1882,7 @@ Commands:
                           Early War cards shuffled and dealt, then the opening
                           placement (USSR 6 in Eastern Europe, US 7 in Western
                           Europe, with + and confirm) and the first headline
-                          phase — or launch with `--new`
+                          phase — or launch with `--new --repl`
   load demo               reload the bundled demo scenario
   load <file>/<name>      load a named test state from data/states/ (Tab-
                           completes) — turns debug mode on automatically;
@@ -2001,5 +2115,22 @@ mod tests {
         for &cmd in COMMANDS {
             assert!(HELP_TEXT.contains(cmd), "{cmd:?} is in COMMANDS but not mentioned in HELP_TEXT");
         }
+    }
+
+    fn args(a: &[&str]) -> LaunchOptions {
+        parse_args(a.iter().map(|s| s.to_string()))
+    }
+
+    #[test]
+    fn launch_flags_parse() {
+        let o = args(&["--play", "Random", "--repl", "--seed", "7", "--fast"]);
+        assert_eq!(o.play, Some(splash::SideChoice::Random));
+        assert!(o.repl && o.ai_fast);
+        assert_eq!(o.seed, Some(7));
+        assert!(o.command_words.is_empty());
+        let o = args(&["--new", "--ai", "ussr"]);
+        assert!(o.new_game && !o.repl);
+        assert_eq!(o.ai_side, Some(Superpower::Ussr));
+        assert_eq!(args(&["--color", "never", "worldmap"]).command_words, ["worldmap"]);
     }
 }

@@ -1099,3 +1099,19 @@ fn handover_names_the_side_and_the_round() {
     assert!(text.contains("Setup: opening placement"), "{text}");
     assert!(text.contains("… 2 earlier") && text.contains("USSR plays something"), "{text}");
 }
+
+#[test]
+fn splash_screen_matches_snapshot() {
+    use twilight_struggle::render::{render_splash, SplashItem, SplashMenu};
+    let menu = SplashMenu {
+        title: "Main menu".to_string(),
+        items: ["One player (vs AI)", "Two players (hotseat)", "Command console (REPL)", "Quit"]
+            .iter()
+            .enumerate()
+            .map(|(i, l)| SplashItem { label: format!("{}  {l}", i + 1), enabled: true })
+            .collect(),
+        selected: 0,
+    };
+    let expected = include_str!("snapshots/splash.txt");
+    assert_eq!(render_splash(&menu).render(ColorMode::Never), expected.trim_end_matches('\n'));
+}

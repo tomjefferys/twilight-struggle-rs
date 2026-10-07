@@ -181,10 +181,10 @@ enum Screen {
 /// this function returns, including on panic — restores it. Without this,
 /// a panic mid-render would leave the user's shell echoing nothing and
 /// scrolled onto a screen they can't get back from.
-struct TerminalGuard;
+pub(crate) struct TerminalGuard;
 
 impl TerminalGuard {
-    fn enter() -> io::Result<Self> {
+    pub(crate) fn enter() -> io::Result<Self> {
         terminal::enable_raw_mode()?;
         execute!(io::stdout(), EnterAlternateScreen, Hide)?;
         Ok(TerminalGuard)
