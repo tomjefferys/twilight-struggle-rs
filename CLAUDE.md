@@ -21,9 +21,9 @@ against a target, Military Ops tracked), *lasting* cards (held in
 the hands and decks (discards, reveals, the discard-pile picks, draws). A game
 can end by VP reaching ±20, DEFCON reaching 1, Europe Scoring's Control tier,
 Wargames, Cuban Missile Crisis, a scoring card held at the end of a turn, or
-final scoring after turn 10 (a draw is possible). There are two AI opponents:
-`HeuristicAi` (the default) scores positions and plays the move leading to the
-best one, and `RandomAi` plays uniformly random legal moves, with
+final scoring after turn 10 (a draw is possible). There are three AI opponents:
+`SearchAi` (the default) searches whole action rounds by Monte Carlo, `HeuristicAi` scores
+positions and plays the move leading to the best one, and `RandomAi` plays uniformly random legal moves, with
 `RandomAi::careful()` adding just enough rules-awareness (play a scoring card in
 time, never lose to DEFCON at once) for a game to run its full length —
 `tests/full_game.rs` soaks all of them over many seeded whole games.
@@ -732,6 +732,31 @@ Wired into both `main.rs` (an
   `interactive.rs` (the same auto-play, driven on every keypress that
   might have handed the turn to the AI's side) — see each file's own notes
   below.
+- **`SearchAi`** (`ai/search.rs`, the default `AiKind::Search`; `--ai-kind search|heuristic|random`):
+  determinized Monte Carlo search. Only the card-level decisions are searched — which card to play
+  *and how* (each `PlayCard` followed by every `Begin`/`Event`/`Space` it allows, enumerated on a
+  copy; `candidates`) and which card to headline. Each candidate is simulated in many worlds from
+  `Game::determinize(viewer, dice)` (a `lookahead` copy in which the opponent's hand and the draw
+  deck are pooled and redealt — `Hands::resample_hidden` — unless an event revealed that hand, and
+  the opponent's unrevealed headline is re-picked), then both sides play on with `HeuristicAi` for
+  `PLIES` (12) action rounds or to the turn's end, and the result is scored with `eval::evaluate_deep`
+  (the heuristic's evaluation, but a scoring card counts by where it sits — hand, discard, deck —
+  and by how late in the game it is). Every candidate sees the same worlds (common random numbers);
+  successive halving drops the weaker half each stage, jobs are ordered world-major so the clock
+  cutting a stage short stays fair, and simulations run across `Budget::threads` with
+  `std::thread::scope`. `Budget::interactive()` is 400 simulations capped at 2.5 s; `Budget::fixed(n)`
+  has no clock and is fully reproducible (tests, tuning). The chosen usage is remembered
+  (`plan`) so the next `choose` plays it without searching again; everything inside an operation
+  (placements, rolls, confirm, event modes) goes to the `HeuristicAi` fallback, so stepping through
+  its turn is instant. `Ai::is_slow` tells a front end a search is coming; `interactive.rs`'s
+  `Thinking` wrapper prints "… is thinking…" on the bottom row. Tuning (24 games as the US vs
+  `HeuristicAi`, where an equal player wins ~39%): 6-round horizon 14 wins, 12 rounds 20,
+  to the turn's end 19; more simulations stop helping past a few hundred, so the limit is the
+  playout policy and the evaluation, not the budget. The game itself favours the USSR (~60% in a
+  heuristic mirror). `tests/ai.rs` has the `#[ignore]`d match harness
+  (`SEARCH_GAMES=n SEARCH_SIMS=m SEARCH_PLIES=p SEARCH_SIDE=us cargo test --release --test ai
+  search_beats_heuristic_long -- --ignored --nocapture`) and `heuristic_mirror_side_balance`;
+  `tests/determinize.rs` pins the hidden-information resampling; `tests/full_game.rs` soaks it.
 - **`log`** (`src/log.rs`) — `GameLog`, the game's append-only history, a
   `Vec<LogEntry>` built up entirely inside `Game` — the one place every
   mutation already funnels through — so the REPL and `interactive.rs` are

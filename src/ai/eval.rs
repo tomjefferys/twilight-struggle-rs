@@ -17,6 +17,13 @@ const VP_WEIGHT: f32 = 10.0;
 const SCORING_WEIGHT: f32 = 3.0;
 /// What holding Europe's automatic-victory tier is worth (or being denied it, negated).
 const EUROPE_CONTROL: f32 = 150.0;
+/// The deep evaluation's value of a VP a scoring card would pay now, before the likelihood
+/// of it being played soon scales it, and that likelihood for a card held, in the discard
+/// pile, or still to be drawn.
+const DEEP_SCORING_WEIGHT: f32 = 8.0;
+const DEEP_HELD: f32 = 0.7;
+const DEEP_DISCARDED: f32 = 0.1;
+const DEEP_IN_DECK: f32 = 0.3;
 /// A country's whole value, scaled by [`country_weight`].
 const COUNTRY_SCALE: f32 = 3.0;
 /// A small reward per point of influence, so spending ops is never worse than wasting them.
@@ -57,6 +64,33 @@ fn country_weight(battleground: bool, stability: u8) -> f32 {
 /// The position's score for `side`: positive is good for it. Antisymmetric in everything but the
 /// DEFCON penalty and the hand (which only count the side's own).
 pub fn evaluate(game: &Game, map: &WorldMap, cards: &CardCatalog, side: Superpower) -> f32 {
+    eval(game, map, cards, side, false)
+}
+
+/// Like [`evaluate`], but for a search's leaves, where the scoring cards are weighed by where
+/// they are and how late in the game it is (a card in a hand will be played this turn; one in the
+/// deck probably won't; at the end of the game every region scores) rather than a flat discount.
+pub fn evaluate_deep(game: &Game, map: &WorldMap, cards: &CardCatalog, side: Superpower) -> f32 {
+    eval(game, map, cards, side, true)
+}
+
+/// How likely a scoring card is to pay out soon, by where it sits.
+fn scoring_likelihood(game: &Game, card: crate::cards::CardId) -> f32 {
+    let status = game.status();
+    // Final scoring pays every region at the end: ever more certain as the game runs out.
+    let late = ((status.turn as f32 - 4.0) / 6.0).clamp(0.0, 1.0);
+    let held = [Superpower::Us, Superpower::Ussr].iter().any(|&s| game.hand(s).contains(&card));
+    let here = if held {
+        DEEP_HELD
+    } else if game.hands().discards().contains(&card) {
+        DEEP_DISCARDED
+    } else {
+        DEEP_IN_DECK
+    };
+    here + (1.0 - here) * late * late
+}
+
+fn eval(game: &Game, map: &WorldMap, cards: &CardCatalog, side: Superpower, deep: bool) -> f32 {
     if let Some(victory) = game.winner() {
         return match victory.side {
             Some(s) if s == side => WIN,
@@ -76,9 +110,11 @@ pub fn evaluate(game: &Game, map: &WorldMap, cards: &CardCatalog, side: Superpow
     // What each region's scoring card would pay now.
     for card in cards.ids().filter(|&c| scoring::is_scoring_card(c)) {
         if let Some(result) = scoring::resolve(map, game.board(), &status.lasting, card) {
-            score += sign(result.vp_delta as f32) * SCORING_WEIGHT;
+            let weight = if deep { DEEP_SCORING_WEIGHT * scoring_likelihood(game, card) } else { SCORING_WEIGHT };
+            score += sign(result.vp_delta as f32) * weight;
             if let Some(winner) = result.automatic_victory {
-                score += if winner == side { EUROPE_CONTROL } else { -EUROPE_CONTROL };
+                let europe = if deep { EUROPE_CONTROL * scoring_likelihood(game, card).max(0.3) } else { EUROPE_CONTROL };
+                score += if winner == side { europe } else { -europe };
             }
         }
     }

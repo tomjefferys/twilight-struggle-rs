@@ -1020,7 +1020,7 @@ fn run_ai_fast(
         }
         played = true;
         let before = game.log().len();
-        let outcome = ai::play_turn(ai, game, map, cards, dice);
+        let outcome = ai::play_turn(&mut Thinking(ai), game, map, cards, dice);
         queue_ai_modals(modal, game, &game.log().entries()[before..]);
         if let Err(e) = outcome {
             *message = Some(format!("AI error: {e}"));
@@ -1037,6 +1037,23 @@ fn run_ai_fast(
             handover.last = Some(side);
         }
         *zoomed = false;
+    }
+}
+
+/// An [`Ai`] that, when the one it wraps is about to spend a moment searching, says so on the
+/// bottom row of the terminal first (the next redraw wipes it).
+struct Thinking<'a>(&'a mut dyn Ai);
+
+impl Ai for Thinking<'_> {
+    fn choose(&mut self, game: &Game, map: &WorldMap, cards: &CardCatalog, legal: &[Action]) -> Action {
+        if self.0.is_slow(game, legal) {
+            let rows = terminal::size().map_or(24, |(_, r)| r);
+            let mut out = io::stdout();
+            let _ = queue!(out, MoveTo(0, rows.saturating_sub(1)), Clear(ClearType::CurrentLine));
+            let _ = write!(out, " {} is thinking…", game.decider());
+            let _ = out.flush();
+        }
+        self.0.choose(game, map, cards, legal)
     }
 }
 
@@ -1067,7 +1084,7 @@ fn step_ai(
         if legal.is_empty() {
             return None;
         }
-        let action = ai.choose(game, map, cards, &legal);
+        let action = Thinking(ai).choose(game, map, cards, &legal);
         let card_name = game.card_in_play().map(|c| cards.card(c).name.clone());
         let ops = game.operation().map(Operation::ops_total);
         let stop = |title: String, body: Vec<String>, hint: &'static str| Modal::AiStep { side, title, body, hint, pre: true, focus: None };

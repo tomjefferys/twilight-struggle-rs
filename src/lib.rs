@@ -18,7 +18,7 @@ pub mod states;
 pub mod status;
 
 pub use action::Action;
-pub use ai::{evaluate, play_turn, Ai, AiKind, HeuristicAi, RandomAi};
+pub use ai::{evaluate, play_turn, Ai, AiKind, Budget, HeuristicAi, RandomAi, SearchAi};
 pub use board::{Board, Influence};
 pub use cards::{Card, CardCatalog, CardError, CardFound, CardId, CardPhase, CardSide, Hands, CHINA_CARD, MAX_HAND_SIZE};
 pub use country::{Area, Country, CountryId, Direction, Region, SubRegion, Superpower};
