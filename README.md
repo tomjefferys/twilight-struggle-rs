@@ -68,8 +68,7 @@ Implemented:
 - A game history log, viewable in-session or exported to a text file, and a
   library of named test states (`--state <file>/<name>`).
 
-Not implemented: saving and resuming an in-progress game, and some
-"prevents/allows card #N" clauses on individual cards (see `CLAUDE.md`).
+Not implemented: saving and resuming an in-progress game.
 
 ## License
 

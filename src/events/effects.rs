@@ -8,10 +8,9 @@
 //! `Game::roll`.
 //!
 //! The "this event prevents/allows card #N" clauses on some of these
-//! cards (Camp David Accords, John Paul II, ...) aren't modelled here:
-//! they only matter once the card they refer to is implemented, and a
-//! played event's card already lands in `Hands`'s removed pile, which is
-//! all that later card needs to check.
+//! cards (Camp David Accords, John Paul II, ...) are checked by
+//! `events::blocked`, which only needs the played card in `Hands`'s
+//! removed pile.
 
 use crate::board::Board;
 use crate::cards::CardId;

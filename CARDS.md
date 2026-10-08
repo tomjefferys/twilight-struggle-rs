@@ -83,7 +83,7 @@ Every card can already be played for its ops value; this tracks the event text o
 | 65 | Camp David Accords | US | ✅ | 'prevents #13' clause modelled |
 | 66 | Puppet Governments | US | ✅ | Choice ('may') |
 | 67 | Grain Sales to Soviets | US | ✅ | The US draws a random USSR card (shown) and plays it (event or ops) or returns it and uses Grain Sales' own ops; needs dice. The ops are always the US's, even when the USSR played the card (DEFCON 1 from them still loses for the phasing USSR) |
-| 68 | John Paul II Elected Pope | US | ✅ | 'allows #101' clause pending #101 |
+| 68 | John Paul II Elected Pope | US | ✅ | 'allows #101' clause modelled |
 | 69 | Latin American Death Squads | Both | ✅ | Turn-long: coup roll ±1 in Central/South America |
 | 70 | OAS Founded | US | ✅ | Choice |
 | 71 | Nixon Plays the China Card | US | ✅ | USSR holds China Card → US gets it face down; else +2 VP |

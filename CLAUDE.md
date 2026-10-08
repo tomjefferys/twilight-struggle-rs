@@ -355,8 +355,8 @@ time, never lose to DEFCON at once) for a game to run its full length —
     mode is chosen with the digits (`mode <n>`, or `mode europe` by label), changeable until the first
     pick. `into_result` produces the same `EffectResult` a fixed-effect
     card does, so `Game::finish_effect` applies and logs both. Clauses
-    about other cards (prevents/allows #N, NATO) aren't modelled;
-    Special Relationship (#105) only has its "NATO not in effect" branch.
+    about other cards (prevents/allows #N) live in `events::blocked`;
+    NATO is read from `LastingEffects`, so Special Relationship (#105) has both its branches.
     **Mode-only events** (#46 How I Learned to Stop Worrying: one mode per DEFCON level; #100 Wargames: end the game / play on, only at DEFCON 2) pick no countries: a `Mode`'s `Extra` carries a DEFCON target, Military Ops gained, and `ends_game`, which `into_result` turns into `EffectResult::{defcon, mil_ops, ends_game}` (`Game::finish_effect` clamps Military Ops to 0-5 and, for `ends_game`, makes the VP leader win with `VictoryReason::Wargames` — a tie goes to the player's opponent). `is_designation` is only true for region designations (every mode carries an `ongoing`); `picks_countries` tells a mode-only event from one with countries to pick.
     **Chernobyl (#94)** is the one *designation* (`EventChoice::is_designation`):
     no countries are picked — each of its six modes is a `Region`
@@ -394,9 +394,8 @@ time, never lose to DEFCON at once) for a game to run its full length —
     applies nothing itself; `Game::play_event` writes it. Countries are
     looked up by name and the lookup panics on a typo, pinned by a unit
     test that resolves every card on a blank board. The "prevents/allows
-    card #N" clauses on some cards aren't modelled: they only matter once
-    that other card exists, and a played event's card already sits in
-    `Hands`'s removed pile. Either side may play any card's event,
+    card #N" clauses are all modelled in `events::blocked`, which only
+    needs to see a played event's card in `Hands`'s removed pile. Either side may play any card's event,
     its opponent's included — the event does what the card says whoever
     plays it (Duck and Cover pays the US even when the USSR plays it) —
     and playing an opponent's card for its ops fires its event too
@@ -661,8 +660,8 @@ time, never lose to DEFCON at once) for a game to run its full length —
   the US finishes the last action round with it in force, the round
   counter goes one past `action_rounds_per_turn` with the US still
   active (the USSR sits it out) and `GameStatus::validate` accepts exactly
-  that status; the turn rolls over after that extra round. "Prevents
-  #61 OPEC" is not modelled.
+  that status; the turn rolls over after that extra round. It prevents
+  #61 OPEC (`events::blocked`).
 - **`action`** (`src/action.rs`) — the surface an AI opponent drives
   instead of calling `Game`'s own methods directly: `Action`, one legal
   forward move (`PlayCard`/`Begin`/`Event`/`Place`/`Roll`/`Confirm`/`Pass`),
