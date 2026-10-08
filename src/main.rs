@@ -148,7 +148,7 @@ fn parse_args(args: impl Iterator<Item = String>) -> LaunchOptions {
             "--fast" => o.ai_fast = true,
             "--ai-kind" => match args.next().as_deref().and_then(ai::AiKind::parse) {
                 Some(kind) => o.ai_kind = kind,
-                None => eprintln!("--ai-kind takes heuristic or random"),
+                None => eprintln!("--ai-kind takes search, heuristic or random"),
             },
             other => o.command_words.push(other.to_string()),
         }
@@ -439,7 +439,7 @@ fn run_ai_command(session: &mut Session, words: &[&str]) {
             None => println!("AI kind: {}", session.ai_kind.name()),
             Some(k) => match ai::AiKind::parse(k) {
                 Some(kind) => set_ai_kind(session, kind),
-                None => println!("usage: ai kind [heuristic|random]"),
+                None => println!("usage: ai kind [search|heuristic|random]"),
             },
         },
         Some(s) => match parse_superpower(s) {
@@ -448,7 +448,7 @@ fn run_ai_command(session: &mut Session, words: &[&str]) {
                     match ai::AiKind::parse(k) {
                         Some(kind) => set_ai_kind(session, kind),
                         None => {
-                            println!("usage: ai us|ussr [heuristic|random]");
+                            println!("usage: ai us|ussr [search|heuristic|random]");
                             return;
                         }
                     }
@@ -456,7 +456,7 @@ fn run_ai_command(session: &mut Session, words: &[&str]) {
                 session.ai_side = Some(side);
                 println!("AI ({}) now plays {side} automatically", session.ai_kind.name());
             }
-            None => println!("usage: ai [us|ussr [heuristic|random]|kind [heuristic|random]|fast [on|off]|off]"),
+            None => println!("usage: ai [us|ussr [search|heuristic|random]|kind [search|heuristic|random]|fast [on|off]|off]"),
         },
     }
 }
@@ -1857,7 +1857,7 @@ Launching:
   --state <file>/<name>   straight into a named test state
   --repl                  this console instead (alone, or with any of the above)
   <command>               one-shot: run a single command and exit
-  --seed <n> --color always|never --width <n> --ai-kind heuristic|random --fast
+  --seed <n> --color always|never --width <n> --ai-kind search|heuristic|random --fast
 
 Commands:
   splash                  print the title screen
@@ -1900,8 +1900,8 @@ Commands:
   ai us|ussr              from now on, the AI plays that side's turns
                           automatically (in the REPL and the interactive
                           map alike) — `--ai us|ussr` sets this at launch
-  ai us|ussr heuristic|random   ... with that kind of AI (default: heuristic)
-  ai kind [heuristic|random]    show or change which AI plays (`--ai-kind` at launch)
+  ai us|ussr search|heuristic|random   ... with that kind of AI (default: search)
+  ai kind [search|heuristic|random]    show or change which AI plays (`--ai-kind` at launch)
   ai fast [on|off]             interactive map: AI plays straight through, summary only (`--fast`, key `f`)
   ai off                  turn automatic AI play back off
 

@@ -589,6 +589,25 @@ impl Game {
         }
     }
 
+    /// A lookahead copy with the information `viewer` cannot have replaced by a random
+    /// plausible guess: the opponent's hand and the draw deck are reshuffled together (the
+    /// opponent keeps its size of hand), unless an event has revealed that hand, and an unrevealed
+    /// opponent headline is re-picked from the new hand. For AI search, so its playouts don't
+    /// cheat by reading hidden cards.
+    pub fn determinize(&self, viewer: Superpower, dice: &mut Dice) -> Game {
+        let mut copy = self.lookahead();
+        let other = viewer.opponent();
+        if !self.status.effects.hand_revealed(other) {
+            copy.hands.resample_hidden(other, dice);
+            let hidden = copy.phase == Phase::Headline && !copy.headline.revealed && copy.headline_pick_seen().is_none();
+            if hidden && matches!(copy.headline.picks[side_slot(other)], Some(Some(_))) {
+                let options = copy.headline_candidates(other);
+                copy.headline.picks[side_slot(other)] = if options.is_empty() { Some(None) } else { Some(Some(options[dice.index(options.len())])) };
+            }
+        }
+        copy
+    }
+
     pub fn phase(&self) -> Phase {
         self.phase
     }

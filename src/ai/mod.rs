@@ -13,17 +13,22 @@
 mod eval;
 mod heuristic;
 mod random;
+mod search;
 
 pub use eval::evaluate;
 pub use heuristic::HeuristicAi;
 pub use random::RandomAi;
+pub use search::{Budget, SearchAi};
 
 /// Which opponent to play against.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum AiKind {
     /// Scores positions and plays the best move it can find ([`HeuristicAi`]).
-    #[default]
     Heuristic,
+    /// Determinized Monte Carlo search over whole action rounds ([`SearchAi`]): the strongest,
+    /// and the one that takes a moment to think.
+    #[default]
+    Search,
     /// Random legal moves, with just enough care to finish a game ([`RandomAi::careful`]).
     Random,
 }
@@ -32,6 +37,7 @@ impl AiKind {
     pub fn parse(word: &str) -> Option<AiKind> {
         match word.to_ascii_lowercase().as_str() {
             "heuristic" | "smart" => Some(AiKind::Heuristic),
+            "search" | "strong" | "mcts" => Some(AiKind::Search),
             "random" => Some(AiKind::Random),
             _ => None,
         }
@@ -40,6 +46,7 @@ impl AiKind {
     pub fn name(self) -> &'static str {
         match self {
             AiKind::Heuristic => "heuristic",
+            AiKind::Search => "search",
             AiKind::Random => "random",
         }
     }
@@ -47,6 +54,8 @@ impl AiKind {
     /// Builds this kind of AI, seeded from `seed` (or the clock when `None`).
     pub fn build(self, seed: Option<u64>) -> Box<dyn Ai> {
         match (self, seed) {
+            (AiKind::Search, Some(s)) => Box::new(SearchAi::from_seed(s)),
+            (AiKind::Search, None) => Box::new(SearchAi::from_entropy()),
             (AiKind::Heuristic, Some(s)) => Box::new(HeuristicAi::from_seed(s)),
             (AiKind::Heuristic, None) => Box::new(HeuristicAi::from_entropy()),
             (AiKind::Random, Some(s)) => Box::new(RandomAi::from_seed(s).careful()),
@@ -71,6 +80,12 @@ pub trait Ai {
     /// re-checking it, so returning anything else would surface as an
     /// ordinary [`GameError`] from [`Game::apply`].
     fn choose(&mut self, game: &Game, map: &WorldMap, cards: &CardCatalog, legal: &[Action]) -> Action;
+
+    /// Whether the next [`Ai::choose`] on this state is expected to take a noticeable moment
+    /// (a search), so a front end can say the AI is thinking first.
+    fn is_slow(&self, _game: &Game, _legal: &[Action]) -> bool {
+        false
+    }
 }
 
 /// A defensive cap on actions taken in one [`play_turn`] call. One turn's

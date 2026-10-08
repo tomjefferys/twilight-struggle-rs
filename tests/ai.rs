@@ -390,3 +390,87 @@ fn heuristic_beats_careful_random_most_of_the_time() {
     println!("heuristic won {wins}/{games}");
     assert!(wins * 100 >= games * 75, "heuristic won only {wins}/{games}");
 }
+
+/// Plays one whole game, `search` on `search_side` against the old heuristic; returns whether
+/// search won, the final turn, and the longest single decision.
+fn search_vs_heuristic(seed: u64, search_side: Superpower, sims: usize, plies: u8) -> (Option<bool>, u8, std::time::Duration) {
+    use twilight_struggle::{Budget, HeuristicAi, SearchAi};
+    let map = WorldMap::standard().unwrap();
+    let cards = CardCatalog::standard().unwrap();
+    let mut dice = Dice::from_seed(seed);
+    let mut game = Game::new_game(&map, &cards, &mut dice);
+    let mut search = SearchAi::from_seed(seed).with_budget(Budget::fixed(sims)).with_plies(plies);
+    let mut old = HeuristicAi::from_seed(seed ^ 0x77);
+    let mut longest = std::time::Duration::ZERO;
+    for _ in 0..3000 {
+        if game.winner().is_some() {
+            break;
+        }
+        if game.decider() == search_side {
+            let t = std::time::Instant::now();
+            play_turn(&mut search, &mut game, &map, &cards, &mut dice).unwrap();
+            longest = longest.max(t.elapsed());
+        } else {
+            play_turn(&mut old, &mut game, &map, &cards, &mut dice).unwrap();
+        }
+    }
+    let victory = game.winner().expect("the game finishes");
+    (victory.side.map(|s| s == search_side), game.status().turn, longest)
+}
+
+/// `SEARCH_GAMES=n SEARCH_SIMS=m cargo test --release --test ai search_beats_heuristic -- --nocapture --ignored`
+#[test]
+#[ignore]
+fn search_beats_heuristic_long_match() {
+    let games: u64 = std::env::var("SEARCH_GAMES").ok().and_then(|v| v.parse().ok()).unwrap_or(20);
+    let sims: usize = std::env::var("SEARCH_SIMS").ok().and_then(|v| v.parse().ok()).unwrap_or(600);
+    let plies: u8 = std::env::var("SEARCH_PLIES").ok().and_then(|v| v.parse().ok()).unwrap_or(12);
+    let only_us = std::env::var("SEARCH_SIDE").is_ok_and(|v| v == "us");
+    let (mut wins, mut draws) = (0, 0);
+    let mut worst = std::time::Duration::ZERO;
+    for seed in 0..games {
+        let side = if only_us || seed % 2 == 0 { Superpower::Us } else { Superpower::Ussr };
+        let (won, turn, longest) = search_vs_heuristic(seed, side, sims, plies);
+        println!("seed {seed} {side}: {won:?} turn {turn} longest turn {longest:?}");
+        match won {
+            Some(true) => wins += 1,
+            None => draws += 1,
+            _ => {}
+        }
+        worst = worst.max(longest);
+    }
+    println!("search won {wins}/{games} ({draws} draws); slowest turn {worst:?}");
+}
+
+/// How lopsided the game is for two identical heuristic players: the USSR's win rate.
+#[test]
+#[ignore]
+fn heuristic_mirror_side_balance() {
+    use twilight_struggle::HeuristicAi;
+    let map = WorldMap::standard().unwrap();
+    let cards = CardCatalog::standard().unwrap();
+    let (mut us, mut ussr, mut draws) = (0, 0, 0);
+    let n = 300;
+    for seed in 0..n {
+        let mut dice = Dice::from_seed(seed);
+        let mut game = Game::new_game(&map, &cards, &mut dice);
+        let mut a = HeuristicAi::from_seed(seed);
+        let mut b = HeuristicAi::from_seed(seed ^ 0x77);
+        for _ in 0..3000 {
+            if game.winner().is_some() {
+                break;
+            }
+            if game.decider() == Superpower::Us {
+                play_turn(&mut a, &mut game, &map, &cards, &mut dice).unwrap();
+            } else {
+                play_turn(&mut b, &mut game, &map, &cards, &mut dice).unwrap();
+            }
+        }
+        match game.winner().unwrap().side {
+            Some(Superpower::Us) => us += 1,
+            Some(_) => ussr += 1,
+            None => draws += 1,
+        }
+    }
+    println!("heuristic mirror over {n}: US {us}, USSR {ussr}, draws {draws}");
+}

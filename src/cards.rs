@@ -399,6 +399,20 @@ impl Hands {
         dice.shuffle(&mut self.deck);
     }
 
+    /// Resamples what `viewer` cannot see: `other`'s hand and the draw deck are pooled, shuffled,
+    /// and `other` is dealt a hand of the same size from the pool, the rest becoming the deck.
+    /// What `viewer` knows (its own hand, both piles) is untouched. Used by AI search to play out
+    /// a plausible world rather than the true one.
+    pub fn resample_hidden(&mut self, other: Superpower, dice: &mut Dice) {
+        let size = self.hand(other).len();
+        let mut pool = std::mem::take(self.hand_mut(other));
+        pool.append(&mut self.deck);
+        dice.shuffle(&mut pool);
+        let keep = pool.len().saturating_sub(size);
+        *self.hand_mut(other) = pool.split_off(keep);
+        self.deck = pool;
+    }
+
     /// Draws the top card, first shuffling the discard pile into an empty deck (rule 4.5 —
     /// the removed pile never comes back). `None` when both are empty.
     pub fn draw(&mut self, dice: &mut Dice) -> Option<CardId> {

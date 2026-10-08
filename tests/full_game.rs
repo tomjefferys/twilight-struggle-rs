@@ -6,7 +6,7 @@
 use std::collections::HashSet;
 
 use twilight_struggle::game::{Phase, VictoryReason};
-use twilight_struggle::{play_turn, Ai, CardCatalog, CardId, Dice, Game, HeuristicAi, RandomAi, Superpower, WorldMap};
+use twilight_struggle::{play_turn, Ai, CardCatalog, CardId, Dice, Game, Budget, HeuristicAi, RandomAi, SearchAi, Superpower, WorldMap};
 
 /// How many seeds each soak test plays: 50 normally, more with `SOAK_SEEDS=1000 cargo test --test full_game`.
 fn seeds() -> u64 {
@@ -119,5 +119,18 @@ fn heuristic_and_random_ais_finish_games_against_each_other() {
         let mut smart = HeuristicAi::from_seed(seed);
         let mut random = RandomAi::from_seed(seed).careful();
         play_with(seed, &mut random, Some(&mut smart));
+    }
+}
+
+#[test]
+fn search_ais_play_whole_games_to_a_result() {
+    // A tiny budget: this checks the search never gets a game stuck or refused, not its strength.
+    for seed in 0..3 {
+        let mut search = SearchAi::from_seed(seed).with_budget(Budget::fixed(16));
+        let mut random = RandomAi::from_seed(seed).careful();
+        play_with(seed, &mut search, Some(&mut random));
+        let mut search = SearchAi::from_seed(seed).with_budget(Budget::fixed(16));
+        let mut random = RandomAi::from_seed(seed).careful();
+        play_with(seed, &mut random, Some(&mut search));
     }
 }
