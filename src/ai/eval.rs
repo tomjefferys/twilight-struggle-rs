@@ -2,8 +2,8 @@
 //! heuristic AI ranks moves by the score of the position they lead to, so everything it "knows"
 //! about the game is in the terms below. All the weights are named constants — tune them here.
 
-use crate::cards::{CardCatalog, CardSide};
-use crate::country::{CountryId, Superpower};
+use crate::cards::{CardCatalog, CardPhase, CardSide};
+use crate::country::{CountryId, Region, Superpower};
 use crate::events::scoring;
 use crate::game::Game;
 use crate::map::WorldMap;
@@ -26,6 +26,20 @@ const DEEP_DISCARDED: f32 = 0.1;
 const DEEP_IN_DECK: f32 = 0.3;
 /// A country's whole value, scaled by [`country_weight`].
 const COUNTRY_SCALE: f32 = 3.0;
+/// Where influence is worth putting depends on which region will be scored soon. A region's
+/// weight is `REGION_BASE + REGION_URGENCY * urgency` (0-1, see [`region_urgency`]); Europe, where
+/// Control wins the game outright, is further multiplied by `EUROPE_BONUS`.
+const REGION_BASE: f32 = 0.4;
+const REGION_URGENCY: f32 = 1.2;
+const EUROPE_BONUS: f32 = 2.0;
+/// How likely a region's scoring card is to be played soon, by what `side` can know of where it
+/// is: in its own hand (or an opponent's hand an event revealed) it is imminent; in the draw
+/// deck or the opponent's hidden hand, possible; not yet dealt (a Mid War card before turn 4),
+/// spent or removed, only final scoring is left to bring it.
+const URGENCY_HELD: f32 = 1.0;
+const URGENCY_UNSEEN: f32 = 0.5;
+const URGENCY_DISCARDED: f32 = 0.15;
+const URGENCY_NOT_DEALT: f32 = 0.0;
 /// A small reward per point of influence, so spending ops is never worse than wasting them.
 const INFLUENCE_EPSILON: f32 = 0.05;
 /// DEFCON 2 and 3 are dangerous for the side that has to keep playing at them.
@@ -47,7 +61,7 @@ fn live_board(game: &Game) -> &crate::board::Board {
 }
 
 /// How much `side` is worth being in `id`: grows with how close it is to control and jumps at it.
-fn country_value(map: &WorldMap, game: &Game, id: CountryId, side: Superpower) -> f32 {
+fn country_value(map: &WorldMap, game: &Game, id: CountryId, side: Superpower, regions: &[(Region, f32)]) -> f32 {
     let board = live_board(game);
     let country = map.country(id);
     let own = board.influence(id, side) as f32;
@@ -55,10 +69,45 @@ fn country_value(map: &WorldMap, game: &Game, id: CountryId, side: Superpower) -
     if own == 0.0 {
         return 0.0;
     }
-    let weight = country_weight(country.battleground, country.stability);
+    let region = regions.iter().find(|&&(r, _)| r == country.region).map_or(1.0, |&(_, w)| w);
+    let weight = country_weight(country.battleground, country.stability) * region;
     let progress = (own / (opp + country.stability as f32)).min(1.0);
     let control = if board.is_controlled_by(map, id, side) { 1.0 } else { 0.0 };
     COUNTRY_SCALE * weight * (progress + control) + INFLUENCE_EPSILON * own
+}
+
+/// How soon `side` should expect `region`'s scoring card, from 0 to 1, from what it can see.
+fn region_urgency(game: &Game, cards: &CardCatalog, side: Superpower, region: Region) -> f32 {
+    let Some(card) = cards.ids().find(|&c| scoring::region_of(c) == Some(region)) else {
+        return URGENCY_UNSEEN;
+    };
+    let status = game.status();
+    let in_hand = |s: Superpower| game.hand(s).contains(&card);
+    let here = if in_hand(side) || (in_hand(side.opponent()) && status.effects.hand_revealed(side.opponent())) {
+        URGENCY_HELD
+    } else if game.hands().discards().contains(&card) || game.hands().removed().contains(&card) {
+        URGENCY_DISCARDED
+    } else if cards.card(card).phase == CardPhase::Mid && status.turn < 4
+        || cards.card(card).phase == CardPhase::Late && status.turn < 8
+    {
+        URGENCY_NOT_DEALT
+    } else {
+        URGENCY_UNSEEN
+    };
+    // Final scoring pays every region at the end, whatever the card does before then.
+    let late = ((status.turn as f32 - 4.0) / 6.0).clamp(0.0, 1.0);
+    here + (1.0 - here) * late * late
+}
+
+/// The multiplier on a country's worth, per region.
+fn region_weights(game: &Game, cards: &CardCatalog, side: Superpower) -> Vec<(Region, f32)> {
+    [Region::Europe, Region::Asia, Region::MiddleEast, Region::Africa, Region::CentralAmerica, Region::SouthAmerica]
+        .iter()
+        .map(|&r| {
+            let w = REGION_BASE + REGION_URGENCY * region_urgency(game, cards, side, r);
+            (r, if r == Region::Europe { w * EUROPE_BONUS } else { w })
+        })
+        .collect()
 }
 
 /// Battlegrounds matter most; a shaky country is cheap to hold, so slightly more worth having.
@@ -109,8 +158,9 @@ fn eval(game: &Game, map: &WorldMap, cards: &CardCatalog, side: Superpower, deep
     let mut score = sign(status.vp as f32) * VP_WEIGHT;
 
     // Who holds what, country by country.
+    let regions = region_weights(game, cards, side);
     for (id, _) in map.iter() {
-        score += country_value(map, game, id, side) - country_value(map, game, id, side.opponent());
+        score += country_value(map, game, id, side, &regions) - country_value(map, game, id, side.opponent(), &regions);
     }
 
     // What each region's scoring card would pay now.
@@ -181,5 +231,18 @@ mod tests {
         let crate::map::Found::One(canada) = map.find("Canada") else { panic!("Canada") };
         game.place(&map, canada).unwrap();
         assert!(evaluate(&game, &map, &cards, Superpower::Us) > before, "a pending point must raise the score");
+    }
+
+    /// In the Early War only Europe, Asia and the Middle East can be scored, and Europe counts most.
+    #[test]
+    fn early_war_weights_favour_europe_over_regions_not_yet_scorable() {
+        let map = WorldMap::standard().unwrap();
+        let cards = CardCatalog::standard().unwrap();
+        let mut game = Game::from_scenario(&crate::scenario::Scenario::demo(&map, &cards).unwrap());
+        game.status_mut().turn = 1;
+        let w = |r| region_weights(&game, &cards, Superpower::Us).iter().find(|&&(x, _)| x == r).unwrap().1;
+        assert!(w(Region::Europe) > w(Region::Asia));
+        assert!(w(Region::Asia) > w(Region::Africa));
+        assert!(w(Region::Africa) > 0.0);
     }
 }

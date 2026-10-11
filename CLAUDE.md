@@ -713,7 +713,7 @@ heuristic|random` at launch, `ai us|ussr [kind]` / `ai kind [kind]` in the REPL;
 `eval::evaluate(game, map, cards, side)` is the whole of its game knowledge — VP
 on the track, per-country control progress (battlegrounds weigh most), what each
 scoring card would pay now (Europe's automatic victory a huge term), DEFCON 2/3
-risk, the Military Ops shortfall (scaled by how far the turn has gone), the space
+risk (each region's countries are weighted by how soon its scoring card is expected — own hand, deck, discard, or not yet dealt in the Early War — with Europe doubled), the Military Ops shortfall (scaled by how far the turn has gone), the space
 race and what's still in hand — every weight a named constant at the top. Moves
 are chosen by looking ahead on `Game::lookahead()` copies: *small* decisions
 (`Place`, `Roll`, `Confirm`, …) are **greedy** one-step picks (dice sampled with

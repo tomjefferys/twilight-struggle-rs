@@ -151,6 +151,8 @@ fn after_into(game: &mut Game, action: Action, map: &WorldMap, cards: &CardCatal
 /// The one-step-lookahead pick among `legal`, scoring each resulting position for `chooser`.
 fn greedy_step(game: &Game, map: &WorldMap, cards: &CardCatalog, chooser: Superpower, legal: &[Action]) -> Option<Action> {
     let mut best: Option<(f32, Action)> = None;
+    let base = evaluate(game, map, cards, chooser);
+    let spent = game.operation().map_or(0, Operation::ops_spent);
     for &action in legal {
         let is_roll = matches!(action, Action::Roll(_) | Action::RollContest);
         if let Action::Roll(id) = action
@@ -163,7 +165,14 @@ fn greedy_step(game: &Game, map: &WorldMap, cards: &CardCatalog, chooser: Superp
         let mut n = 0.0;
         for seed in 1..=seeds {
             if let Some(next) = after(game, action, map, cards, seed) {
-                total += evaluate(&next, map, cards, chooser);
+                let mut value = evaluate(&next, map, cards, chooser);
+                // A placement is worth what it gains per op: a point in a country the opponent
+                // controls costs two, and must beat two points elsewhere to be chosen.
+                if matches!(action, Action::Place(_)) {
+                    let cost = next.operation().map_or(1, Operation::ops_spent).saturating_sub(spent).max(1);
+                    value = base + (value - base) / cost as f32;
+                }
+                total += value;
                 n += 1.0;
             }
         }
