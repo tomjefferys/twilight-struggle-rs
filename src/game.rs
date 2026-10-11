@@ -1329,7 +1329,7 @@ impl Game {
     }
 
     fn abandon_operation(&mut self) -> Result<Operation, GameError> {
-        if self.phase == Phase::Headline && self.op.is_some() {
+        if self.phase == Phase::Headline && matches!(self.op, Some(Operation::Event(_))) {
             return Err(GameError::Trap("a headline event has to be played out — it can't be backed out of".into()));
         }
         match &self.op {
@@ -1543,7 +1543,7 @@ impl Game {
         if self.phase == Phase::TurnEnd {
             return Err(GameError::Trap("the turn is over — settle its end first".into()));
         }
-        if self.phase == Phase::Headline {
+        if self.phase == Phase::Headline && !self.card.is_some_and(|c| c.ops_after_event.is_some()) {
             return Err(GameError::Trap("this is the headline phase — choose your headline card (headline <card>)".into()));
         }
         if self.phase == Phase::Setup {
@@ -1637,6 +1637,8 @@ impl Game {
     /// back) during the headline phase, where a card is played for its event alone.
     fn headline_guard(&self) -> Result<(), GameError> {
         match self.phase {
+            // (operations an event granted are still allowed)
+            Phase::Headline if self.card.is_some_and(|c| c.ops_after_event.is_some()) => Ok(()),
             Phase::Headline => Err(GameError::Trap("headline cards are played for their events only".into())),
             Phase::Setup => Err(GameError::Trap("the opening placement comes first".into())),
             _ => Ok(()),
@@ -2362,8 +2364,8 @@ impl Game {
             return;
         }
         // A card whose event allows an operation stays in play for it.
-        // (not a headline card: that is its event only)
-        let grant = grant.filter(|_| self.phase != Phase::Headline);
+        // (a headline card is played for its event alone, but operations the event itself grants
+        // are still there to use)
         if let (None, Some(grant), Some(card)) = (self.winner, grant, self.card.as_mut()) {
             card.ops_after_event = Some(grant);
             // The event this card was waiting to have played has been (an opponent's card spent

@@ -159,10 +159,10 @@ pub fn ops_grant(map: &WorldMap, board: &Board, removed: &[CardId], card: CardId
     use crate::country::Region;
     use crate::country::Superpower::{Us, Ussr};
     match card.0 {
-        26 if player == Us => Some(OpsGrant::ANY),
+        26 => Some(OpsGrant::ANY.for_side(Us)),
         47 => Some(OpsGrant::coup_or_realign_in(AMERICAS, "in Central or South America")),
         57 => Some(OpsGrant::ANY),
-        62 if player == Ussr => Some(OpsGrant::ANY),
+        62 => Some(OpsGrant::ANY.for_side(Ussr)),
         89 if player == Us && map.id_by_name("South Korea").is_some_and(|id| board.is_controlled_by(map, id, Us)) => Some(OpsGrant::NO_COUP),
         90 if player == Ussr && removed.contains(&CardId(87)) => Some(OpsGrant::NO_COUP),
         91 if player == Ussr => Some(OpsGrant { realign: false, scope: choice::Where::AdjacentTo("Nicaragua"), scope_label: "adjacent to Nicaragua", ..OpsGrant::kinds(false, false, true) }),

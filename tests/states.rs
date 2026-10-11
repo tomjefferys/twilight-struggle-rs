@@ -391,7 +391,7 @@ fn an_implemented_non_scoring_card_offers_both_its_event_and_its_ops() {
     game.play_card(&cards, cards.id_by_name("Fidel").unwrap()).unwrap();
     let legal = game.legal_actions(&map, &cards);
     assert!(legal.contains(&Action::Event));
-    assert!(legal.contains(&Action::Begin(OperationKind::Coup)));
+    assert!(legal.contains(&Action::Begin(twilight_struggle::OperationKind::Coup)));
 }
 
 #[test]
@@ -1119,7 +1119,7 @@ mod turn_effects {
     fn chernobyl_refuses_ussr_placement_in_the_region_but_not_elsewhere() {
         let (map, cards, mut game) = load("chernobyl-europe-active");
         play(&mut game, &cards, "Fidel");
-        game.begin(OperationKind::Influence).unwrap();
+        game.begin(twilight_struggle::OperationKind::Influence).unwrap();
         let op = game.operation().unwrap();
         assert!(!op.is_legal_target(&map, game.board(), id(&map, "Poland")), "dimmed on the map");
         assert!(op.is_legal_target(&map, game.board(), id(&map, "Egypt")));
@@ -1132,7 +1132,7 @@ mod turn_effects {
         let (map, cards, mut game) = load("chernobyl-europe-active");
         game.board_mut().set_influence(id(&map, "Poland"), Superpower::Us, 1);
         play(&mut game, &cards, "Fidel");
-        game.begin(OperationKind::Coup).unwrap();
+        game.begin(twilight_struggle::OperationKind::Coup).unwrap();
         game.roll(&map, id(&map, "Poland"), &mut Dice::from_seed(1)).expect("coups aren't influence placement");
     }
 
@@ -1142,7 +1142,7 @@ mod turn_effects {
         let _ = &map;
         play(&mut game, &cards, "Truman Doctrine");
         assert_eq!(game.ops_available(), 2, "1 op +1");
-        game.begin(OperationKind::Influence).unwrap();
+        game.begin(twilight_struggle::OperationKind::Influence).unwrap();
         assert_eq!(game.operation().unwrap().ops_total(), 2);
 
         let (_, cards, mut game) = load("containment-active");
@@ -1171,7 +1171,7 @@ mod turn_effects {
     fn vietnam_revolts_gives_a_bonus_op_only_for_a_card_spent_wholly_in_southeast_asia() {
         let (map, cards, mut game) = load("vietnam-revolts-active");
         play(&mut game, &cards, "Fidel");
-        game.begin(OperationKind::Influence).unwrap();
+        game.begin(twilight_struggle::OperationKind::Influence).unwrap();
         assert!(!game.operation().unwrap().pending_bonus().is_empty());
         for _ in 0..3 {
             game.place(&map, id(&map, "Vietnam")).expect("2 ops + the bonus = 3 points");
@@ -1182,7 +1182,7 @@ mod turn_effects {
         // Placing outside Southeast Asia forfeits the bonus.
         let (map, cards, mut game) = load("vietnam-revolts-active");
         play(&mut game, &cards, "Fidel");
-        game.begin(OperationKind::Influence).unwrap();
+        game.begin(twilight_struggle::OperationKind::Influence).unwrap();
         game.place(&map, id(&map, "Vietnam")).unwrap();
         game.place(&map, id(&map, "Poland")).unwrap();
         assert_eq!(game.operation().unwrap().ops_total(), 2);
@@ -1199,7 +1199,7 @@ mod turn_effects {
         game.board_mut().set_influence(id(&map, "Thailand"), Superpower::Us, 2);
         game.board_mut().set_influence(id(&map, "Italy"), Superpower::Us, 2);
         play(&mut game, &cards, "Fidel");
-        game.begin(OperationKind::Coup).unwrap();
+        game.begin(twilight_struggle::OperationKind::Coup).unwrap();
         let Some(Operation::Coup(c)) = game.operation() else { panic!() };
         assert_eq!(c.ops_for(&map, id(&map, "Thailand")), 3);
         assert_eq!(c.ops_for(&map, id(&map, "Italy")), 2);
@@ -1211,7 +1211,7 @@ mod turn_effects {
     fn coup_modifier(state: &str, card: &str, target: &str) -> i8 {
         let (map, cards, mut game) = load(state);
         play(&mut game, &cards, card);
-        game.begin(OperationKind::Coup).unwrap();
+        game.begin(twilight_struggle::OperationKind::Coup).unwrap();
         let RollOutcome::Coup(result) = game.roll(&map, id(&map, target), &mut Dice::from_seed(5)).unwrap() else { panic!() };
         result.modifier
     }
@@ -1240,7 +1240,7 @@ mod turn_effects {
         let (map, cards, mut game) = load(state);
         let card = if game.active() == Superpower::Us { "Truman Doctrine" } else { "Fidel" };
         play(&mut game, &cards, card);
-        game.begin(OperationKind::Coup).unwrap();
+        game.begin(twilight_struggle::OperationKind::Coup).unwrap();
         let target = match state {
             "yuri-active" => "Czechoslovakia",
             "battleground-coup-defcon-2" => "Mexico",
@@ -1291,14 +1291,14 @@ mod turn_effects {
         let (map, cards, mut game) = load("north-sea-oil-final-round");
         assert_eq!((game.status().turn, game.status().action_round), (3, 6));
         play(&mut game, &cards, "Truman Doctrine");
-        game.begin(OperationKind::Influence).unwrap();
+        game.begin(twilight_struggle::OperationKind::Influence).unwrap();
         game.confirm().unwrap();
         // The US goes again, alone, in an extra 7th round of a 6-round turn.
         assert_eq!((game.status().turn, game.status().action_round, game.active()), (3, 7, Superpower::Us));
         assert_eq!(in_force(&game), vec![86]);
         game.status().validate().expect("the extra round is a valid status");
         play(&mut game, &cards, "Marshall Plan");
-        game.begin(OperationKind::Influence).unwrap();
+        game.begin(twilight_struggle::OperationKind::Influence).unwrap();
         game.confirm().unwrap();
         end_turn(&mut game, &map, &cards);
         assert_eq!((game.status().turn, game.status().action_round, game.active()), (4, 0, Superpower::Ussr), "the headline phase opens turn 4");
@@ -1309,13 +1309,13 @@ mod turn_effects {
     fn effects_survive_between_rounds_of_a_turn_and_clear_at_its_end() {
         let (map, cards, mut game) = load("containment-active");
         play(&mut game, &cards, "Truman Doctrine");
-        game.begin(OperationKind::Influence).unwrap();
+        game.begin(twilight_struggle::OperationKind::Influence).unwrap();
         game.confirm().unwrap();
         assert_eq!(in_force(&game), vec![25], "still in force after the next side acts");
         game.status_mut().action_round = game.status().action_rounds_per_turn;
         game.status_mut().active = Superpower::Us;
         play(&mut game, &cards, "Marshall Plan");
-        game.begin(OperationKind::Influence).unwrap();
+        game.begin(twilight_struggle::OperationKind::Influence).unwrap();
         game.confirm().unwrap();
         end_turn(&mut game, &map, &cards);
         assert!(in_force(&game).is_empty());
@@ -1535,7 +1535,7 @@ mod lasting {
 
     fn start_coup(cards: &CardCatalog, game: &mut Game, card: &str) {
         game.play_card(cards, cards.id_by_name(card).unwrap()).unwrap();
-        game.begin(OperationKind::Coup).unwrap();
+        game.begin(twilight_struggle::OperationKind::Coup).unwrap();
     }
 
     #[test]
@@ -1665,7 +1665,7 @@ mod lasting {
         let (map, cards, lib) = fixtures();
         let mut game = load(&map, &cards, &lib, "formosan-china-card");
         game.play_card(&cards, twilight_struggle::CHINA_CARD).unwrap();
-        game.begin(OperationKind::Influence).unwrap();
+        game.begin(twilight_struggle::OperationKind::Influence).unwrap();
         game.confirm().unwrap();
         assert!(!game.status().lasting.formosan);
     }
@@ -1705,7 +1705,7 @@ mod lasting {
         // Flower Power is paid once for the card, not once for each half.
         let mut game = load(&map, &cards, &lib, "flower-power-active");
         game.play_card(&cards, cards.id_by_name("Korean War").unwrap()).unwrap();
-        game.begin(OperationKind::Influence).unwrap();
+        game.begin(twilight_struggle::OperationKind::Influence).unwrap();
         game.confirm().unwrap();
         assert_eq!(game.forced_how(), Some(twilight_struggle::events::PlayAs::Event), "the opponent's event is next");
         game.play_event(&map, &cards).unwrap();
@@ -1718,14 +1718,14 @@ mod lasting {
         game.play_event(&map, &cards).unwrap();
         game.roll(&map, country(&map, "South Korea"), &mut Dice::from_seed(3)).unwrap();
         assert!(game.ops_after_event().is_some());
-        game.begin(OperationKind::Influence).unwrap();
+        game.begin(twilight_struggle::OperationKind::Influence).unwrap();
         game.confirm().unwrap();
         assert_eq!(paid(&game), 1);
 
         // A non-war card pays nothing.
         let mut game = load(&map, &cards, &lib, "flower-power-active");
         game.play_card(&cards, cards.id_by_name("Duck and Cover").unwrap()).unwrap();
-        game.begin(OperationKind::Influence).unwrap();
+        game.begin(twilight_struggle::OperationKind::Influence).unwrap();
         game.confirm().unwrap();
         assert_eq!(game.status().vp, 0);
 
@@ -1754,7 +1754,7 @@ mod lasting {
         assert!(game.status().lasting.we_will_bury_you.is_some());
         // The US's next action round: spending its card pays the USSR 3 VP.
         game.play_card(&cards, cards.id_by_name("Duck and Cover").unwrap()).unwrap();
-        game.begin(OperationKind::Influence).unwrap();
+        game.begin(twilight_struggle::OperationKind::Influence).unwrap();
         game.confirm().unwrap();
         assert_eq!(game.status().vp, -3);
         assert!(game.status().lasting.we_will_bury_you.is_none());
@@ -1841,7 +1841,7 @@ mod china {
         let (map, cards, mut game) = load("china-card-asia-bonus");
         let japan = map.id_by_name("Japan").unwrap();
         game.play_card(&cards, CHINA_CARD).unwrap();
-        game.begin(OperationKind::Influence).unwrap();
+        game.begin(twilight_struggle::OperationKind::Influence).unwrap();
         assert!(!game.operation().unwrap().pending_bonus().is_empty());
         for _ in 0..5 {
             game.place(&map, japan).expect("4 ops + the Asia bonus = 5 points");
@@ -1855,7 +1855,7 @@ mod china {
     fn a_point_outside_asia_forfeits_the_china_cards_bonus_op() {
         let (map, cards, mut game) = load("china-card-asia-bonus");
         game.play_card(&cards, CHINA_CARD).unwrap();
-        game.begin(OperationKind::Influence).unwrap();
+        game.begin(twilight_struggle::OperationKind::Influence).unwrap();
         let poland = map.id_by_name("Poland").unwrap();
         for _ in 0..4 {
             game.place(&map, poland).unwrap();
@@ -2196,7 +2196,7 @@ mod event_then_ops {
         assert_eq!(game.active(), Superpower::Ussr, "the turn doesn't pass until the ops are done");
         assert!(game.ops_after_event().is_some());
         assert!(game.discards().is_empty() && game.removed_from_game().is_empty(), "still in play");
-        game.begin(OperationKind::Influence).unwrap();
+        game.begin(twilight_struggle::OperationKind::Influence).unwrap();
         game.place(&map, id(&map, "Poland")).unwrap();
         game.confirm().unwrap();
         assert_eq!(game.board().influence(id(&map, "Poland"), Superpower::Ussr), 2);
@@ -2221,13 +2221,13 @@ mod event_then_ops {
         assert!(!game.can_space());
         let legal = game.legal_actions(&map, &cards);
         assert!(!legal.contains(&Action::Event) && !legal.contains(&Action::Space));
-        assert!(legal.contains(&Action::Pass) && legal.contains(&Action::Begin(OperationKind::Coup)));
+        assert!(legal.contains(&Action::Pass) && legal.contains(&Action::Begin(twilight_struggle::OperationKind::Coup)));
     }
 
     #[test]
     fn a_placement_can_be_abandoned_and_swapped_for_another_kind() {
         let (_, _, mut game) = played("abm-treaty", "ABM Treaty");
-        game.begin(OperationKind::Influence).unwrap();
+        game.begin(twilight_struggle::OperationKind::Influence).unwrap();
         game.abandon().unwrap();
         game.begin(OperationKind::Realign).unwrap();
         game.cancel().unwrap();
@@ -2238,11 +2238,11 @@ mod event_then_ops {
     fn kal_007_drops_defcon_pays_the_us_and_allows_everything_but_a_coup_with_south_korea_controlled() {
         let (map, cards, mut game) = played("kal-007-south-korea-us-controlled", "Soviets Shoot Down KAL-007");
         assert_eq!((game.status().defcon, game.status().vp), (3, 2));
-        assert!(matches!(game.begin(OperationKind::Coup), Err(GameError::OpsNotGranted { .. })));
+        assert!(matches!(game.begin(twilight_struggle::OperationKind::Coup), Err(GameError::OpsNotGranted { .. })));
         let legal = game.legal_actions(&map, &cards);
-        assert!(!legal.contains(&Action::Begin(OperationKind::Coup)));
-        assert!(legal.contains(&Action::Begin(OperationKind::Influence)) && legal.contains(&Action::Begin(OperationKind::Realign)));
-        game.begin(OperationKind::Influence).unwrap();
+        assert!(!legal.contains(&Action::Begin(twilight_struggle::OperationKind::Coup)));
+        assert!(legal.contains(&Action::Begin(twilight_struggle::OperationKind::Influence)) && legal.contains(&Action::Begin(OperationKind::Realign)));
+        game.begin(twilight_struggle::OperationKind::Influence).unwrap();
         game.place(&map, id(&map, "Japan")).unwrap();
         game.confirm().unwrap();
         assert!(game.removed_from_game().contains(&cards.id_by_name("Soviets Shoot Down KAL-007").unwrap()), "KAL-007 leaves the game after its event");
@@ -2271,8 +2271,8 @@ mod event_then_ops {
     fn glasnost_needs_the_reformer_for_its_operation() {
         let (map, cards, mut game) = played("glasnost-reformer-played", "Glasnost");
         assert_eq!((game.status().defcon, game.status().vp), (4, -2));
-        assert!(matches!(game.begin(OperationKind::Coup), Err(GameError::OpsNotGranted { .. })));
-        game.begin(OperationKind::Influence).unwrap();
+        assert!(matches!(game.begin(twilight_struggle::OperationKind::Coup), Err(GameError::OpsNotGranted { .. })));
+        game.begin(twilight_struggle::OperationKind::Influence).unwrap();
         game.place(&map, id(&map, "Poland")).unwrap();
         game.confirm().unwrap();
         assert!(game.removed_from_game().contains(&cards.id_by_name("Glasnost").unwrap()));
@@ -2306,7 +2306,7 @@ mod event_then_ops {
 
         let (_, cards, mut game) = played("lone-gunman", "“Lone Gunman”");
         assert!(game.ops_after_event().is_some());
-        game.begin(OperationKind::Coup).unwrap();
+        game.begin(twilight_struggle::OperationKind::Coup).unwrap();
         game.cancel().unwrap();
         assert!(game.removed_from_game().contains(&cards.id_by_name("“Lone Gunman”").unwrap()));
         let _ = map;
@@ -2318,7 +2318,7 @@ mod event_then_ops {
         let (scenario, _) = lib.load(&map, &cards, "events/abm-treaty").unwrap();
         let mut game = Game::from_scenario(&scenario);
         game.play_card(&cards, cards.id_by_name("ABM Treaty").unwrap()).unwrap();
-        game.begin(OperationKind::Influence).unwrap();
+        game.begin(twilight_struggle::OperationKind::Influence).unwrap();
         game.confirm().unwrap();
         assert_eq!(game.status().defcon, 3, "no event");
     }
@@ -2363,9 +2363,9 @@ mod scoped_ops {
     fn ortega_clears_nicaragua_then_allows_one_coup_next_door_only() {
         let (map, cards, mut game) = played("events/ortega", "Ortega Elected in Nicaragua");
         assert_eq!(us(&game, &map, "Nicaragua"), 0);
-        assert!(matches!(game.begin(OperationKind::Influence), Err(GameError::OpsNotGranted { .. })));
+        assert!(matches!(game.begin(twilight_struggle::OperationKind::Influence), Err(GameError::OpsNotGranted { .. })));
         assert!(matches!(game.begin(OperationKind::Realign), Err(GameError::OpsNotGranted { .. })));
-        game.begin(OperationKind::Coup).unwrap();
+        game.begin(twilight_struggle::OperationKind::Coup).unwrap();
         let op = game.operation().unwrap();
         assert!(op.is_legal_target(&map, game.board(), id(&map, "Honduras")), "adjacent to Nicaragua");
         assert!(!op.is_legal_target(&map, game.board(), id(&map, "Mexico")), "not adjacent: dimmed");
@@ -2383,7 +2383,7 @@ mod scoped_ops {
         let (map, _, mut game) = played("events/tear-down-this-wall", "Tear Down this Wall");
         assert_eq!(us(&game, &map, "East Germany"), 3);
         assert!(!game.status().lasting.willy_brandt, "Tear Down this Wall cancels Willy Brandt");
-        assert!(matches!(game.begin(OperationKind::Influence), Err(GameError::OpsNotGranted { .. })));
+        assert!(matches!(game.begin(twilight_struggle::OperationKind::Influence), Err(GameError::OpsNotGranted { .. })));
         game.begin(OperationKind::Realign).unwrap();
         let err = game.roll(&map, id(&map, "Egypt"), &mut Dice::from_seed(1)).unwrap_err();
         assert!(matches!(err, GameError::Realign(RealignError::OutOfScope { .. })), "{err}");
@@ -2410,7 +2410,7 @@ mod scoped_ops {
         assert_eq!(us(&game, &map, "Brazil"), 2);
         assert_eq!(game.active(), Superpower::Us, "the card stays in play for its operation");
         assert!(game.ops_after_event().is_some());
-        assert!(matches!(game.begin(OperationKind::Influence), Err(GameError::OpsNotGranted { .. })));
+        assert!(matches!(game.begin(twilight_struggle::OperationKind::Influence), Err(GameError::OpsNotGranted { .. })));
         game.begin(OperationKind::Realign).unwrap();
         assert!(matches!(game.roll(&map, id(&map, "Egypt"), &mut Dice::from_seed(1)), Err(GameError::Realign(RealignError::OutOfScope { .. }))));
         game.roll(&map, id(&map, "Brazil"), &mut Dice::from_seed(1)).unwrap();
@@ -2422,7 +2422,7 @@ mod scoped_ops {
     #[test]
     fn che_allows_a_coup_in_a_non_battleground_only() {
         let (map, _, mut game) = played("events/che", "Che");
-        game.begin(OperationKind::Coup).unwrap();
+        game.begin(twilight_struggle::OperationKind::Coup).unwrap();
         let op = game.operation().unwrap();
         assert!(op.is_legal_target(&map, game.board(), id(&map, "Honduras")));
         assert!(!op.is_legal_target(&map, game.board(), id(&map, "Chile")), "a battleground");
@@ -2433,14 +2433,14 @@ mod scoped_ops {
     #[test]
     fn che_allows_a_second_coup_in_a_different_country_if_the_first_removed_us_influence() {
         let (map, cards, mut game) = played("events/che", "Che");
-        game.begin(OperationKind::Coup).unwrap();
+        game.begin(twilight_struggle::OperationKind::Coup).unwrap();
         game.roll(&map, id(&map, "Honduras"), &mut Dice::from_seed(seed_for(6))).unwrap();
         assert_eq!(us(&game, &map, "Honduras"), 0);
         game.confirm().unwrap();
         assert_eq!(game.active(), Superpower::Ussr, "the card isn't spent yet");
         let grant = game.ops_after_event().expect("a second coup is allowed");
         assert!(!grant.follow_up && grant.coup && !grant.influence && !grant.realign);
-        game.begin(OperationKind::Coup).unwrap();
+        game.begin(twilight_struggle::OperationKind::Coup).unwrap();
         let op = game.operation().unwrap();
         assert!(!op.is_legal_target(&map, game.board(), id(&map, "Honduras")), "a different country");
         assert!(op.is_legal_target(&map, game.board(), id(&map, "Guatemala")));
@@ -2453,7 +2453,7 @@ mod scoped_ops {
     #[test]
     fn che_gets_no_second_coup_when_the_first_removes_nothing() {
         let (map, _, mut game) = played("events/che", "Che");
-        game.begin(OperationKind::Coup).unwrap();
+        game.begin(twilight_struggle::OperationKind::Coup).unwrap();
         game.roll(&map, id(&map, "Honduras"), &mut Dice::from_seed(seed_for(1))).unwrap();
         assert_eq!(us(&game, &map, "Honduras"), 3, "1 + 3 ops doesn't beat 4");
         game.confirm().unwrap();
@@ -2464,7 +2464,7 @@ mod scoped_ops {
     #[test]
     fn che_second_coup_can_be_skipped_with_pass() {
         let (map, _, mut game) = played("events/che", "Che");
-        game.begin(OperationKind::Coup).unwrap();
+        game.begin(twilight_struggle::OperationKind::Coup).unwrap();
         game.roll(&map, id(&map, "Honduras"), &mut Dice::from_seed(seed_for(6))).unwrap();
         game.confirm().unwrap();
         game.skip_round();
@@ -2476,7 +2476,7 @@ mod scoped_ops {
         use twilight_struggle::Action;
         let (map, cards, game) = played("events/ortega", "Ortega Elected in Nicaragua");
         let mut game = game;
-        game.begin(OperationKind::Coup).unwrap();
+        game.begin(twilight_struggle::OperationKind::Coup).unwrap();
         let rolls: Vec<CountryId> = game.legal_actions(&map, &cards).into_iter().filter_map(|a| if let Action::Roll(c) = a { Some(c) } else { None }).collect();
         assert!(rolls.contains(&id(&map, "Honduras")) && rolls.contains(&id(&map, "Cuba")));
         assert!(!rolls.contains(&id(&map, "Mexico")));
@@ -3159,7 +3159,7 @@ mod contests {
         let grant = game.ops_after_event().expect("the sponsor may conduct operations");
         assert_eq!(grant.ops, Some(4));
         assert_eq!(game.ops_available(), 4, "a 2-ops card, worth 4 for this");
-        game.begin(OperationKind::Influence).unwrap();
+        game.begin(twilight_struggle::OperationKind::Influence).unwrap();
         assert_eq!(game.operation().unwrap().ops_total(), 4);
         game.place(&map, id(&map, "Poland")).unwrap();
         game.confirm().unwrap();
@@ -3316,7 +3316,7 @@ mod rounds {
         assert_eq!(game.active(), Superpower::Us);
         // The US plays its card; the USSR is trapped again.
         game.play_card(&cards, card(&cards, "Duck and Cover")).unwrap();
-        game.begin(OperationKind::Influence).unwrap();
+        game.begin(twilight_struggle::OperationKind::Influence).unwrap();
         game.confirm().unwrap();
         assert_eq!(game.active(), Superpower::Ussr);
         assert!(matches!(game.trap(), Some((_, Trap::Escape(c))) if c == vec![card(&cards, "Socialist Governments")]));
@@ -3333,7 +3333,7 @@ mod rounds {
         game.play_event(&map, &cards).unwrap();
         // Back round to the USSR: nothing to discard or score — skip.
         game.play_card(&cards, card(&cards, "Duck and Cover")).unwrap();
-        game.begin(OperationKind::Influence).unwrap();
+        game.begin(twilight_struggle::OperationKind::Influence).unwrap();
         game.confirm().unwrap();
         assert!(matches!(game.trap(), Some((_, Trap::Skip))));
         assert_eq!(game.legal_actions(&map, &cards), vec![Action::Pass]);
@@ -3428,7 +3428,7 @@ mod rounds {
         let (_, cards, mut game) = load("norad-active");
         // An ordinary round that leaves DEFCON at 3.
         game.play_card(&cards, card(&cards, "Socialist Governments")).unwrap();
-        game.begin(OperationKind::Influence).unwrap();
+        game.begin(twilight_struggle::OperationKind::Influence).unwrap();
         game.confirm().unwrap();
         assert_eq!(game.status().defcon, 3);
         assert!(!game.settlement_due());
@@ -3468,7 +3468,7 @@ mod rounds {
         let (map, cards, mut game) = load("cuban-missile-crisis-active");
         game.play_card(&cards, card(&cards, "Socialist Governments")).unwrap();
         // The AI is never offered the coup.
-        game.begin(OperationKind::Coup).unwrap();
+        game.begin(twilight_struggle::OperationKind::Coup).unwrap();
         game.roll(&map, id(&map, "Honduras"), &mut Dice::from_seed(1)).unwrap();
         assert_eq!(game.winner(), Some(Victory { side: Some(Superpower::Us), reason: VictoryReason::CubanMissileCrisis }));
     }
@@ -3478,7 +3478,7 @@ mod rounds {
         let (map, cards, mut game) = load("cuban-missile-crisis-active");
         game.play_card(&cards, card(&cards, "Socialist Governments")).unwrap();
         let legal = game.legal_actions(&map, &cards);
-        assert!(!legal.contains(&Action::Begin(OperationKind::Coup)));
+        assert!(!legal.contains(&Action::Begin(twilight_struggle::OperationKind::Coup)));
         assert!(legal.contains(&Action::Begin(OperationKind::Realign)));
     }
 
@@ -3492,7 +3492,7 @@ mod rounds {
         assert_eq!(game.status().effects.cuban_missile_crisis, None);
         // The USSR may coup freely now.
         game.play_card(&cards, card(&cards, "Socialist Governments")).unwrap();
-        game.begin(OperationKind::Coup).unwrap();
+        game.begin(twilight_struggle::OperationKind::Coup).unwrap();
         game.roll(&map, id(&map, "Honduras"), &mut Dice::from_seed(1)).unwrap();
         assert!(game.winner().is_none());
         // A second defuse has nothing to defuse.
@@ -3560,7 +3560,7 @@ mod salt {
     fn every_coup_roll_gets_minus_one_for_both_sides() {
         let (map, cards, mut game) = load("salt-active");
         game.play_card(&cards, cards.id_by_name("Socialist Governments").unwrap()).unwrap();
-        game.begin(OperationKind::Coup).unwrap();
+        game.begin(twilight_struggle::OperationKind::Coup).unwrap();
         let honduras = map.id_by_name("Honduras").unwrap();
         game.roll(&map, honduras, &mut Dice::from_seed(1)).unwrap();
         let twilight_struggle::Event::Coup(result) = &game.log().entries().iter().rev().find(|e| matches!(e.event, twilight_struggle::Event::Coup(_))).unwrap().event else { unreachable!() };
@@ -3771,7 +3771,7 @@ mod nested {
         assert!(!game.discards().contains(&id(&cards, "Marshall Plan")) && game.hand(Superpower::Ussr).is_empty());
         assert!(game.forced_event());
         assert_eq!(game.active(), Superpower::Us, "the turn hasn't ended");
-        assert!(game.begin(OperationKind::Influence).is_err());
+        assert!(game.begin(twilight_struggle::OperationKind::Influence).is_err());
         assert!(game.return_card().is_err());
         assert!(game.pass().is_err());
         assert!(!game.can_space());
@@ -3943,9 +3943,9 @@ mod swaps {
         assert!(game.hand(Superpower::Ussr).is_empty());
         assert!(game.return_card().is_err() && game.pass().is_err());
         let legal = game.legal_actions(&map, &cards);
-        assert!(legal.contains(&Action::Event) && legal.contains(&Action::Begin(OperationKind::Influence)));
+        assert!(legal.contains(&Action::Event) && legal.contains(&Action::Begin(twilight_struggle::OperationKind::Influence)));
         // Ops: Fidel is worth 2.
-        game.begin(OperationKind::Influence).unwrap();
+        game.begin(twilight_struggle::OperationKind::Influence).unwrap();
         game.confirm().unwrap();
         assert!(game.discards().contains(&fidel));
         assert!(game.discards().contains(&id(&cards, "Grain Sales to Soviets")));
@@ -3972,7 +3972,7 @@ mod swaps {
         assert_eq!(game.hand(Superpower::Ussr), &[id(&cards, "Fidel")]);
         assert_eq!(game.card_in_play(), Some(id(&cards, "Grain Sales to Soviets")));
         assert!(game.ops_after_event().is_some());
-        game.begin(OperationKind::Influence).unwrap();
+        game.begin(twilight_struggle::OperationKind::Influence).unwrap();
     }
 
     #[test]
@@ -3989,7 +3989,7 @@ mod swaps {
         open(&mut game, &map, &cards);
         game.choose_mode(&map, 0).unwrap();
         game.confirm().unwrap();
-        assert!(game.begin(OperationKind::Influence).is_err());
+        assert!(game.begin(twilight_struggle::OperationKind::Influence).is_err());
         game.play_event(&map, &cards).unwrap();
         assert_eq!(game.active(), Superpower::Ussr);
     }
@@ -4005,7 +4005,7 @@ mod swaps {
         assert_eq!(game.active(), Superpower::Ussr);
         assert_eq!(game.ops_side(), Superpower::Us);
         assert_eq!(game.decider(), Superpower::Us);
-        game.begin(OperationKind::Influence).unwrap();
+        game.begin(twilight_struggle::OperationKind::Influence).unwrap();
         assert_eq!(game.operation().unwrap().side(), Superpower::Us);
         game.confirm().unwrap();
         assert_eq!(game.active(), Superpower::Us, "the turn passes on as usual");
@@ -4018,7 +4018,7 @@ mod swaps {
         game.confirm().unwrap();
         assert_eq!(game.ops_side(), Superpower::Us);
         let legal = game.legal_actions(&map, &cards);
-        assert!(legal.contains(&Action::Begin(OperationKind::Coup)));
+        assert!(legal.contains(&Action::Begin(twilight_struggle::OperationKind::Coup)));
     }
 
     #[test]
@@ -4026,7 +4026,7 @@ mod swaps {
         let (map, cards, mut game) = start("grain-sales-played-by-ussr-empty-hand", "Grain Sales to Soviets");
         open(&mut game, &map, &cards);
         game.confirm().unwrap();
-        game.begin(OperationKind::Coup).unwrap();
+        game.begin(twilight_struggle::OperationKind::Coup).unwrap();
         game.roll(&map, map.id_by_name("Angola").unwrap(), &mut Dice::from_seed(1)).unwrap();
         assert_eq!(game.status().defcon, 1);
         assert_eq!(game.winner(), Some(twilight_struggle::game::Victory { side: Some(Superpower::Us), reason: twilight_struggle::game::VictoryReason::Defcon }));
@@ -4044,7 +4044,7 @@ mod swaps {
         assert_eq!(game.forced_how(), Some(PlayAs::Ops));
         assert!(game.play_event(&map, &cards).is_err());
         assert!(!game.legal_actions(&map, &cards).contains(&Action::Event));
-        game.begin(OperationKind::Influence).unwrap();
+        game.begin(twilight_struggle::OperationKind::Influence).unwrap();
         game.confirm().unwrap();
         assert!(game.discards().contains(&dac));
         assert_eq!(game.active(), Superpower::Us);
@@ -4054,7 +4054,7 @@ mod swaps {
     fn the_new_holder_must_play_missile_envy_for_ops() {
         let (map, cards, mut game) = start("missile-envy", "Missile Envy");
         open(&mut game, &map, &cards);
-        game.begin(OperationKind::Influence).unwrap();
+        game.begin(twilight_struggle::OperationKind::Influence).unwrap();
         game.confirm().unwrap();
         let (me, fidel) = (id(&cards, "Missile Envy"), id(&cards, "Fidel"));
         assert!(matches!(game.play_card(&cards, fidel), Err(GameError::Trap(_))));
@@ -4068,7 +4068,7 @@ mod swaps {
         game.return_card().unwrap();
         assert_eq!(game.status().forced_play, Some((Superpower::Us, 49)));
         game.play_card(&cards, me).unwrap();
-        game.begin(OperationKind::Influence).unwrap();
+        game.begin(twilight_struggle::OperationKind::Influence).unwrap();
         game.confirm().unwrap();
         assert_eq!(game.status().forced_play, None);
         assert!(game.discards().contains(&me));
@@ -4080,7 +4080,7 @@ mod swaps {
         open(&mut game, &map, &cards);
         assert_eq!(game.forced_how(), Some(PlayAs::Event));
         assert_eq!(game.legal_actions(&map, &cards), vec![Action::Event]);
-        assert!(game.begin(OperationKind::Influence).is_err());
+        assert!(game.begin(twilight_struggle::OperationKind::Influence).is_err());
         game.play_event(&map, &cards).unwrap();
     }
 
@@ -4184,14 +4184,14 @@ mod coups {
     #[test]
     fn influence_placement_is_never_restricted_by_defcon() {
         let (map, cards, mut game) = load("defcon-2-middle-east-closed");
-        open(&mut game, &cards, OperationKind::Influence);
+        open(&mut game, &cards, twilight_struggle::OperationKind::Influence);
         game.place(&map, id(&map, "Iran")).unwrap();
     }
 
     #[test]
     fn a_coup_adds_its_ops_to_the_coup_makers_military_ops_capped_at_five() {
         let (map, cards, mut game) = load("mil-ops-from-coup");
-        open(&mut game, &cards, OperationKind::Coup);
+        open(&mut game, &cards, twilight_struggle::OperationKind::Coup);
         game.roll(&map, id(&map, "Morocco"), &mut Dice::from_seed(1)).unwrap();
         assert_eq!(game.status().military_ops_ussr, 5, "4 + 2 ops, clamped to the track's 5");
         assert_eq!(game.status().military_ops_us, 1, "the other side's track is untouched");
@@ -4762,17 +4762,110 @@ mod headline {
     }
 
     #[test]
-    fn a_headline_is_its_event_only_so_an_ops_grant_is_not_offered() {
+    fn a_headline_event_that_grants_operations_lets_them_be_used() {
         let (map, cards, mut game) = load("ops-card-headlined");
         play_headlines(&map, &cards, &mut game, "ABM Treaty", "Panama Canal Returned");
+        assert_eq!(game.card_in_play(), Some(card(&cards, "ABM Treaty")), "the card waits for the operation it allowed");
+        assert_eq!(game.phase(), Phase::Headline);
+        assert_eq!(game.status().defcon, 4, "ABM Treaty's DEFCON +1 happened");
+        assert!(game.legal_actions(&map, &cards).contains(&Action::Pass));
+        assert!(game.legal_actions(&map, &cards).contains(&Action::Begin(twilight_struggle::OperationKind::Influence)));
+        game.pass().unwrap();
+        game.settle(&map, &cards, &mut Dice::from_seed(1));
         assert_eq!(game.card_in_play(), None);
         assert_eq!((game.phase(), game.status().action_round), (Phase::ActionRounds, 1));
-        assert_eq!(game.status().defcon, 4, "ABM Treaty's DEFCON +1 happened");
+    }
+
+    #[test]
+    fn a_headline_olympic_boycott_leaves_the_sponsor_a_four_ops_operation() {
+        let (map, cards, mut game) = load("olympics-headlined");
+        play_headlines(&map, &cards, &mut game, "Fidel", "Olympic Games");
+        // The USSR, as the sponsor's opponent, answers in the headline phase.
+        assert_eq!((game.phase(), game.decider()), (Phase::Headline, Superpower::Ussr));
+        game.choose_mode(&map, 1).unwrap();
+        game.confirm().unwrap();
+        assert_eq!(game.status().defcon, 3, "the boycott lowers DEFCON");
+        assert_eq!(game.card_in_play(), Some(card(&cards, "Olympic Games")), "the card waits for the operations it granted");
+        assert_eq!((game.phase(), game.ops_side(), game.decider()), (Phase::Headline, Superpower::Us, Superpower::Us));
+        let legal = game.legal_actions(&map, &cards);
+        assert!(legal.contains(&Action::Begin(twilight_struggle::OperationKind::Influence)) && legal.contains(&Action::Pass), "{legal:?}");
+        assert!(!legal.contains(&Action::Event), "the event is already played");
+
+        game.begin(twilight_struggle::OperationKind::Influence).unwrap();
+        let Some(op) = game.operation() else { panic!("an operation is open") };
+        assert_eq!(op.ops_total(), 4, "as if a 4-ops card");
+        game.confirm().unwrap();
+        assert_eq!(game.card_in_play(), None);
+        end_turn(&mut game, &map, &cards);
+        assert_eq!((game.phase(), game.status().action_round), (Phase::ActionRounds, 1), "the USSR's Fidel was played, then the round began");
+    }
+
+    #[test]
+    fn a_headline_olympic_boycott_can_be_passed_up() {
+        let (map, cards, mut game) = load("olympics-headlined");
+        play_headlines(&map, &cards, &mut game, "Fidel", "Olympic Games");
+        game.choose_mode(&map, 1).unwrap();
+        game.confirm().unwrap();
+        game.pass().unwrap();
+        end_turn(&mut game, &map, &cards);
+        assert_eq!((game.card_in_play(), game.phase()), (None, Phase::ActionRounds));
+    }
+
+    #[test]
+    fn a_headline_still_cannot_be_spent_for_operations_or_the_rest_of_the_phase() {
+        let (map, cards, mut game) = load("olympics-headlined");
+        play_headlines(&map, &cards, &mut game, "Fidel", "Olympic Games");
+        // Mid-event, nothing but the event's own choice is allowed.
+        assert!(matches!(game.begin(twilight_struggle::OperationKind::Influence), Err(GameError::Trap(_)) | Err(GameError::NoCard)));
+        assert!(matches!(game.pass(), Err(_)));
+        assert!(game.play_card(&cards, card(&cards, "Containment")).is_err());
+    }
+
+    #[test]
+    fn cia_created_headlined_by_the_ussr_gives_the_us_its_operation() {
+        let (map, cards, mut game) = load("cia-created-headlined-by-ussr");
+        play_headlines(&map, &cards, &mut game, "CIA Created", "Panama Canal Returned");
+        assert_eq!(game.card_in_play(), Some(card(&cards, "CIA Created")));
+        assert_eq!((game.phase(), game.active(), game.ops_side(), game.decider()), (Phase::Headline, Superpower::Ussr, Superpower::Us, Superpower::Us));
+        let legal = game.legal_actions(&map, &cards);
+        assert!(legal.contains(&Action::Begin(twilight_struggle::OperationKind::Coup)) && legal.contains(&Action::Pass), "{legal:?}");
+        game.begin(twilight_struggle::OperationKind::Influence).unwrap();
+        let Some(op) = game.operation() else { panic!("an operation is open") };
+        assert_eq!(op.ops_total(), 1);
+        assert_eq!(op.side(), Superpower::Us, "the US conducts it, though the USSR headlined the card");
+        game.confirm().unwrap();
+        assert!(game.removed_from_game().contains(&card(&cards, "CIA Created")), "CIA Created is removed after its event");
+        end_turn(&mut game, &map, &cards);
+        assert_eq!((game.phase(), game.status().action_round), (Phase::ActionRounds, 1));
+    }
+
+    #[test]
+    fn an_opponent_playing_cia_created_or_lone_gunman_still_gives_its_beneficiary_the_operation() {
+        for (state, name, player, beneficiary) in [
+            ("cia-created-played-by-ussr", "CIA Created", Superpower::Ussr, Superpower::Us),
+            ("lone-gunman-played-by-us", "“Lone Gunman”", Superpower::Us, Superpower::Ussr),
+        ] {
+            let (map, cards, lib) = fixtures();
+            let (scenario, _) = lib.load(&map, &cards, &format!("events/{state}")).unwrap();
+            let mut game = Game::from_scenario(&scenario);
+            game.play_card(&cards, card(&cards, name)).unwrap();
+            game.play_event(&map, &cards).unwrap();
+            assert_eq!(game.active(), player, "{state}: the player is still the phasing side");
+            assert_eq!((game.ops_side(), game.decider()), (beneficiary, beneficiary), "{state}");
+            let grant = game.ops_after_event().unwrap_or_else(|| panic!("{state}: the ops are granted"));
+            assert!(grant.influence && grant.realign && grant.coup, "{state}: any operation");
+            game.begin(twilight_struggle::OperationKind::Influence).unwrap();
+            let Some(op) = game.operation() else { panic!("{state}: open") };
+            assert_eq!((op.side(), op.ops_total()), (beneficiary, 1), "{state}");
+            game.confirm().unwrap();
+            assert!(game.removed_from_game().contains(&card(&cards, name)), "{state}");
+            assert_eq!(game.active(), player.opponent(), "{state}: the turn passes on");
+        }
     }
 
     #[test]
     fn the_ai_chooses_headlines_and_plays_on() {
-        for state in ["ussr-higher-first", "us-higher-first", "defectors-cancels", "man-in-earth-orbit", "us-has-no-cards", "ops-card-headlined"] {
+        for state in ["ussr-higher-first", "us-higher-first", "defectors-cancels", "man-in-earth-orbit", "us-has-no-cards", "ops-card-headlined", "olympics-headlined", "cia-created-headlined-by-ussr"] {
             for seed in 0..10 {
                 let (map, cards, mut game) = load(state);
                 let mut ai = RandomAi::from_seed(seed);
@@ -4813,7 +4906,7 @@ mod dual_use {
 
     /// Spends the card in play on a one-point influence placement in Poland.
     fn spend_ops(game: &mut Game, map: &WorldMap) {
-        game.begin(OperationKind::Influence).unwrap();
+        game.begin(twilight_struggle::OperationKind::Influence).unwrap();
         game.place(map, country(map, "Poland")).unwrap();
         game.confirm().unwrap();
     }
@@ -4843,7 +4936,7 @@ mod dual_use {
     fn the_event_first_leaves_the_operations_to_follow() {
         let (map, cards, mut game) = load("ussr-plays-us-cards");
         play(&mut game, &cards, "Duck and Cover");
-        assert!(game.legal_actions(&map, &cards).contains(&Action::Event) && game.legal_actions(&map, &cards).contains(&Action::Begin(OperationKind::Coup)));
+        assert!(game.legal_actions(&map, &cards).contains(&Action::Event) && game.legal_actions(&map, &cards).contains(&Action::Begin(twilight_struggle::OperationKind::Coup)));
         game.play_event_with(&map, &cards, &mut Dice::from_seed(1)).unwrap();
         assert_eq!((game.status().defcon, game.active()), (3, Superpower::Ussr), "the turn isn't over");
         assert_eq!(game.ops_after_event(), Some(OpsGrant::ANY));
@@ -4879,7 +4972,7 @@ mod dual_use {
         let (map, cards, mut game) = load("us-plays-blocked-ussr-card");
         play(&mut game, &cards, "Arab-Israeli War");
         assert!(!game.legal_actions(&map, &cards).contains(&Action::Event));
-        game.begin(OperationKind::Influence).unwrap();
+        game.begin(twilight_struggle::OperationKind::Influence).unwrap();
         game.place(&map, country(&map, "Canada")).unwrap();
         game.confirm().unwrap();
         assert_eq!((game.active(), game.card_in_play()), (Superpower::Ussr, None), "Camp David Accords prevents it");
@@ -4960,7 +5053,7 @@ mod last_cards {
         });
         game.choose_mode(map, slot.unwrap_or_else(|| panic!("{partner} isn't on offer"))).unwrap();
         game.confirm().unwrap();
-        game.begin(OperationKind::Influence).unwrap();
+        game.begin(twilight_struggle::OperationKind::Influence).unwrap();
         game.place(map, map.id_by_name(place_in).unwrap()).unwrap();
         game.confirm().unwrap();
     }
@@ -4978,7 +5071,7 @@ mod last_cards {
         // Fidel is now in play for its operations only.
         assert_eq!((game.card_in_play(), game.forced_how()), (Some(card(&cards, "Fidel")), Some(PlayAs::Ops)));
         assert!(matches!(game.play_event_with(&map, &cards, &mut Dice::from_seed(1)), Err(GameError::Trap(_))), "its event is cancelled");
-        game.begin(OperationKind::Coup).unwrap();
+        game.begin(twilight_struggle::OperationKind::Coup).unwrap();
         assert_eq!(game.operation().unwrap().ops_total(), 2, "Fidel's own 2 operations");
         game.confirm().unwrap();
         assert_eq!(game.board().influence(map.id_by_name("Cuba").unwrap(), Superpower::Us), 2, "Fidel never took Cuba");
@@ -4993,7 +5086,7 @@ mod last_cards {
         assert!(!game.legal_actions(&map, &cards).contains(&Action::Event));
         assert!(matches!(game.play_event_with(&map, &cards, &mut Dice::from_seed(1)), Err(GameError::Trap(_))));
         // It can still be spent for its own 1 operation.
-        game.begin(OperationKind::Influence).unwrap();
+        game.begin(twilight_struggle::OperationKind::Influence).unwrap();
         assert_eq!(game.operation().unwrap().ops_total(), 1);
     }
 
@@ -5017,7 +5110,7 @@ mod last_cards {
         // Without it: the USSR collects 3 VP at the end of the US's round.
         let (map, cards, mut game) = load("un-cancels-we-will-bury-you");
         play(&mut game, &cards, "Containment");
-        game.begin(OperationKind::Influence).unwrap();
+        game.begin(twilight_struggle::OperationKind::Influence).unwrap();
         game.place(&map, map.id_by_name("Canada").unwrap()).unwrap();
         game.confirm().unwrap();
         assert_eq!(game.status().vp, -3);
