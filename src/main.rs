@@ -12,7 +12,7 @@ use twilight_struggle::render::{
 use twilight_struggle::{
     ai, CardCatalog, CardFound, CardId, ColorMode, Dice, EventOutcome, Found, Game, GameError, GameStatus, MapLayout, Operation,
     OperationKind, Region, RollOutcome, Scenario, StateLibrary, Superpower, WorldMap, CHINA_CARD, DEFCON_RANGE,
-    MAX_HAND_SIZE, TURN_RANGE,
+    MAX_HAND_SIZE, TURN_RANGE, Autosaver, SaveError, SaveGame, SaveStore, Settings,
 };
 
 use completion::TsHelper;
@@ -34,7 +34,7 @@ const COMMANDS: &[&str] = &[
     "map", "world", "worldmap", "wm", "region", "country", "set", "add", "remove", "clear", "blank", "load", "save", "states", "play",
     "influence", "realign", "coup", "event", "place", "roll", "undo", "confirm", "cancel", "abandon", "status", "pass", "ai", "hand",
     "card", "log", "history", "export", "seed", "width", "color", "debug", "vp", "defcon", "turn", "ar", "active", "china", "give",
-    "discard", "exile", "help", "+", "-", "take", "mode", "space", "spacerace", "milops", "tracks", "track", "escape", "defuse", "piles", "headline", "new", "splash",
+    "discard", "exile", "savegame", "loadgame", "saves", "help", "+", "-", "take", "mode", "space", "spacerace", "milops", "tracks", "track", "escape", "defuse", "piles", "headline", "new", "splash",
 ];
 
 struct Session {
@@ -85,6 +85,14 @@ struct Session {
     /// `states` read and write — see [`StateLibrary`]'s own doc for the
     /// file format and why it's read from disk rather than embedded.
     states: StateLibrary,
+    /// Where saved games live (`None` when no data directory could be found).
+    saves: Option<SaveStore>,
+    /// Rewrites the autosave at each resting point; `None` in one-shot mode, off a terminal,
+    /// with `--state` or `--no-autosave`, so scripts and tests never touch the player's save.
+    autosave: Option<Autosaver>,
+    /// Whether the game is a real one worth autosaving: set by a new game or a restore, cleared
+    /// by loading the demo scenario or a test state.
+    tracking: bool,
 }
 
 /// Everything the command line can ask for, parsed by [`parse_args`].
@@ -101,6 +109,8 @@ struct LaunchOptions {
     repl: bool,
     ai_kind: ai::AiKind,
     ai_fast: bool,
+    /// `--no-autosave`: don't write (or resume from) the autosave.
+    no_autosave: bool,
     command_words: Vec<String>,
 }
 
@@ -117,6 +127,7 @@ fn parse_args(args: impl Iterator<Item = String>) -> LaunchOptions {
         repl: false,
         ai_kind: ai::AiKind::default(),
         ai_fast: false,
+        no_autosave: false,
         command_words: Vec::new(),
     };
     while let Some(arg) = args.next() {
@@ -146,6 +157,7 @@ fn parse_args(args: impl Iterator<Item = String>) -> LaunchOptions {
             "--new" => o.new_game = true,
             "--repl" => o.repl = true,
             "--fast" => o.ai_fast = true,
+            "--no-autosave" => o.no_autosave = true,
             "--ai-kind" => match args.next().as_deref().and_then(ai::AiKind::parse) {
                 Some(kind) => o.ai_kind = kind,
                 None => eprintln!("--ai-kind takes search, heuristic or random"),
@@ -209,7 +221,29 @@ fn main() {
         ai_fast: opts.ai_fast,
         debug: false,
         states: StateLibrary::standard(),
+        saves: SaveStore::standard(),
+        autosave: None,
+        tracking: false,
     };
+
+    let tty = io::stdin().is_terminal() && io::stdout().is_terminal();
+    if tty && !one_shot && opts.state_ref.is_none() && !opts.no_autosave {
+        session.autosave = session.saves.clone().map(Autosaver::new);
+    }
+    // Plain `cargo run` picks up where the last game left off: the menu offers "Resume game".
+    let mut resumable = false;
+    if session.autosave.is_some()
+        && tty
+        && !opts.repl
+        && !opts.new_game
+        && opts.play.is_none()
+        && let Some(store) = session.saves.clone().filter(SaveStore::has_autosave)
+    {
+        match store.load_autosave().and_then(|save| restore_into(&mut session, save)) {
+            Ok(()) => resumable = true,
+            Err(e) => eprintln!("couldn't resume the autosaved game ({e}); leaving it alone"),
+        }
+    }
 
     let mut started = false;
     if opts.new_game || opts.play.is_some() {
@@ -235,9 +269,8 @@ fn main() {
         states: StateLibrary::standard(),
     };
     // The splash menu and the map need a real terminal; piped input gets the REPL.
-    let tty = io::stdin().is_terminal() && io::stdout().is_terminal();
     if tty && !opts.repl {
-        run_menu_loop(&mut session, started, helper);
+        run_menu_loop(&mut session, started, resumable, helper);
     } else {
         run_repl(&mut session, helper);
     }
@@ -251,6 +284,7 @@ fn start_new_game(session: &mut Session, human: Option<splash::SideChoice>) {
     session.game = Game::new_game(&session.map, &session.cards, &mut session.dice);
     session.game.record_note("new game");
     session.debug = false;
+    begin_tracking(session);
     let human = match human {
         Some(SideChoice::Us) => Some(Superpower::Us),
         Some(SideChoice::Ussr) => Some(Superpower::Ussr),
@@ -262,16 +296,162 @@ fn start_new_game(session: &mut Session, human: Option<splash::SideChoice>) {
     }
 }
 
+/// The session settings a save carries.
+fn save_settings(session: &Session) -> Settings {
+    Settings { ai_side: session.ai_side, ai_kind: session.ai_kind, ai_fast: session.ai_fast, debug: session.debug }
+}
+
+/// From here on the game in the session is a real one, so it is autosaved.
+fn begin_tracking(session: &mut Session) {
+    session.tracking = true;
+    if let Some(auto) = session.autosave.as_mut() {
+        auto.reset();
+    }
+}
+
+/// Replaces the session's game, dice and AI settings with a saved game.
+fn restore_into(session: &mut Session, save: SaveGame) -> Result<(), SaveError> {
+    let restored = save.restore(&session.map, &session.cards)?;
+    session.game = restored.game;
+    session.dice = restored.dice;
+    session.ai_side = restored.settings.ai_side;
+    session.ai_fast = restored.settings.ai_fast;
+    session.debug = restored.settings.debug;
+    if restored.settings.ai_kind != session.ai_kind {
+        session.ai_kind = restored.settings.ai_kind;
+        session.ai = session.ai_kind.build(None);
+    }
+    begin_tracking(session);
+    Ok(())
+}
+
+fn load_named(session: &mut Session, name: &str) -> Result<(), SaveError> {
+    let store = session.saves.clone().ok_or_else(|| SaveError::NotFound(name.to_string()))?;
+    let save = if name == "autosave" { store.load_autosave()? } else { store.load(name)? };
+    restore_into(session, save)
+}
+
+/// Writes the autosave if the game has reached a resting point it hasn't saved yet (the REPL's
+/// counterpart of the map's [`MapSaves`]).
+fn autosave_tick(session: &mut Session) {
+    if !session.tracking || session.debug {
+        return;
+    }
+    let settings = save_settings(session);
+    if let Some(auto) = session.autosave.as_mut()
+        && let Err(e) = auto.tick(&session.map, &session.cards, &session.game, &session.dice, settings)
+    {
+        println!("autosave failed: {e}");
+    }
+}
+
+/// Names the current game and saves it under `name` (or a turn-stamped default).
+fn save_game_named(session: &Session, name: Option<&str>) -> Result<String, SaveError> {
+    let store = session.saves.as_ref().ok_or_else(|| SaveError::NotFound("a save directory".to_string()))?;
+    let save = SaveGame::capture(&session.map, &session.cards, &session.game, &session.dice, save_settings(session)).ok_or(SaveError::NotResting)?;
+    let name = name.map(str::to_string).unwrap_or_else(|| SaveGame::default_name(&session.game));
+    store.save(&name, &save)?;
+    Ok(name)
+}
+
+/// The map's view of the save system: autosave after each redraw, `S` for a named save.
+struct MapSaves<'a> {
+    map: &'a WorldMap,
+    cards: &'a CardCatalog,
+    store: Option<&'a SaveStore>,
+    autosave: Option<&'a mut Autosaver>,
+    tracking: bool,
+    ai_side: Option<Superpower>,
+    ai_kind: ai::AiKind,
+    debug: bool,
+}
+
+impl MapSaves<'_> {
+    fn settings(&self, ai_fast: bool) -> Settings {
+        Settings { ai_side: self.ai_side, ai_kind: self.ai_kind, ai_fast, debug: self.debug }
+    }
+}
+
+impl interactive::SaveHook for MapSaves<'_> {
+    fn autosave(&mut self, game: &Game, dice: &Dice, ai_fast: bool) -> Option<String> {
+        if !self.tracking || self.debug {
+            return None;
+        }
+        let settings = self.settings(ai_fast);
+        let auto = self.autosave.as_deref_mut()?;
+        auto.tick(self.map, self.cards, game, dice, settings).err().map(|e| e.to_string())
+    }
+
+    fn save_named(&mut self, game: &Game, dice: &Dice, ai_fast: bool) -> String {
+        let Some(store) = self.store else { return "no save directory is available".to_string() };
+        let Some(save) = SaveGame::capture(self.map, self.cards, game, dice, self.settings(ai_fast)) else {
+            return SaveError::NotResting.to_string();
+        };
+        let name = SaveGame::default_name(game);
+        match store.save(&name, &save) {
+            Ok(()) => format!("saved as {name}"),
+            Err(e) => format!("save failed: {e}"),
+        }
+    }
+}
+
+/// `savegame [name]`, `loadgame [name]`, `saves`.
+fn run_savegame_command(session: &mut Session, words: &[&str]) {
+    match words[0] {
+        "savegame" => match save_game_named(session, words.get(1).copied()) {
+            Ok(name) => println!("saved as {name}"),
+            Err(e) => println!("{e}"),
+        },
+        "loadgame" => {
+            if let Some(op) = session.game.operation() {
+                println!("finish or cancel the {} first ({} of {} ops left)", op.verb(), op.remaining(), op.ops_total());
+                return;
+            }
+            let name = words.get(1).copied().unwrap_or("autosave");
+            match load_named(session, name) {
+                Ok(()) => println!("loaded {name}"),
+                Err(e) => println!("{e}"),
+            }
+        }
+        _ => match &session.saves {
+            Some(store) => {
+                let list = store.list();
+                if list.is_empty() {
+                    println!("no saved games yet (savegame [name] makes one)");
+                }
+                for info in list {
+                    println!("  {}", info.name);
+                }
+                if store.has_autosave() {
+                    println!("  (autosave — `loadgame` with no name loads it)");
+                }
+            }
+            None => println!("no save directory is available"),
+        },
+    }
+}
+
 /// The start menu, looping: quitting the map comes back here (with "Resume
 /// game" once a game exists); "Command console" hands over to the REPL.
-fn run_menu_loop(session: &mut Session, mut started: bool, helper: TsHelper) {
+fn run_menu_loop(session: &mut Session, mut started: bool, resumable: bool, helper: TsHelper) {
     use splash::MenuChoice;
     if started {
         run_map(session);
     }
+    started |= resumable;
     loop {
-        match splash::run(session.color, started) {
+        let saves = session.saves.as_ref().map(|s| s.list().into_iter().map(|i| i.name).collect()).unwrap_or_default();
+        match splash::run(session.color, started, saves) {
             Ok(MenuChoice::Resume) => run_map(session),
+            Ok(MenuChoice::Load(name)) => {
+                match load_named(session, &name) {
+                    Ok(()) => {
+                        started = true;
+                        run_map(session);
+                    }
+                    Err(e) => eprintln!("couldn't load {name}: {e}"),
+                }
+            }
             Ok(MenuChoice::NewGame { human }) => {
                 // The menu's choice is the whole answer: two players clears any `--ai`.
                 session.ai_side = None;
@@ -296,6 +476,7 @@ fn run_menu_loop(session: &mut Session, mut started: bool, helper: TsHelper) {
 fn run_repl(session: &mut Session, helper: TsHelper) {
     println!("Twilight Struggle — terminal map. Type `help` for commands, `wm` for the map, `quit` to exit.");
     maybe_run_ai_turn(session);
+    autosave_tick(session);
 
     let mut rl = Editor::<TsHelper, DefaultHistory>::new().expect("rustyline editor should initialize");
     rl.set_helper(Some(helper));
@@ -313,6 +494,7 @@ fn run_repl(session: &mut Session, helper: TsHelper) {
                 }
                 run_command(session, line);
                 maybe_run_ai_turn(session);
+                autosave_tick(session);
             }
             // Before rustyline, Ctrl-C had no handler at all and fell
             // through to the terminal's own default SIGINT behaviour,
@@ -337,6 +519,16 @@ fn run_map(session: &mut Session) {
     // now — i/a/o/p/c/X all stay on screen — so there's nothing
     // left to report on return but the one state the next
     // prompt won't show on its own: a session left open.
+    let mut saves = MapSaves {
+        map: &session.map,
+        cards: &session.cards,
+        store: session.saves.as_ref(),
+        autosave: session.autosave.as_mut(),
+        tracking: session.tracking,
+        ai_side: session.ai_side,
+        ai_kind: session.ai_kind,
+        debug: session.debug,
+    };
     match interactive::run(
         &session.map,
         &session.layout,
@@ -347,6 +539,7 @@ fn run_map(session: &mut Session) {
         session.ai_side,
         session.ai.as_mut(),
         &mut session.ai_fast,
+        &mut saves,
     ) {
         Ok(()) => {
             if let Some(op) = session.game.operation() {
@@ -793,6 +986,7 @@ fn run_command(session: &mut Session, line: &str) {
             session.game = Game::new_game(&session.map, &session.cards, &mut session.dice);
             session.debug = false;
             session.game.record_note("new game");
+            begin_tracking(session);
             println!("new game: the USSR places 6 influence in Eastern Europe, then the US 7 in Western Europe");
         }
         "load" => match words.get(1) {
@@ -800,6 +994,7 @@ fn run_command(session: &mut Session, line: &str) {
                 let scenario = Scenario::demo(&session.map, &session.cards).expect("demo scenario should be valid");
                 session.game = Game::from_scenario(&scenario);
                 session.game.record_note("loaded the demo scenario");
+                session.tracking = false;
                 println!("loaded demo scenario");
             }
             Some(reference) => {
@@ -811,6 +1006,7 @@ fn run_command(session: &mut Session, line: &str) {
             }
             None => println!("usage: load demo | <file>/<name>"),
         },
+        "savegame" | "loadgame" | "saves" => run_savegame_command(session, &words),
         "play" => run_play_command(session, &words),
         "influence" => run_begin_command(session, OperationKind::Influence, &words),
         "realign" => run_begin_command(session, OperationKind::Realign, &words),
@@ -2076,6 +2272,10 @@ Commands:
   exile <card>             move a card to the removed-from-game pile
   blank                    reset to an empty board, default status, and
                           empty hands — a base to build a state from
+  savegame [name]          save the whole game (history included) between
+                          actions; the default name is turn/round-stamped
+  loadgame [name]          load a saved game; with no name, the autosave
+  saves                    list saved games
   states [file]            list named test states (data/states/), with
                           their own descriptions
   save <file>/<name> [description...]

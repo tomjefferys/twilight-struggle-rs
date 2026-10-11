@@ -146,7 +146,7 @@ pub fn eligible_targets(map: &WorldMap, card: CardId) -> Vec<CountryId> {
 
 /// What lowers the die roll: each enemy-controlled neighbour of the
 /// target, plus the target itself where the card says so.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct WarModifier {
     pub neighbours: Vec<CountryId>,
     pub target_itself: bool,
@@ -176,7 +176,7 @@ pub fn odds(map: &WorldMap, board: &Board, card: CardId, target: CountryId, bene
 }
 
 /// One resolved war.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct WarResult {
     pub card: CardId,
     pub side: Superpower,

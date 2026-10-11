@@ -26,7 +26,7 @@ impl Influence {
 /// The mutable game state: how much influence each superpower has in each
 /// country. Kept separate from [`WorldMap`] so it stays cheap to clone
 /// (for undo/AI lookahead) and never needs to duplicate immutable map data.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Board {
     influence: Vec<Influence>,
 }

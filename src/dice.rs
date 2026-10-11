@@ -18,6 +18,11 @@ impl Dice {
         Dice { state: seed }
     }
 
+    /// The generator's whole state, so a saved game can carry on the same sequence of rolls.
+    pub fn state(&self) -> u64 {
+        self.state
+    }
+
     /// A die seeded from the system clock, for real play.
     pub fn from_entropy() -> Self {
         let nanos = std::time::SystemTime::now()

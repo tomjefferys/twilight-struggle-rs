@@ -23,9 +23,11 @@ pub enum SideChoice {
 }
 
 /// What the menu resolved to.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum MenuChoice {
     Resume,
+    /// A named save to load.
+    Load(String),
     /// `human` is `None` for two players at one keyboard.
     NewGame { human: Option<SideChoice> },
     Repl,
@@ -36,7 +38,11 @@ pub enum MenuChoice {
 enum Page {
     Main,
     ChooseSide,
+    LoadList,
 }
+
+/// The most saved games the load page lists (the newest).
+const MAX_LISTED_SAVES: usize = 8;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Entry {
@@ -46,6 +52,9 @@ enum Entry {
     Repl,
     Quit,
     Side(SideChoice),
+    LoadPage,
+    /// The n-th saved game of `Menu::saves`.
+    Save(usize),
     Back,
 }
 
@@ -60,6 +69,8 @@ impl Entry {
             Entry::Side(SideChoice::Us) => "Play the USA",
             Entry::Side(SideChoice::Ussr) => "Play the USSR",
             Entry::Side(SideChoice::Random) => "Random side",
+            Entry::LoadPage => "Load saved game",
+            Entry::Save(_) => "",
             Entry::Back => "Back",
         }
     }
@@ -69,11 +80,19 @@ pub struct Menu {
     page: Page,
     selected: usize,
     can_resume: bool,
+    /// Names of saved games, newest first.
+    saves: Vec<String>,
 }
 
 impl Menu {
     pub fn new(can_resume: bool) -> Self {
-        Menu { page: Page::Main, selected: 0, can_resume }
+        Menu { page: Page::Main, selected: 0, can_resume, saves: Vec::new() }
+    }
+
+    /// Offers "Load saved game" with these saves (newest first).
+    pub fn with_saves(mut self, saves: Vec<String>) -> Self {
+        self.saves = saves;
+        self
     }
 
     fn entries(&self) -> Vec<Entry> {
@@ -83,7 +102,16 @@ impl Menu {
                 if self.can_resume {
                     v.push(Entry::Resume);
                 }
-                v.extend([Entry::OnePlayer, Entry::TwoPlayers, Entry::Repl, Entry::Quit]);
+                v.extend([Entry::OnePlayer, Entry::TwoPlayers]);
+                if !self.saves.is_empty() {
+                    v.push(Entry::LoadPage);
+                }
+                v.extend([Entry::Repl, Entry::Quit]);
+                v
+            }
+            Page::LoadList => {
+                let mut v: Vec<Entry> = (0..self.saves.len().min(MAX_LISTED_SAVES)).map(Entry::Save).collect();
+                v.push(Entry::Back);
                 v
             }
             Page::ChooseSide => vec![Entry::Side(SideChoice::Us), Entry::Side(SideChoice::Ussr), Entry::Side(SideChoice::Random), Entry::Back],
@@ -102,6 +130,12 @@ impl Menu {
             Entry::Repl => Some(MenuChoice::Repl),
             Entry::Quit => Some(MenuChoice::Quit),
             Entry::Side(side) => Some(MenuChoice::NewGame { human: Some(side) }),
+            Entry::LoadPage => {
+                self.page = Page::LoadList;
+                self.selected = 0;
+                None
+            }
+            Entry::Save(i) => Some(MenuChoice::Load(self.saves[i].clone())),
             Entry::Back => {
                 self.page = Page::Main;
                 self.selected = 0;
@@ -119,7 +153,7 @@ impl Menu {
             KeyCode::Down | KeyCode::Tab => self.selected = (self.selected + 1) % n,
             KeyCode::Enter | KeyCode::Char(' ') => return self.activate(entries[self.selected]),
             KeyCode::Esc | KeyCode::Backspace => {
-                if self.page == Page::ChooseSide {
+                if self.page != Page::Main {
                     self.page = Page::Main;
                     self.selected = 0;
                 }
@@ -137,10 +171,18 @@ impl Menu {
         None
     }
 
+    fn label(&self, entry: Entry) -> String {
+        match entry {
+            Entry::Save(i) => self.saves[i].clone(),
+            other => other.label().to_string(),
+        }
+    }
+
     pub fn view(&self) -> SplashMenu {
         let title = match self.page {
             Page::Main => "Main menu",
             Page::ChooseSide => "Choose your side",
+            Page::LoadList => "Load saved game",
         };
         SplashMenu {
             title: title.to_string(),
@@ -148,7 +190,7 @@ impl Menu {
                 .entries()
                 .iter()
                 .enumerate()
-                .map(|(i, e)| SplashItem { label: format!("{}  {}", i + 1, e.label()), enabled: true })
+                .map(|(i, e)| SplashItem { label: format!("{}  {}", i + 1, self.label(*e)), enabled: true })
                 .collect(),
             selected: self.selected,
         }
@@ -172,10 +214,11 @@ fn draw(menu: &Menu, color: ColorMode) -> io::Result<()> {
     out.flush()
 }
 
-/// Shows the menu until a choice is made. `can_resume` adds "Resume game".
-pub fn run(color: ColorMode, can_resume: bool) -> io::Result<MenuChoice> {
+/// Shows the menu until a choice is made. `can_resume` adds "Resume game", and a non-empty
+/// `saves` (newest first) adds "Load saved game".
+pub fn run(color: ColorMode, can_resume: bool, saves: Vec<String>) -> io::Result<MenuChoice> {
     let _guard = TerminalGuard::enter()?;
-    let mut menu = Menu::new(can_resume);
+    let mut menu = Menu::new(can_resume).with_saves(saves);
     draw(&menu, color)?;
     loop {
         match event::read()? {
@@ -223,6 +266,20 @@ mod tests {
         m.key(KeyCode::Enter);
         m.key(KeyCode::Down);
         assert_eq!(m.key(KeyCode::Enter), Some(MenuChoice::NewGame { human: Some(SideChoice::Ussr) }));
+    }
+
+    #[test]
+    fn saved_games_are_listed_on_their_own_page() {
+        assert!(!Menu::new(false).entries().contains(&Entry::LoadPage));
+        let mut m = Menu::new(false).with_saves(vec!["a".into(), "b".into()]);
+        assert_eq!(m.key(KeyCode::Char('3')), None);
+        assert_eq!(m.page, Page::LoadList);
+        assert_eq!(m.view().items.len(), 3);
+        m.key(KeyCode::Esc);
+        assert_eq!(m.page, Page::Main);
+        m.key(KeyCode::Char('3'));
+        m.key(KeyCode::Down);
+        assert_eq!(m.key(KeyCode::Enter), Some(MenuChoice::Load("b".into())));
     }
 
     #[test]

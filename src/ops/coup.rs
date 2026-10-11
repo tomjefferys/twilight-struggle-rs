@@ -42,7 +42,7 @@ pub fn coup_target_number(map: &WorldMap, id: CountryId) -> u8 {
 
 /// One resolved (or would-be) coup attempt: the die, the ops added to it,
 /// and what actually happened on the board.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct CoupResult {
     pub target: CountryId,
     pub die: u8,

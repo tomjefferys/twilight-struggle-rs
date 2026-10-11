@@ -40,7 +40,7 @@ use crate::ongoing::{bonus_membership, bonus_ops, LastingEffects, OpsBonus, Turn
 
 /// One side's die-roll modifiers for one country, itemised rather than
 /// summed, so the UI can explain the number instead of just showing it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Modifiers {
     /// +1 for each adjacent country this side controls. The target
     /// itself never counts, however it's controlled.
@@ -156,7 +156,7 @@ pub fn odds_with(map: &WorldMap, board: &Board, id: CountryId, side: Superpower,
 
 /// One resolved roll, kept whole for the session log and for the
 /// interactive footer to display.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct RollResult {
     pub target: CountryId,
     pub acting_die: u8,

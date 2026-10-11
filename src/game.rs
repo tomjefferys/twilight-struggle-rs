@@ -65,7 +65,7 @@ use crate::space::{self, SpaceError, SpaceResult};
 use crate::status::{hand_size_for_turn, rounds_for_turn, GameStatus, TURN_RANGE};
 
 /// Why the game ended.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum VictoryReason {
     /// The VP track hit +20 (US) or -20 (USSR).
     Vp,
@@ -97,7 +97,7 @@ pub enum Trap {
 }
 
 /// One escape attempt: the card discarded, the die, and whether it sprang the trap.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct TrapResult {
     /// Bear Trap or Quagmire.
     pub trap: CardId,
@@ -115,14 +115,14 @@ fn standard_cards() -> &'static CardCatalog {
 }
 
 /// The game is over: who won (`None` for a draw), and why.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Victory {
     pub side: Option<Superpower>,
     pub reason: VictoryReason,
 }
 
 /// Which kind of operation [`Game::begin`] should open.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum OperationKind {
     Influence,
     Realign,
@@ -378,6 +378,15 @@ pub struct Game {
     deferred: Vec<Deferred>,
 }
 
+/// Everything a saved game needs from [`Game`]: see [`Game::checkpoint`].
+#[derive(Debug, Clone)]
+pub struct Checkpoint {
+    pub(crate) scenario: Scenario,
+    pub(crate) headline: HeadlineState,
+    pub(crate) winner: Option<Victory>,
+    pub(crate) log: GameLog,
+}
+
 /// A change to the draw pile that needs dice for a reshuffle, which only `Game::settle` has.
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum Deferred {
@@ -413,8 +422,8 @@ pub enum Phase {
 }
 
 /// The headline phase's progress (rule 4.4).
-#[derive(Debug, Clone, Copy, Default)]
-struct HeadlineState {
+#[derive(Debug, Clone, Copy, Default, serde::Serialize, serde::Deserialize)]
+pub(crate) struct HeadlineState {
     /// Each side's pick, `[US, USSR]`: the outer `None` until it has chosen, the inner `None`
     /// for a side that had no card to headline.
     picks: [Option<Option<CardId>>; 2],
@@ -478,6 +487,37 @@ impl Game {
             setup_next: Superpower::Ussr,
             deferred: Vec::new(),
         }
+    }
+
+    /// The game at a *resting point* — no card in play, no operation or event open, nothing
+    /// waiting on [`Game::settle`] — as a [`Checkpoint`] that [`Game::from_checkpoint`] resumes
+    /// from, or `None` while one of those is going on. A finished game always counts.
+    pub fn checkpoint(&self) -> Option<Checkpoint> {
+        let resting = self.winner.is_some()
+            || (self.card.is_none()
+                && self.op.is_none()
+                && !self.settlement_due()
+                && self.held_discard.is_none()
+                && self.deferred.is_empty()
+                && !self.norad_due
+                && matches!(self.phase, Phase::ActionRounds | Phase::Headline));
+        resting.then(|| Checkpoint {
+            scenario: self.snapshot(),
+            headline: self.headline,
+            winner: self.winner,
+            log: self.log.clone(),
+        })
+    }
+
+    /// Resumes from a [`Game::checkpoint`]: the same position, history and (mid-headline) picks.
+    pub fn from_checkpoint(cp: Checkpoint) -> Game {
+        let mut game = Game::from_scenario(&cp.scenario);
+        // `from_scenario` re-derives who headlines first; the checkpoint knows who is really up.
+        game.status = cp.scenario.status;
+        game.headline = cp.headline;
+        game.winner = cp.winner;
+        game.log = cp.log;
+        game
     }
 
     /// A new game from the printed start: the standard influence, the Early War cards shuffled

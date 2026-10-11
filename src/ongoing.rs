@@ -56,7 +56,7 @@ pub fn bonus_ops(bonuses: &[OpsBonus], mask: u8) -> u8 {
 
 /// One card's turn-long effect, as played — what an event produces and
 /// [`TurnEffects::apply`] records.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum OngoingEffect {
     /// #9: the USSR gets +1 ops for a card spent entirely in Southeast Asia.
     VietnamRevolts,
@@ -321,7 +321,7 @@ impl TurnEffects {
 
 /// One card's game-long effect, as played — what an `EffectResult::lasting`
 /// carries and [`LastingEffects::apply`] records.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum LastingEffect {
     /// #17: NATO doesn't protect France.
     DeGaulle,

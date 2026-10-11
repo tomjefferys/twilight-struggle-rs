@@ -187,6 +187,7 @@ time, never lose to DEFCON at once) for a game to run its full length —
   second thing (an in-progress game's own save, log included) doesn't
   exist yet, and is deliberately a different type when it does, rather
   than this one growing an optional log.
+- **`save`** (`src/save.rs`) — saving and restoring whole games. `Game::checkpoint()` returns a `Checkpoint` (snapshot, headline picks, winner, the log) only at a *resting point* (no card in play, no operation/event open, nothing for `settle`), so open operations never need serialising; `Game::from_checkpoint` resumes it. `SaveGame` adds the dice state and the session's AI settings (`Settings`) and is JSON; the log's types all derive serde (`EffectResult::title` is a `StaticStr`, leaked on load). `SaveStore` keeps `autosave.json` and `saves/<name>.json` under `$XDG_DATA_HOME/twilight-struggle` (else `~/.local/share/...`), writing atomically. `Autosaver::tick` rewrites the autosave once per resting point; it is only enabled on a terminal (never one-shot, `--state` or `--no-autosave`) and only for a real game (`Session.tracking`, off for the demo/test states and debug mode). Plain `cargo run` loads the autosave so the menu offers "Resume game"; the menu also has "Load saved game". The map's `S` key and the REPL's `savegame [name]` / `loadgame [name]` (no name = autosave) / `saves` make and load named saves; `interactive::run` takes a `SaveHook` and autosaves after each redraw. `tests/save.rs` pins round-trips and determinism.
 - **`ongoing`** (`src/ongoing.rs`) — card events that last "for the
   remainder of this turn" (#9 Vietnam Revolts, #25 Containment, #31 Red
   Scare/Purge, #41 Nuclear Subs, #51 Brezhnev Doctrine, #69 Latin American
@@ -1469,6 +1470,7 @@ cargo run -- worldmap              # one-shot: the whole-world map
 cargo run -- region europe         # one-shot: zoom into a region
 cargo run -- --state scoring/europe-ussr-control-wins
                                     # jump straight into a named test state (add --repl for the console)
+cargo run -- --no-autosave         # don't write or resume the autosave
 cargo run -- --new                 # a real game on the map: deal, opening placement, headline, ...
 cargo run -- --new --ai ussr       # ... against the heuristic AI
 cargo run -- --new --ai ussr --fast

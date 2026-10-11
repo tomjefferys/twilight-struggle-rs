@@ -196,7 +196,7 @@ pub fn check(status: &GameStatus, side: Superpower, china: bool, scoring: bool, 
 }
 
 /// One space attempt, resolved.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct SpaceResult {
     pub side: Superpower,
     pub card: CardId,

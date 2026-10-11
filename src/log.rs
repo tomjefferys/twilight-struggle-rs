@@ -32,7 +32,7 @@ use crate::ops::{CoupResult, RollResult};
 use crate::space::SpaceResult;
 
 /// What happened, with no opinion on how it should be displayed.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub enum Event {
     /// A card taken from the active side's hand via
     /// [`crate::game::Game::play_card`] — but only once its selection
@@ -137,7 +137,7 @@ pub enum Event {
 }
 
 /// What the end of a turn did, in order — kept whole so the log line can say all of it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 pub struct TurnEndReport {
     /// `(US, USSR)` Military Operations when the turn ended, and DEFCON they were measured against.
     pub mil_ops: (i8, i8),
@@ -155,7 +155,7 @@ pub struct TurnEndReport {
 }
 
 /// What a coup attempt triggered besides its own board result.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 pub struct CoupAftermath {
     /// DEFCON `(before, after)`, when a battleground coup degraded it.
     pub defcon: Option<(u8, u8)>,
@@ -175,7 +175,7 @@ impl CoupAftermath {
 
 /// One thing that happened, stamped with when and by whom. `side` is
 /// `None` for an event that belongs to no side (a debug edit, a note).
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct LogEntry {
     pub turn: u8,
     pub action_round: u8,
@@ -184,7 +184,7 @@ pub struct LogEntry {
 }
 
 /// The game's whole history, in the order it happened.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
 pub struct GameLog {
     entries: Vec<LogEntry>,
 }

@@ -12,6 +12,7 @@ pub mod map;
 pub mod ongoing;
 pub mod ops;
 pub mod render;
+pub mod save;
 pub mod scenario;
 pub mod space;
 pub mod states;
@@ -24,7 +25,7 @@ pub use cards::{Card, CardCatalog, CardError, CardFound, CardId, CardPhase, Card
 pub use country::{Area, Country, CountryId, Direction, Region, SubRegion, Superpower};
 pub use dice::Dice;
 pub use events::{choice, effects, scoring, EffectResult, EventChoice, EventOutcome};
-pub use game::{Game, GameError, OperationKind, RollOutcome};
+pub use game::{Checkpoint, Game, GameError, OperationKind, RollOutcome};
 pub use layout::{Cell, Guest, GuestEntity, LayoutError, LinkTarget, MapLayout, UndrawnLink};
 pub use log::{CoupAftermath, Event, GameLog, LogEntry};
 pub use map::{Found, MapError, WorldMap};
@@ -34,6 +35,7 @@ pub use ops::{
     Modifiers, Odds, Operation, PlacementError, RealignError, Realignment, RollResult,
 };
 pub use render::ColorMode;
+pub use save::{Autosaver, Restored, SaveError, SaveGame, SaveInfo, SaveStore, Settings};
 pub use scenario::{Scenario, ScenarioError};
 pub use states::{StateEntry, StateError, StateLibrary};
 pub use status::{GameStatus, StatusError, ACTION_ROUNDS_PER_TURN_RANGE, DEFCON_RANGE, TURN_RANGE, VP_RANGE};

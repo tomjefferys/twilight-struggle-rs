@@ -34,7 +34,7 @@ pub const CHINA_CARD: CardId = CardId(6);
 /// — that number is printed on the physical card and shown on screen
 /// (`card #31`), so keeping it as the id avoids a separate "card number"
 /// field that could drift from the index used to look it up.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, serde::Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, serde::Deserialize, serde::Serialize)]
 pub struct CardId(pub(crate) u8);
 
 /// The card side that belongs to `side`.

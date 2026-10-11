@@ -200,6 +200,16 @@ impl Drop for TerminalGuard {
     }
 }
 
+/// What the map needs from the save system: the main program implements it over its
+/// [`twilight_struggle::SaveStore`] (and does nothing when saving is off).
+pub trait SaveHook {
+    /// Called after every redraw; writes the autosave when the game is at a resting point it
+    /// hasn't saved yet. `Some(error)` when that failed.
+    fn autosave(&mut self, game: &Game, dice: &Dice, ai_fast: bool) -> Option<String>;
+    /// The `S` key: a named save of the game as it stands; the message to show.
+    fn save_named(&mut self, game: &Game, dice: &Dice, ai_fast: bool) -> String;
+}
+
 /// Drives the interactive world map until the user backs all the way out
 /// (`Esc` from the world view, `q`, or Ctrl-C).
 ///
@@ -283,6 +293,7 @@ pub fn run(
     ai_side: Option<Superpower>,
     ai: &mut dyn Ai,
     ai_fast: &mut bool,
+    hook: &mut dyn SaveHook,
 ) -> io::Result<()> {
     let _guard = TerminalGuard::enter()?;
     let mut screen = Screen::World { selected: Region::Europe };
@@ -325,6 +336,9 @@ pub fn run(
     macro_rules! redraw {
         () => {{
             follow_ai(&mut screen, &mut saved_screen, map, game, &modal, ai_side);
+            if let Some(error) = hook.autosave(game, dice, aiui.fast) {
+                message = Some(format!("autosave failed: {error}"));
+            }
             draw(&screen, map, layout, cards, game, message.as_deref(), &hand_selected, zoomed, &modal, color, ai_side.map(|s| (s, aiui.fast)))?
         }};
     }
@@ -668,6 +682,7 @@ pub fn run(
                 match key.code {
                     KeyCode::Esc if matches!(screen, Screen::World { .. }) => return Ok(()),
                     KeyCode::Char('q') => return Ok(()),
+                    KeyCode::Char('S') => message = Some(hook.save_named(game, dice, aiui.fast)),
                     KeyCode::Char('v') => {
                         let opponent = game.active().opponent();
                         if peeking_allowed(game) {

@@ -4,7 +4,7 @@ use std::fmt;
 ///
 /// Only ever constructed by `WorldMap` itself during loading, so a valid
 /// `CountryId` is guaranteed to index into the map that produced it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, serde::Serialize, serde::Deserialize)]
 pub struct CountryId(pub(crate) u16);
 
 impl CountryId {

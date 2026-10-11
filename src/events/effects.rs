@@ -25,7 +25,7 @@ use crate::status::GameStatus;
 /// both kept (rather than just a delta) so the log line, the result
 /// modal, and a test can all say what the event did without re-deriving
 /// "before" from the board it was applied to.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct InfluenceChange {
     pub country: CountryId,
     pub side: Superpower,
@@ -35,7 +35,7 @@ pub struct InfluenceChange {
 
 /// An event passing the China Card to `to`, face up (playable at once) or
 /// face down (not until the turn rolls over).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct ChinaTransfer {
     pub to: Superpower,
     pub face_up: bool,
@@ -44,14 +44,14 @@ pub struct ChinaTransfer {
 /// A hand an event makes its owner show (CIA Created, "Lone Gunman"):
 /// whose, and — filled in by `Game` once the event applies, since the
 /// effect itself never sees the hands — which cards.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Reveal {
     pub side: Superpower,
     pub cards: Vec<CardId>,
 }
 
 /// One side's die in a contest between the two (Summit, Olympic Games).
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct ContestRoll {
     pub die: u8,
     /// Added to the die.
@@ -67,7 +67,7 @@ impl ContestRoll {
 }
 
 /// A roll-off between the two sides: both dice, and how many tied rolls were thrown away first.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Contest {
     pub us: ContestRoll,
     pub ussr: ContestRoll,
@@ -105,7 +105,7 @@ impl Contest {
 /// [`GameStatus::vp`]'s convention (positive favours the US); `defcon` is
 /// `(before, after)`, already clamped to the track, and `None` for a card
 /// that doesn't touch it.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct EffectResult {
     pub card: CardId,
     /// The side that played the event — the one a `Both` card's VP/DEFCON
@@ -140,7 +140,8 @@ pub struct EffectResult {
     /// printed ops and whether its event removes it from the game.
     pub plays: Option<PlayCard>,
     /// What to call the event when it isn't a card's (the opening setup): shown instead of `card`'s name.
-    pub title: Option<&'static str>,
+    #[serde(serialize_with = "crate::save::serde_static_opt::serialize", deserialize_with = "crate::save::serde_static_opt::deserialize")]
+    pub title: Option<crate::save::StaticStr>,
     /// This side then draws this many cards from the draw pile (Ask Not What Your Country…); dealt by
     /// `Game::settle`, which has the dice a reshuffle needs.
     pub redraw: Option<(Superpower, u8)>,
@@ -152,7 +153,7 @@ pub struct EffectResult {
 }
 
 /// How a card that another event has put into play has to be played.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum PlayAs {
     /// Its event, and nothing else (Star Wars, Five Year Plan).
     Event,
@@ -163,7 +164,7 @@ pub enum PlayAs {
 }
 
 /// A card another event puts into play: what the game needs to take it up.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct PlayCard {
     pub id: CardId,
     pub ops: u8,

@@ -84,7 +84,7 @@ pub fn is_scoring_card(card: CardId) -> bool {
 
 /// How far a side got in one region (rule 10.1, in ascending order —
 /// `Control` implies `Domination` implies `Presence`).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 pub enum Tier {
     #[default]
     None,
@@ -97,7 +97,7 @@ pub enum Tier {
 /// raw counts behind that, and every VP contribution — kept itemised
 /// (rather than just the total) so a view can explain the number instead
 /// of just showing it, the same reasoning `realign::Modifiers` follows.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
 pub struct SideScore {
     pub tier: Tier,
     pub countries: u8,
@@ -114,7 +114,7 @@ impl SideScore {
 }
 
 /// What one scoring card actually resolved to.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum ScoringKind {
     Region { region: Region, us: SideScore, ussr: SideScore },
     /// Southeast Asia Scoring: no tiers, just every controlled country in
@@ -129,7 +129,7 @@ pub enum ScoringKind {
 /// same convention [`crate::status::GameStatus::vp`] already uses) and
 /// whether it won the game outright (Europe Scoring's Control tier
 /// only — every other card's `control` is a plain [`ControlVp::Vp`]).
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct ScoringResult {
     pub card: CardId,
     pub kind: ScoringKind,
