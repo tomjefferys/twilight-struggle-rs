@@ -40,9 +40,15 @@ const SPACE_WEIGHT: f32 = 5.0;
 const HAND_OPS_WEIGHT: f32 = 1.0;
 const OPPONENT_CARD_PENALTY: f32 = 3.0;
 
+/// The board as it stands for judging a position: an open placement or event keeps its pending
+/// influence on a speculative board, which must count or every placement scores the same.
+fn live_board(game: &Game) -> &crate::board::Board {
+    game.operation().and_then(|op| op.board()).unwrap_or_else(|| game.board())
+}
+
 /// How much `side` is worth being in `id`: grows with how close it is to control and jumps at it.
 fn country_value(map: &WorldMap, game: &Game, id: CountryId, side: Superpower) -> f32 {
-    let board = game.board();
+    let board = live_board(game);
     let country = map.country(id);
     let own = board.influence(id, side) as f32;
     let opp = board.influence(id, side.opponent()) as f32;
@@ -109,7 +115,7 @@ fn eval(game: &Game, map: &WorldMap, cards: &CardCatalog, side: Superpower, deep
 
     // What each region's scoring card would pay now.
     for card in cards.ids().filter(|&c| scoring::is_scoring_card(c)) {
-        if let Some(result) = scoring::resolve(map, game.board(), &status.lasting, card) {
+        if let Some(result) = scoring::resolve(map, live_board(game), &status.lasting, card) {
             let weight = if deep { DEEP_SCORING_WEIGHT * scoring_likelihood(game, card) } else { SCORING_WEIGHT };
             score += sign(result.vp_delta as f32) * weight;
             if let Some(winner) = result.automatic_victory {
@@ -153,4 +159,27 @@ fn eval(game: &Game, map: &WorldMap, cards: &CardCatalog, side: Superpower, deep
         };
     }
     score
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::game::OperationKind;
+
+    /// A pending placement lives on the operation's speculative board; the evaluation must see it,
+    /// or every `Place` scores the same and the AI always takes the first country listed.
+    #[test]
+    fn pending_influence_counts() {
+        let map = WorldMap::standard().unwrap();
+        let cards = CardCatalog::standard().unwrap();
+        let mut game = Game::from_scenario(&crate::scenario::Scenario::demo(&map, &cards).unwrap());
+        game.status_mut().active = Superpower::Us;
+        let card = game.hand(Superpower::Us).iter().copied().find(|&c| !cards.card(c).scoring).unwrap();
+        game.play_card(&cards, card).unwrap();
+        game.begin(OperationKind::Influence).unwrap();
+        let before = evaluate(&game, &map, &cards, Superpower::Us);
+        let crate::map::Found::One(canada) = map.find("Canada") else { panic!("Canada") };
+        game.place(&map, canada).unwrap();
+        assert!(evaluate(&game, &map, &cards, Superpower::Us) > before, "a pending point must raise the score");
+    }
 }
