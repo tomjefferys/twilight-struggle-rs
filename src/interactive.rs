@@ -575,7 +575,7 @@ pub fn run(
                             KeyCode::Enter | KeyCode::Esc | KeyCode::Backspace if last.is_some() || key.code != KeyCode::Enter => {
                                 modal.pop_front();
                                 // A roll that used the operation up closes it: nothing is left to do.
-                                if last.is_some() && !again && game.winner().is_none() && game.operation().is_some() {
+                                if last.is_some() && !again && game.winner().is_none() && game.operation().is_some_and(|op| op.remaining() == 0) {
                                     message = Some(match game.confirm() {
                                         Ok(op) => operation_closed_line(&op, true, game.decider()),
                                         Err(e) => e.to_string(),
