@@ -68,6 +68,7 @@ fn play_with(seed: u64, ai: &mut dyn Ai, mut other: Option<&mut dyn Ai>) -> (u8,
 }
 
 #[test]
+#[ignore = "slow soak: run with `cargo test --release --test full_game -- --ignored`"]
 fn careful_ais_play_whole_games_to_a_result() {
     let mut reached_final_scoring = 0;
     let mut longest = 0;
@@ -83,6 +84,7 @@ fn careful_ais_play_whole_games_to_a_result() {
 }
 
 #[test]
+#[ignore = "slow soak: run with `cargo test --release --test full_game -- --ignored`"]
 fn uniformly_random_ais_never_get_a_game_stuck_either() {
     for seed in 0..seeds() {
         play_game(seed, false);
@@ -103,6 +105,7 @@ fn a_game_that_ends_leaves_the_phase_alone() {
 }
 
 #[test]
+#[ignore = "slow soak: run with `cargo test --release --test full_game -- --ignored`"]
 fn heuristic_ais_play_whole_games_to_a_result() {
     for seed in 0..(seeds() / 10).max(3) {
         let mut ai = HeuristicAi::from_seed(seed);
@@ -111,6 +114,7 @@ fn heuristic_ais_play_whole_games_to_a_result() {
 }
 
 #[test]
+#[ignore = "slow soak: run with `cargo test --release --test full_game -- --ignored`"]
 fn heuristic_and_random_ais_finish_games_against_each_other() {
     for seed in 0..(seeds() / 10).max(3) {
         let mut smart = HeuristicAi::from_seed(seed);
@@ -123,6 +127,7 @@ fn heuristic_and_random_ais_finish_games_against_each_other() {
 }
 
 #[test]
+#[ignore = "slow soak: run with `cargo test --release --test full_game -- --ignored`"]
 fn search_ais_play_whole_games_to_a_result() {
     // A tiny budget: this checks the search never gets a game stuck or refused, not its strength.
     for seed in 0..3 {

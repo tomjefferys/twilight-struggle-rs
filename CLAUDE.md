@@ -26,7 +26,7 @@ final scoring after turn 10 (a draw is possible). There are three AI opponents:
 positions and plays the move leading to the best one, and `RandomAi` plays uniformly random legal moves, with
 `RandomAi::careful()` adding just enough rules-awareness (play a scoring card in
 time, never lose to DEFCON at once) for a game to run its full length —
-`tests/full_game.rs` soaks all of them over many seeded whole games.
+`tests/full_game.rs` soaks all of them over many seeded whole games (its slow soaks are `#[ignore]`d: `cargo test --release --test full_game -- --ignored`).
 
 ## Architecture
 
@@ -1477,7 +1477,7 @@ cargo run -- --new --ai ussr --fast
                                     # ... skipping the AI's step-by-step modals (key `f` toggles)
 cargo run -- --new --ai ussr --ai-kind random
                                     # ... against the (careful) random AI
-SOAK_SEEDS=5000 cargo test --release --test full_game
+SOAK_SEEDS=5000 cargo test --release --test full_game -- --ignored
                                     # play thousands of AI-vs-AI whole games
 cargo test                         # all tests (unit + snapshot)
 cargo clippy --all-targets         # lint; expected clean

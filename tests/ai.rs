@@ -378,6 +378,7 @@ fn heuristic_wins(seed: u64, smart_side: Superpower) -> (bool, u8, Option<twilig
 }
 
 #[test]
+#[ignore = "slow strength check: run with `cargo test --release --test ai -- --ignored`"]
 fn heuristic_beats_careful_random_most_of_the_time() {
     let games = 20u64;
     let mut wins = 0;
