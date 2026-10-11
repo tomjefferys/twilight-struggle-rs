@@ -2213,8 +2213,9 @@ impl Game {
             let scoring: Vec<CardId> = self.hands.hand(Superpower::Us).iter().copied().filter(|&c| cards.card(c).scoring).collect();
             let mut regions: Vec<Region> = scoring.iter().filter_map(|&c| events::scoring::region_of(c)).collect();
             regions.dedup();
+            let held: Vec<String> = scoring.iter().map(|&c| cards.card(c).name.clone()).collect();
             let reveal = events::Reveal { side: Superpower::Us, cards: scoring };
-            if let Some(choice) = EventChoice::in_named_regions(map, &self.board, card.id, &regions, reveal) {
+            if let Some(choice) = EventChoice::in_named_regions(map, &self.board, card.id, &regions, reveal, &held) {
                 self.op = Some(Operation::Event(Box::new(choice)));
                 return Ok(EventOutcome::Pending { card: card.id, chooser: Superpower::Ussr });
             }

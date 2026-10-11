@@ -741,14 +741,14 @@ impl EventChoice {
     /// The Cambridge Five (#104): the USSR may add 1 influence to a single country in one of
     /// `regions` (those the scoring cards in the US hand name). `reveal` is that hand's scoring
     /// cards, reported in the result. `None` if no region qualifies.
-    pub fn in_named_regions(map: &WorldMap, board: &Board, card: CardId, regions: &[Region], reveal: Reveal) -> Option<Self> {
+    pub fn in_named_regions(map: &WorldMap, board: &Board, card: CardId, regions: &[Region], reveal: Reveal, held: &[String]) -> Option<Self> {
         if regions.is_empty() {
             return None;
         }
         let names: Vec<String> = regions.iter().map(|r| r.to_string()).collect();
         let spec = Spec::single(
             Ussr,
-            format!("add 1 USSR influence to one country in {}", names.join(" or ")),
+            format!("US holds {} — add 1 USSR influence to one country in {}", held.join(", "), names.join(" or ")),
             Rule::add(Ussr, Eligible::new(Where::Regions(RegionSet::of(regions))), 1, 1, 1),
         )
         .optional();
