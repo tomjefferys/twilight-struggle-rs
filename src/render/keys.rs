@@ -36,7 +36,7 @@ pub fn global_keys(screen: KeyScreen) -> String {
         KeyScreen::Region => "←→↑↓ move · Enter open country · Esc world",
         KeyScreen::Country => "←→↑↓ move · Esc region",
     };
-    format!("{nav} · [ ] hand · z zoom · t tracks · D piles · S save · q quit")
+    format!("{nav} · [ ] hand · z zoom · t tracks · D piles · l log · S save · q quit")
 }
 
 /// The keys that act right now, first match wins. Empty while a modal has

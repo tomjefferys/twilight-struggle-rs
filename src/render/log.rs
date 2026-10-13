@@ -95,6 +95,36 @@ pub fn render_log(map: &WorldMap, cards: &CardCatalog, log: &GameLog, tail: Opti
     canvas
 }
 
+/// A scrollable window onto the log for the interactive log screen: `rows` lines at `width`
+/// columns, `scroll` lines up from the bottom (clamped, and returned so the caller can keep it
+/// in range). Lines are clipped to `width`; the title row is not included.
+pub fn render_log_view(map: &WorldMap, cards: &CardCatalog, log: &GameLog, rows: usize, width: usize, scroll: usize) -> (Canvas, usize) {
+    let entries = log.entries();
+    let rows = rows.max(1);
+    let scroll = scroll.min(entries.len().saturating_sub(rows));
+    let end = entries.len() - scroll;
+    let start = end.saturating_sub(rows);
+    let mut canvas = Canvas::new(width.max(1), end - start);
+    for (row, entry) in entries[start..end].iter().enumerate() {
+        let color = match entry.side {
+            Some(Superpower::Us) => Color::Us,
+            Some(Superpower::Ussr) => Color::Ussr,
+            None => Color::Muted,
+        };
+        let (action, detail) = action_and_detail(map, cards, entry);
+        let prefix = format!(
+            "{:<STAMP_WIDTH$}{:<AR_WIDTH$}{:<SIDE_WIDTH$}{:<ACTION_WIDTH$}",
+            format!("T{}", entry.turn),
+            ar_tag(entry.action_round),
+            side_label(entry.side),
+            action,
+        );
+        canvas.put(row, 0, &prefix, Style::color(color).bold());
+        canvas.put(row, prefix.chars().count(), &detail, Style::color(color));
+    }
+    (canvas, scroll)
+}
+
 /// The log condensed for the handover screen: no turn/round stamp, one line per card played (its
 /// operations folded onto the card's own line, `Closed` bookkeeping dropped) and, for an event,
 /// just the event's own line — it already names the card, so the `Selected` entry is not

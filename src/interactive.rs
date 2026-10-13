@@ -13,7 +13,7 @@ use crossterm::terminal::{self, Clear, ClearType, EnterAlternateScreen, LeaveAlt
 use crossterm::{execute, queue};
 
 use twilight_struggle::render::{
-    summary_lines, operation_abandoned_line, pile_cards, render_piles, PileTab, operation_closed_line, operation_header, render_card, render_country, render_forced_card, render_hand, render_hand_hidden, render_handover,
+    summary_lines, render_log_view, operation_abandoned_line, pile_cards, render_piles, PileTab, operation_closed_line, operation_header, render_card, render_country, render_forced_card, render_hand, render_hand_hidden, render_handover,
     render_ai_realign, render_ai_step, render_event_result, render_event_session, render_final_scoring, render_headline_confirm, render_headline_reveal, render_space_confirm, render_space_result, render_trap_confirm, render_trap_result, render_tracks, TrackTab, render_war_result, render_region, render_roll_confirm, can_roll, render_roll_result, render_scoring_preview, render_scoring_result, render_status_bar_with, render_world_map, Canvas, Color, Style, RollReport, HAND_ROWS, context_keys, global_keys, KeyScreen, KeyUi,
 };
 use twilight_struggle::events::{PlayAs, EffectResult, ScoringResult, WarResult};
@@ -331,6 +331,8 @@ pub fn run(
     // the newly active side's own hand takes its place.
     let mut zoomed = false;
     let mut handover = HandoverTracker { last: None, left_at: [0; 2] };
+    // The full-screen game log (`l`): lines scrolled up from the bottom while it is open.
+    let mut log_scroll: Option<usize> = None;
     // The screen the player was on when the AI's turn pulled the view to where it is acting.
     let mut saved_screen: Option<Screen> = None;
     macro_rules! redraw {
@@ -350,6 +352,32 @@ pub fn run(
             TermEvent::Key(key) if key.kind == KeyEventKind::Press => {
                 if key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL) {
                     return Ok(());
+                }
+                if let Some(scroll) = log_scroll.as_mut() {
+                    let page = terminal::size().map(|(_, h)| (h as usize).saturating_sub(3)).unwrap_or(20).max(1);
+                    match key.code {
+                        KeyCode::Esc | KeyCode::Char('l') | KeyCode::Enter | KeyCode::Backspace => {
+                            log_scroll = None;
+                            redraw!();
+                            continue;
+                        }
+                        KeyCode::Char('q') => return Ok(()),
+                        KeyCode::Up | KeyCode::Char('k') => *scroll = scroll.saturating_add(1),
+                        KeyCode::Down | KeyCode::Char('j') => *scroll = scroll.saturating_sub(1),
+                        KeyCode::PageUp => *scroll = scroll.saturating_add(page),
+                        KeyCode::PageDown | KeyCode::Char(' ') => *scroll = scroll.saturating_sub(page),
+                        KeyCode::Home | KeyCode::Char('g') => *scroll = usize::MAX,
+                        KeyCode::End | KeyCode::Char('G') => *scroll = 0,
+                        _ => {}
+                    }
+                    *scroll = draw_log(map, cards, game, *scroll, color)?;
+                    continue;
+                }
+                let log_allowed = modal.is_empty()
+                    || matches!(modal.front(), Some(Modal::Handover { .. } | Modal::AiStep { .. } | Modal::AiRoll { .. } | Modal::AiRealign { .. }));
+                if key.code == KeyCode::Char('l') && log_allowed {
+                    log_scroll = Some(draw_log(map, cards, game, 0, color)?);
+                    continue;
                 }
                 if !modal.is_empty() {
                     // The roll-result modal is strictly in front of
@@ -957,7 +985,10 @@ pub fn run(
                 ensure_session_modal(&mut modal, game, ai_side);
                 redraw!();
             }
-            TermEvent::Resize(_, _) => redraw!(),
+            TermEvent::Resize(_, _) => match log_scroll.as_mut() {
+                Some(scroll) => *scroll = draw_log(map, cards, game, *scroll, color)?,
+                None => redraw!(),
+            },
             _ => {}
         }
     }
@@ -1913,6 +1944,38 @@ fn draw(
         emit(&mut out, &mut row, &line.render(color))?;
     }
     out.flush()
+}
+
+/// Draws the full-screen game log (a title row, the newest lines that fit, a key row), `scroll`
+/// lines up from the bottom. Returns the scroll clamped to what the log allows.
+fn draw_log(map: &WorldMap, cards: &CardCatalog, game: &Game, scroll: usize, color: ColorMode) -> io::Result<usize> {
+    let (width, height) = terminal::size().map(|(w, h)| (w as usize, h as usize)).unwrap_or((100, 30));
+    let body = height.saturating_sub(2).max(1);
+    let (canvas, scroll) = render_log_view(map, cards, game.log(), body, width, scroll);
+    let total = game.log().entries().len();
+    let shown = canvas.height();
+    let title = if total == 0 {
+        " Game log · empty".to_string()
+    } else {
+        format!(" Game log · entries {}-{} of {}{}", total - scroll - shown + 1, total - scroll, total, if scroll == 0 { " (latest)" } else { "" })
+    };
+    let hint = " ↑↓/jk scroll · PgUp/PgDn page · Home/End oldest/latest · l/Esc back to the game";
+    let mut out = io::stdout();
+    queue!(out, Clear(ClearType::All))?;
+    let put = |out: &mut io::Stdout, row: usize, text: &str, style: Style| -> io::Result<()> {
+        let mut line = Canvas::new(text.chars().count().max(1), 1);
+        line.put(0, 0, text, style);
+        queue!(out, MoveTo(0, row as u16))?;
+        out.write_all(line.render(color).as_bytes())
+    };
+    put(&mut out, 0, &title, Style::color(Color::Selected).bold())?;
+    for (i, line) in canvas.render(color).split('\n').take(shown).enumerate() {
+        queue!(out, MoveTo(0, 1 + i as u16))?;
+        out.write_all(line.as_bytes())?;
+    }
+    put(&mut out, height.saturating_sub(1), hint, Style::color(Color::Muted))?;
+    out.flush()?;
+    Ok(scroll)
 }
 
 #[cfg(test)]

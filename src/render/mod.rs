@@ -36,7 +36,7 @@ pub use event::{render_event_result, render_event_session};
 pub use hand::{render_forced_card, render_hand, render_hand_hidden, HAND_ROWS, HAND_WIDTH};
 pub use handover::render_handover;
 pub use keys::{context_keys, global_keys, KeyScreen, KeyUi};
-pub use log::{log_entry_line, log_text, render_log, summary_lines};
+pub use log::{log_entry_line, log_text, render_log, render_log_view, summary_lines};
 pub use piles::{pile_cards, pile_len, piles_text, render_piles, PileTab};
 pub use region::render_region;
 pub use roll::{can_roll, render_roll_confirm, render_roll_result, RollReport};
