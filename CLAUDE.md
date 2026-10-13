@@ -1069,9 +1069,10 @@ Wired into both `main.rs` (an
   zoom/peek/modal/`p`-plays bits only `interactive.rs` knows, and an open
   modal blanks the row because each modal prints its own hint). The status
   bar (`statusbar.rs`) likewise names state only — never keys. The
-  interactive screen is: status bar, view, hand strip, a message row that
-  is always reserved (feedback and refusals only, blank otherwise), global
-  keys, context keys (`tests/keys.rs`).
+  interactive screen is: status bar, global keys (navigation and views only; the hand keys live in the context row), view, context keys (bold, just above
+  the hand so the next action isn't lost at the bottom), hand strip, a message
+  row that is always reserved (feedback and refusals only, blank otherwise)
+  (`tests/keys.rs`).
 - **`main.rs`** — a REPL (`cargo run`) plus one-shot mode
   (`cargo run -- <command>`). Type `help` inside the REPL for the command
   list. `Session` holds a `Game` (`src/game.rs`), so turns are enforced

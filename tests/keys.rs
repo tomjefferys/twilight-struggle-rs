@@ -16,10 +16,10 @@ fn keys(game: &Game, cards: &CardCatalog, screen: KeyScreen) -> String {
 fn the_global_row_is_navigation_and_views_only() {
     for screen in [KeyScreen::World, KeyScreen::Region, KeyScreen::Country] {
         let row = global_keys(screen);
-        for key in ["←→↑↓", "[ ] hand", "t tracks", "D piles", "q quit"] {
+        for key in ["←→↑↓", "t tracks", "D piles", "q quit"] {
             assert!(row.contains(key), "{screen:?} row missing {key:?}: {row}");
         }
-        assert!(!row.contains("influence") && !row.contains("abandon"), "{row}");
+        assert!(!row.contains("influence") && !row.contains("abandon") && !row.contains("hand") && !row.contains("zoom"), "{row}");
     }
 }
 

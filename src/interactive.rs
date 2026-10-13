@@ -1881,7 +1881,7 @@ fn draw(
     let card_in_play = game.card_in_play().map(|id| cards.card(id));
     let bar = render_status_bar_with(layout, board, game.status(), card_in_play, op, game.winner(), game.ops_after_event(), game.forced_by().zip(game.forced_how()).map(|(c, how)| (cards.card(c), how)), Some((game.hands().deck().len(), game.discards().len())), game.phase() == Phase::Setup, canvas.width());
 
-    // The two pinned key rows: what always works, then what works right now.
+    // The two key rows: what works right now (above the hand), and what always works (above the view).
     let key_screen = match screen {
         Screen::World { .. } => KeyScreen::World,
         Screen::Region { .. } => KeyScreen::Region,
@@ -1924,6 +1924,9 @@ fn draw(
     for line in bar.render(color).split('\n') {
         emit(&mut out, &mut row, line)?;
     }
+    let mut line = Canvas::new(global_row.chars().count().max(1), 1);
+    line.put(0, 0, &global_row, Style::color(Color::Muted));
+    emit(&mut out, &mut row, &line.render(color))?;
     for line in canvas.render(color).split('\n').take(view_budget) {
         emit(&mut out, &mut row, line)?;
     }
@@ -1934,15 +1937,14 @@ fn draw(
     for _ in view_rows..fixed.min(view_budget) {
         emit(&mut out, &mut row, "")?;
     }
+    // What to do next sits just above the hand, where the eye is, not at the very bottom.
+    let mut line = Canvas::new(context_row.chars().count().max(1), 1);
+    line.put(0, 0, &context_row, Style::color(Color::Selected).bold());
+    emit(&mut out, &mut row, &line.render(color))?;
     for line in hand_canvas.render(color).split('\n') {
         emit(&mut out, &mut row, line)?;
     }
     emit(&mut out, &mut row, message.unwrap_or(""))?;
-    for (text, style) in [(&global_row, Style::color(Color::Muted)), (&context_row, Style::color(Color::Selected))] {
-        let mut line = Canvas::new(text.chars().count().max(1), 1);
-        line.put(0, 0, text, style);
-        emit(&mut out, &mut row, &line.render(color))?;
-    }
     out.flush()
 }
 
