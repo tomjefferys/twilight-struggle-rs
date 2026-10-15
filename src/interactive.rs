@@ -1636,7 +1636,7 @@ fn peeking_allowed(game: &Game) -> bool {
 /// is being asked for (there `p` keeps the hand). Pass is only legal when
 /// the hand is empty or a card is already in play, so the two never clash.
 fn p_plays(game: &Game, hand_selected: &HandUi) -> bool {
-    game.card_in_play().is_none() && game.awaiting_discard().is_none() && hand_item_count(game, hand_side(game, hand_selected.peek)) > 0
+    (discard_gate_open(game) || game.card_in_play().is_none()) && game.awaiting_discard().is_none() && hand_item_count(game, hand_side(game, hand_selected.peek)) > 0
 }
 
 /// `[`/`]`/`Space` share this handler between the normal keymap and the
@@ -1837,7 +1837,7 @@ fn draw(
         (Some(host), Some(card), Some(how)) => render_forced_card(cards, card, host, how, game.active()),
         // The AI's own hand is never shown while it plays (only one an event has revealed, via `v`).
         _ if ai.is_some_and(|(s, _)| s == side) && !(hand_selected.peek && peeking_allowed(game)) => render_hand_hidden(side, hand.len(), china.is_some()),
-        _ => render_hand(cards, hand, china, side, selected_idx, game.card_in_play_slot().filter(|_| side == game.active())),
+        _ => render_hand(cards, hand, china, side, selected_idx, game.card_in_play_slot().filter(|_| side == game.active() && !discard_gate_open(game))),
     };
 
     if zoomed && let Some(id) = zoom_card(game, hand_selected) {
