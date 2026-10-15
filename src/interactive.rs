@@ -14,7 +14,7 @@ use crossterm::{execute, queue};
 
 use twilight_struggle::render::{
     summary_lines, render_log_view, operation_abandoned_line, pile_cards, render_piles, PileTab, operation_closed_line, operation_header, render_card, render_country, render_forced_card, render_hand, render_hand_hidden, render_handover,
-    render_ai_realign, render_ai_step, render_event_result, render_event_session, render_final_scoring, render_headline_confirm, render_headline_reveal, render_space_confirm, render_space_result, render_trap_confirm, render_trap_result, render_tracks, TrackTab, render_war_result, render_region, render_roll_confirm, can_roll, render_roll_result, render_scoring_preview, render_scoring_result, render_status_bar_with, render_world_map, Canvas, Color, Style, RollReport, HAND_ROWS, context_keys, global_keys, KeyScreen, KeyUi,
+    render_ai_realign, render_ai_step, render_event_result, render_event_session, render_final_scoring, render_headline_confirm, render_headline_reveal, render_headline_seen, render_space_confirm, render_space_result, render_trap_confirm, render_trap_result, render_tracks, TrackTab, render_war_result, render_region, render_roll_confirm, can_roll, render_roll_result, render_scoring_preview, render_scoring_result, render_status_bar_with, render_world_map, Canvas, Color, Style, RollReport, HAND_ROWS, context_keys, global_keys, KeyScreen, KeyUi,
 };
 use twilight_struggle::events::{PlayAs, EffectResult, ScoringResult, WarResult};
 use twilight_struggle::game::{Phase, Trap, TrapResult, Victory};
@@ -65,6 +65,9 @@ enum Modal {
     Trap(TrapResult),
     /// The confirmation before a headline card is chosen.
     HeadlineConfirm(CardId),
+    /// The opponent's already-chosen headline card, shown to the Man in Earth Orbit holder
+    /// before they choose their own.
+    HeadlineSeen(CardId),
     /// The preview before a scoring card is played: what it would score on the board as it
     /// stands, drawn live. Enter plays it (its event is all a scoring card has), Esc leaves it
     /// in the hand.
@@ -120,6 +123,8 @@ struct HandoverTracker {
     /// Per side (`side_index`): the log length when that side last stopped being the one to act,
     /// so its handover lists only what happened since.
     left_at: [usize; 2],
+    /// The (turn, card) of the last opponent headline shown, so it is queued once.
+    seen: Option<(u8, CardId)>,
 }
 
 /// Most log lines a handover lists.
@@ -135,7 +140,18 @@ fn check_handover(tracker: &mut HandoverTracker, ai_side: Option<Superpower>, ga
     }
     let now = game.decider();
     let first = tracker.last.is_none();
-    if tracker.last == Some(now) {
+    let changed = tracker.last != Some(now);
+    // The perk holder sees the opponent's headline before choosing (after any handover screen).
+    let queue_seen = |tracker: &mut HandoverTracker, modal: &mut VecDeque<Modal>| {
+        if let Some((_, card)) = game.headline_pick_seen() {
+            if ai_side != Some(game.active()) && tracker.seen != Some((game.status().turn, card)) {
+                tracker.seen = Some((game.status().turn, card));
+                modal.push_back(Modal::HeadlineSeen(card));
+            }
+        }
+    };
+    if !changed {
+        queue_seen(tracker, modal);
         return;
     }
     if let Some(prev) = tracker.last {
@@ -143,6 +159,7 @@ fn check_handover(tracker: &mut HandoverTracker, ai_side: Option<Superpower>, ga
     }
     tracker.last = Some(now);
     if ai_side == Some(now) || (first && ai_side.is_some()) {
+        queue_seen(tracker, modal);
         return;
     }
     let since = if first { game.log().len() } else { tracker.left_at[side_index(now)] };
@@ -153,6 +170,7 @@ fn check_handover(tracker: &mut HandoverTracker, ai_side: Option<Superpower>, ga
     modal.push_back(Modal::Handover { side: now, lines, earlier, hide: ai_side.is_none() });
     *zoomed = false;
     hand_selected.peek = false;
+    queue_seen(tracker, modal);
 }
 
 /// Which screen is currently showing.
@@ -330,7 +348,7 @@ pub fn run(
     // while it's open, and by `c`/`X`/`p` actually handing the turn over —
     // the newly active side's own hand takes its place.
     let mut zoomed = false;
-    let mut handover = HandoverTracker { last: None, left_at: [0; 2] };
+    let mut handover = HandoverTracker { last: None, left_at: [0; 2], seen: None };
     // The full-screen game log (`l`): lines scrolled up from the bottom while it is open.
     let mut log_scroll: Option<usize> = None;
     // The screen the player was on when the AI's turn pulled the view to where it is acting.
@@ -1856,6 +1874,7 @@ fn draw(
                 }
                 None => Canvas::new(0, 0),
             },
+            Modal::HeadlineSeen(card) => render_headline_seen(game.active(), cards.card(*card)),
             Modal::HeadlineConfirm(card) => render_headline_confirm(game.active(), cards.card(*card)),
             Modal::RollTarget { country, last } => match game.operation() {
                 Some(op) => render_roll_confirm(map, cards, game.status(), game.board(), op, *country, last.as_ref(), game.winner().is_some(), None),

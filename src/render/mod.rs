@@ -40,7 +40,7 @@ pub use log::{log_entry_line, log_text, render_log, render_log_view, summary_lin
 pub use piles::{pile_cards, pile_len, piles_text, render_piles, PileTab};
 pub use region::render_region;
 pub use roll::{can_roll, render_roll_confirm, render_roll_result, RollReport};
-pub use score::{render_final_scoring, render_headline_confirm, render_headline_reveal, render_scoring_preview, render_scoring_result};
+pub use score::{render_final_scoring, render_headline_confirm, render_headline_reveal, render_headline_seen, render_scoring_preview, render_scoring_result};
 pub use splash::{render_splash, SplashItem, SplashMenu, SPLASH_WIDTH};
 pub use trap::{render_trap_confirm, render_trap_result};
 pub use space::{render_space_confirm, render_space_result, render_space_track, render_space_track_sized, render_space_track_with_hint};

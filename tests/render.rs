@@ -1115,3 +1115,15 @@ fn splash_screen_matches_snapshot() {
     let expected = include_str!("snapshots/splash.txt");
     assert_eq!(render_splash(&menu).render(ColorMode::Never), expected.trim_end_matches('\n'));
 }
+
+#[test]
+fn headline_seen_modal_shows_the_opponents_card_and_why() {
+    let cards = cards();
+    let card = match cards.find("Fidel") {
+        twilight_struggle::CardFound::One(id) => cards.card(id),
+        other => panic!("{other:?}"),
+    };
+    let text = twilight_struggle::render::render_headline_seen(twilight_struggle::Superpower::Ussr, card).render(twilight_struggle::render::ColorMode::Never);
+    assert!(text.contains("USA has chosen Fidel"), "{text}");
+    assert!(text.contains("Man in Earth Orbit"), "{text}");
+}

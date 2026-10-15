@@ -156,6 +156,27 @@ pub fn render_headline_confirm(side: Superpower, card: &crate::cards::Card) -> C
     modal_box("Headline card", "", SCORE_WIDTH, Style::color(side_color(side)), true, lines)
 }
 
+/// What the Man in Earth Orbit holder is shown before choosing a headline: the card the
+/// opponent (who had to choose first) has picked, with its text. Not yet played.
+pub fn render_headline_seen(chooser: Superpower, card: &crate::cards::Card) -> Canvas {
+    let text_width = SCORE_WIDTH - 2 - 2 * PADDING;
+    let picker = chooser.opponent();
+    let mut lines: Vec<(String, Style)> = Vec::new();
+    let ops = if card.scoring { "scoring".to_string() } else { format!("{} ops", card.ops) };
+    push_text(&mut lines, &format!("{picker} has chosen {} ({ops}) as its headline", card.name), Style::color(side_color(picker)).bold());
+    lines.push((String::new(), Style::default()));
+    push_text(&mut lines, &card.text, Style::default());
+    lines.push((String::new(), Style::default()));
+    push_text(
+        &mut lines,
+        &format!("Man in Earth Orbit: {picker} had to choose and show its headline first. Now {chooser} chooses."),
+        Style::color(Color::Muted),
+    );
+    lines.push((String::new(), Style::default()));
+    lines.push((format!("{:>text_width$}", "Enter to continue"), Style::color(Color::Muted)));
+    modal_box("Opponent's headline", "", SCORE_WIDTH, Style::color(side_color(picker)), true, lines)
+}
+
 /// The summary modal for final scoring after turn 10: each region's swing in the order it
 /// was scored, the China Card's point, the VP track at the end and, once decided, the result.
 /// `results` pair each region's [`ScoringResult`] with the track after it; `winner` is the
