@@ -576,8 +576,12 @@ mod choices {
     #[test]
     fn warsaw_pact_remove_mode_wipes_four_countries_and_add_mode_places_five() {
         let (map, _cards, mut game) = open("warsaw-pact", Superpower::Ussr);
-        assert!(game.place(&map, id(&map, "Poland")).is_err(), "choose a mode first");
-        game.choose_mode(&map, 0).unwrap();
+        assert!(game.place(&map, id(&map, "France")).is_err(), "no option can act on France");
+        // The first pick chooses the option; taking it back releases the choice.
+        minus(&mut game, &map, &["Poland"]);
+        game.undo(&map).unwrap();
+        plus(&mut game, &map, &["Poland"]);
+        game.undo(&map).unwrap();
         minus(&mut game, &map, &["East Germany", "Poland", "Hungary", "Bulgaria"]);
         assert!(game.unplace(&map, id(&map, "Romania")).is_err(), "only 4 countries");
         game.confirm().unwrap();
@@ -587,12 +591,24 @@ mod choices {
         assert_eq!(inf(&game, &map, "Romania", Superpower::Us), 1);
 
         let (map, _cards, mut game) = open("warsaw-pact", Superpower::Ussr);
-        game.choose_mode(&map, 1).unwrap();
         plus(&mut game, &map, &["Poland", "Poland", "Hungary", "Hungary", "Romania"]);
         assert!(game.place(&map, id(&map, "Poland")).is_err(), "max 2 per country");
         assert!(game.place(&map, id(&map, "Bulgaria")).is_err(), "5 points spent");
         game.confirm().unwrap();
         assert_eq!(inf(&game, &map, "Poland", Superpower::Ussr), 2);
+    }
+
+    #[test]
+    fn clearing_an_event_takes_back_every_pick_and_the_mode() {
+        let (map, _cards, mut game) = open("warsaw-pact", Superpower::Ussr);
+        plus(&mut game, &map, &["Poland", "Hungary"]);
+        assert!(game.clear_event_mode(&map));
+        assert!(game.operation().is_some());
+        minus(&mut game, &map, &["East Germany"]);
+        assert!(game.clear_event_mode(&map));
+        assert!(!game.clear_event_mode(&map), "nothing left to clear");
+        plus(&mut game, &map, &["Poland"]);
+        game.confirm().ok();
     }
 
     #[test]
@@ -734,6 +750,36 @@ mod choices {
         assert!(game.place(&map, id(&map, "Botswana")).is_err(), "a single country");
         game.confirm().unwrap();
         assert_eq!(inf(&game, &map, "South Africa", Superpower::Ussr), 1);
+        assert_eq!(inf(&game, &map, "Angola", Superpower::Ussr), 2);
+    }
+
+    #[test]
+    fn south_african_unrest_builds_up_from_south_africa() {
+        let (map, _cards, mut game) = open("south-african-unrest", Superpower::Ussr);
+        let sa = |g: &Game| g.view_board().influence(id(&map, "South Africa"), Superpower::Ussr);
+        assert!(game.place(&map, id(&map, "Zaire")).is_err());
+        // One press keeps the neighbours live; a second closes them off.
+        plus(&mut game, &map, &["South Africa"]);
+        assert_eq!(sa(&game), 1);
+        assert!(matches!(game.confirm(), Err(GameError::EventIncomplete { .. })));
+        plus(&mut game, &map, &["South Africa"]);
+        assert_eq!(sa(&game), 2);
+        assert!(game.place(&map, id(&map, "Angola")).is_err(), "South Africa already has both points");
+        assert!(game.place(&map, id(&map, "South Africa")).is_err());
+        // Undo steps back one point at a time.
+        game.undo(&map).unwrap();
+        assert_eq!(sa(&game), 1);
+        // A neighbour takes the other option, and South Africa stays at one.
+        plus(&mut game, &map, &["Angola"]);
+        assert_eq!(sa(&game), 1);
+        assert!(game.place(&map, id(&map, "South Africa")).is_err(), "no second point once a neighbour has influence");
+        assert!(game.place(&map, id(&map, "Botswana")).is_err(), "a single country");
+        game.undo(&map).unwrap();
+        assert_eq!(sa(&game), 0, "undoing the only pick releases the option and its point");
+        // A neighbour first still gives South Africa its point.
+        plus(&mut game, &map, &["Angola"]);
+        assert_eq!(sa(&game), 1);
+        game.confirm().unwrap();
         assert_eq!(inf(&game, &map, "Angola", Superpower::Ussr), 2);
     }
 

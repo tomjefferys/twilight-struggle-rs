@@ -1359,14 +1359,21 @@ impl Game {
         }
     }
 
-    /// The step back *before* [`Game::abandon`]: with a multi-mode event
-    /// open and a mode chosen but nothing picked, un-chooses the mode
+    /// The step back *before* [`Game::abandon`]: with country picks staged,
+    /// takes them all back (and a multi-mode card's mode with them); with a
+    /// multi-mode event open and a mode chosen but nothing picked, un-chooses the mode
     /// (Chernobyl's region) and returns `true`, leaving the event open
     /// awaiting a choice. `false` — and nothing changed — otherwise, so a
     /// caller falls through to `abandon`. Like `abandon`, only the side
     /// that played the card may back out.
     pub fn clear_event_mode(&mut self, map: &WorldMap) -> bool {
         let active = self.status.active;
+        // Country picks: ⌫ takes them all back, and a multi-mode card's mode with them.
+        if let Some(Operation::Event(e)) = &mut self.op
+            && e.reset_picks(map)
+        {
+            return true;
+        }
         match &mut self.op {
             // Marking cards: ⌫ unmarks them all.
             Some(Operation::Event(e)) if e.is_multi() => e.clear_picks(),

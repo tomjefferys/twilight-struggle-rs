@@ -896,8 +896,9 @@ pub fn run(
                         // only once none is open does the card itself go
                         // back to the hand.
                         let gate = discard_gate_open(game);
+                        let picked = matches!(game.operation(), Some(Operation::Event(e)) if e.picks_countries() && !e.is_pristine());
                         message = Some(if game.clear_event_mode(map) {
-                            if gate { "choice cleared".to_string() } else { "mode cleared".to_string() }
+                            if picked { "picks cleared".to_string() } else if gate { "choice cleared".to_string() } else { "mode cleared".to_string() }
                         } else if game.operation().is_some() {
                             match game.abandon() {
                                 Ok(op) => operation_abandoned_line(&op),

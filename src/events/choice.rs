@@ -442,6 +442,8 @@ pub struct EventChoice {
     picks: Vec<bool>,
     /// What the event is called when no card is (the opening setup).
     title: Option<&'static str>,
+    /// Whether the current mode was inferred from the first pick rather than chosen.
+    inferred: bool,
 }
 
 impl EventChoice {
@@ -488,6 +490,7 @@ impl EventChoice {
             multi: false,
             picks: Vec::new(),
             title: None,
+            inferred: false,
         };
         if choice.modes.len() == 1 {
             choice.select(map, 0);
@@ -1123,7 +1126,25 @@ impl EventChoice {
             return Err(EventChoiceError::ModeLocked);
         }
         self.select(map, i);
+        self.inferred = false;
         Ok(())
+    }
+
+    /// Takes back every country pick at once and, on a card with several
+    /// modes, the mode too — back to the start of the choice. `false` (and
+    /// nothing changed) when there is no pick to take back or the event has
+    /// gone past the point of no return (a roll-off already thrown).
+    pub fn reset_picks(&mut self, map: &WorldMap) -> bool {
+        if self.history.is_empty() || self.roll_locked() || self.multi {
+            return false;
+        }
+        self.history.clear();
+        if self.modes.len() > 1 {
+            let _ = self.clear_mode(map);
+        } else {
+            self.select(map, 0);
+        }
+        true
     }
 
     /// Un-chooses the mode (back to "choose a mode"), if nothing's been
@@ -1136,6 +1157,7 @@ impl EventChoice {
         self.board = self.base.clone();
         self.fixed_ids.clear();
         self.mode = None;
+        self.inferred = false;
         self.refresh(map);
         Ok(())
     }
@@ -1174,7 +1196,94 @@ impl EventChoice {
     /// How much a *forward* `sign` step on `id` would move, or `None` if
     /// it isn't a legal forward step right now.
     pub fn can_forward(&self, map: &WorldMap, id: CountryId, sign: Sign) -> Option<u8> {
-        let rule = self.rule()?;
+        if self.infers_mode() {
+            return self.inferred_mode(map, id, sign).map(|(_, n, _)| n);
+        }
+        self.forward_with(self.rule()?, map, id, sign)
+    }
+
+    /// Whether the card's mode is decided by the first pick rather than up
+    /// front (Warsaw Pact): several modes, each a plain country rule, none
+    /// chosen yet. Every country the modes could act on is then live, and a
+    /// `+`/`-` on one picks the mode that allows it.
+    pub fn infers_mode(&self) -> bool {
+        (self.mode.is_none() || (self.inferred && self.history.is_empty() && self.rule().is_some()))
+            && self.modes.len() > 1
+            && self.modes.iter().all(|m| m.rule.is_some() || !m.fixed.is_empty())
+            && !self.is_designation()
+            && !self.multi
+            && !self.pile_pick
+            && self.gate.is_empty()
+            && self.pending_roll.is_none()
+            && self.roll_mode.is_none()
+    }
+
+    /// For a card whose mode the first pick chooses: what each sign does, one
+    /// option per sign, e.g. `+ add 5 USSR influence … · - remove all US influence …`.
+    pub fn sign_options(&self) -> String {
+        let key = |m: &Mode| if m.rule.as_ref().is_none_or(|r| r.allows_forward(Sign::Plus)) { '+' } else { '-' };
+        let keys: Vec<char> = self.modes.iter().map(key).collect();
+        if keys.iter().enumerate().any(|(i, k)| keys[..i].contains(k)) {
+            // Several options share a sign: the country picked tells them apart.
+            let labels: Vec<&str> = self.modes.iter().map(|m| m.label.as_str()).collect();
+            return format!("+ a country to choose: {}", labels.join("  or  "));
+        }
+        self.modes.iter().zip(&keys).map(|(m, k)| format!("{k} {}", m.label)).collect::<Vec<_>>().join("  ·  ")
+    }
+
+    /// The mode a forward `sign` step on `id` would pick, how far it moves, and
+    /// whether the step *is* the pick (nothing further to stage: the mode's own
+    /// fixed changes are the whole effect).
+    ///
+    /// Before any mode is chosen it is the first mode whose rule allows the
+    /// step, else (South Africa under South African Unrest) a mode that adds
+    /// to `id` by its fixed changes, which stays open for more. Once such a
+    /// mode is chosen with nothing picked, adding to its country again moves on
+    /// to a mode with nothing left to pick (the second point there).
+    fn inferred_mode(&self, map: &WorldMap, id: CountryId, sign: Sign) -> Option<(usize, u8, bool)> {
+        let fixed_add = |m: &Mode| {
+            m.fixed.iter().find_map(|f| match f.op {
+                FixedOp::Add(n) if map.id_by_name(f.country) == Some(id) => Some(n),
+                _ => None,
+            })
+        };
+        let by_rule = self.modes.iter().enumerate().find_map(|(i, m)| self.forward_with(m.rule.as_ref()?, map, id, sign).map(|n| (i, n, false)));
+        if by_rule.is_some() || sign != Sign::Plus {
+            return by_rule;
+        }
+        if self.mode.is_none() {
+            return self.modes.iter().enumerate().find_map(|(i, m)| m.rule.as_ref().and(fixed_add(m)).map(|n| (i, n, true)));
+        }
+        self.modes.iter().enumerate().find_map(|(i, m)| {
+            let more = fixed_add(m)?.saturating_sub(self.board.influence(id, self.mode_side(i)));
+            (m.rule.is_none() && more > 0).then_some((i, more, true))
+        })
+    }
+
+    /// The step back for a mode that a pick chose and nothing further was staged on:
+    /// to the mode before it (the second point on South Africa), else to no mode.
+    fn step_back_inferred(&mut self, map: &WorldMap) -> Option<CountryId> {
+        if !(self.inferred && self.history.is_empty()) {
+            return None;
+        }
+        let id = self.fixed_ids.first().copied();
+        if self.rule().is_none()
+            && let Some(j) = self.modes.iter().position(|m| m.rule.is_some() && !m.fixed.is_empty())
+        {
+            self.select(map, j);
+        } else {
+            self.clear_mode(map).ok()?;
+        }
+        id
+    }
+
+    /// Whose influence mode `i` moves (what `+`/`-` on a country would give).
+    fn mode_side(&self, i: usize) -> Superpower {
+        let m = &self.modes[i];
+        m.rule.as_ref().map(|r| r.target).or_else(|| m.fixed.first().map(|f| f.side)).unwrap_or(self.chooser)
+    }
+
+    fn forward_with(&self, rule: &Rule, map: &WorldMap, id: CountryId, sign: Sign) -> Option<u8> {
         if !rule.allows_forward(sign) {
             return None;
         }
@@ -1252,6 +1361,22 @@ impl EventChoice {
     /// Takes a step on `id`: forward if the rule allows it, otherwise a
     /// take-back of the last staged change there.
     pub fn step(&mut self, map: &WorldMap, id: CountryId, sign: Sign) -> Result<(), EventChoiceError> {
+        // A pickless mode chosen by a pick can be taken back the same way.
+        if sign == Sign::Minus && self.inferred && self.history.is_empty() && self.fixed_ids.contains(&id) {
+            return self.step_back_inferred(map).map(|_| ()).ok_or(EventChoiceError::NoMode);
+        }
+        if self.infers_mode() {
+            match self.inferred_mode(map, id, sign) {
+                Some((i, _, only_pick)) => {
+                    self.select(map, i);
+                    self.inferred = true;
+                    if only_pick {
+                        return Ok(());
+                    }
+                }
+                None => return Err(self.refused(map, id, "not a country either option can act on".into())),
+            }
+        }
         let Some(rule) = self.rule().cloned() else {
             return Err(EventChoiceError::NoMode);
         };
@@ -1264,6 +1389,7 @@ impl EventChoice {
             self.history.remove(pos);
             self.apply(id, rule.target, -amount);
             self.refresh(map);
+            self.release_inferred_mode(map);
             return Ok(());
         }
         match self.can_forward(map, id, sign) {
@@ -1275,6 +1401,14 @@ impl EventChoice {
                 Ok(())
             }
             None => Err(self.refused(map, id, self.reason(map, id, sign))),
+        }
+    }
+
+    /// Once every pick of a card whose mode was inferred has been taken back,
+    /// the mode is open again.
+    fn release_inferred_mode(&mut self, map: &WorldMap) {
+        if self.inferred && self.history.is_empty() {
+            let _ = self.clear_mode(map);
         }
     }
 
@@ -1324,6 +1458,9 @@ impl EventChoice {
 
     /// Takes back the most recent pick, returning its country.
     pub fn undo_last(&mut self, map: &WorldMap) -> Option<CountryId> {
+        if self.inferred && self.history.is_empty() {
+            return self.step_back_inferred(map);
+        }
         let rule = self.rule()?.clone();
         let (id, amount) = *self.history.last()?;
         if rule.kind == Kind::Reallocate && amount < 0 && self.added() > self.removed() - amount.unsigned_abs() as u16 {
@@ -1335,6 +1472,7 @@ impl EventChoice {
         self.history.pop();
         self.apply(id, rule.target, -amount);
         self.refresh(map);
+        self.release_inferred_mode(map);
         Some(id)
     }
 
@@ -1457,6 +1595,16 @@ impl EventChoice {
     pub fn hint(&self, map: &WorldMap, id: CountryId) -> String {
         if self.is_designation() {
             return format!("digits 1-{} pick the region · c confirms", self.modes.len());
+        }
+        if self.infers_mode() {
+            let parts: Vec<String> = [(Sign::Plus, '+', "add"), (Sign::Minus, '-', "remove")]
+                .into_iter()
+                .filter_map(|(sign, key, verb)| {
+                    let (i, n, _) = self.inferred_mode(map, id, sign)?;
+                    Some(format!("{key} {verb} {n} {}", self.mode_side(i)))
+                })
+                .collect();
+            return if parts.is_empty() { "not a country either option can act on".into() } else { parts.join("   ") };
         }
         let Some(rule) = self.rule() else {
             return if self.mode.is_some() { format!("digits 1-{} change the choice · c confirms", self.modes.len()) } else { "choose a mode first".into() };
@@ -2124,14 +2272,26 @@ mod tests {
     }
 
     #[test]
-    fn warsaw_pact_needs_a_mode_and_locks_it_once_a_pick_is_made() {
+    fn warsaw_pact_infers_its_mode_from_the_first_pick_and_releases_it_on_undo() {
         let (map, _) = fixtures();
-        let mut c = open(&map, &Board::new(&map), 16);
-        assert!(c.mode().is_none());
-        assert_eq!(c.step(&map, id(&map, "Poland"), Sign::Plus), Err(EventChoiceError::NoMode));
-        c.choose_mode(&map, 1).unwrap();
+        let mut board = Board::new(&map);
+        board.set_influence(id(&map, "Poland"), Us, 2);
+        let mut c = open(&map, &board, 16);
+        assert!(c.mode().is_none() && c.infers_mode());
+        // Both kinds of country are live before anything is chosen.
+        assert_eq!(c.can_forward(&map, id(&map, "Poland"), Sign::Minus), Some(2));
+        assert_eq!(c.can_forward(&map, id(&map, "Hungary"), Sign::Plus), Some(1));
+        assert_eq!(c.can_forward(&map, id(&map, "Hungary"), Sign::Minus), None);
+        assert!(c.step(&map, id(&map, "France"), Sign::Plus).is_err());
         c.step(&map, id(&map, "Poland"), Sign::Plus).unwrap();
+        assert_eq!(c.mode(), Some(1));
         assert_eq!(c.choose_mode(&map, 0), Err(EventChoiceError::ModeLocked));
+        c.undo_last(&map).unwrap();
+        assert!(c.mode().is_none(), "the inferred mode is open again");
+        c.step(&map, id(&map, "Poland"), Sign::Minus).unwrap();
+        assert_eq!(c.mode(), Some(0));
+        c.step(&map, id(&map, "Poland"), Sign::Plus).unwrap();
+        assert!(c.mode().is_none());
     }
 
     #[test]

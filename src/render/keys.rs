@@ -119,7 +119,9 @@ fn event_keys(game: &Game, e: &crate::events::EventChoice) -> String {
         };
     }
     match e.mode() {
+        None if e.infers_mode() => format!("{}{abandon}", e.sign_options()),
         None if n > 1 => format!("1-{n} choose mode{abandon}"),
+        _ if !e.is_pristine() => format!("+ add · - remove · u undo · ⌫ clear all · {}c done", if n > 1 { format!("1-{n} mode · ") } else { String::new() }),
         _ => format!("+ add · - remove · u undo · {}c done{abandon}", if n > 1 { format!("1-{n} mode · ") } else { String::new() }),
     }
 }

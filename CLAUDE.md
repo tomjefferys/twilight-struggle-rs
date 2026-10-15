@@ -354,7 +354,7 @@ time, never lose to DEFCON at once) for a game to run its full length —
     reallocation balanced). A single-mode card with nothing it can do
     (`resolves_immediately`) never opens a session. A multi-mode card's
     mode is chosen with the digits (`mode <n>`, or `mode europe` by label), changeable until the first
-    pick. `into_result` produces the same `EffectResult` a fixed-effect
+    pick. **Warsaw Pact (#16)** and **South African Unrest (#53)** need no up-front choice: while every mode is a country rule (or a fixed add) (`EventChoice::infers_mode`) all countries any mode can act on are live, the first `+`/`-` picks the mode that allows it, and taking every pick back releases it again. `into_result` produces the same `EffectResult` a fixed-effect
     card does, so `Game::finish_effect` applies and logs both. Clauses
     about other cards (prevents/allows #N) live in `events::blocked`;
     NATO is read from `LastingEffects`, so Special Relationship (#105) has both its branches.
