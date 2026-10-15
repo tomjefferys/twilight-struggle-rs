@@ -1944,12 +1944,13 @@ fn draw(
     for line in bar.render(color).split('\n') {
         emit(&mut out, &mut row, line)?;
     }
-    let mut line = Canvas::new(global_row.chars().count().max(1), 1);
-    line.put(0, 0, &global_row, Style::color(Color::Muted));
-    emit(&mut out, &mut row, &line.render(color))?;
     for line in canvas.render(color).split('\n').take(view_budget) {
         emit(&mut out, &mut row, line)?;
     }
+    // Navigation and view keys sit just below the map.
+    let mut line = Canvas::new(global_row.chars().count().max(1), 1);
+    line.put(0, 0, &global_row, Style::color(Color::Muted));
+    emit(&mut out, &mut row, &line.render(color))?;
     // Pad the view to a fixed height (so the hand strip and key rows never move as the
     // screen changes), then the hand, a reserved message row and the keys.
     let fixed = *VIEW_ROWS.get_or_init(|| fixed_view_rows(map, layout, game.board()));
