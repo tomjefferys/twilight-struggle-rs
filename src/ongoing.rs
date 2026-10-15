@@ -110,6 +110,26 @@ impl OngoingEffect {
         })
     }
 
+    /// The card's name, for the status bar's compact effects row.
+    pub fn label(&self) -> &'static str {
+        match self {
+            OngoingEffect::VietnamRevolts => "Vietnam Revolts",
+            OngoingEffect::Containment => "Containment",
+            OngoingEffect::RedScare { .. } => "Red Scare/Purge",
+            OngoingEffect::NuclearSubs => "Nuclear Subs",
+            OngoingEffect::Brezhnev => "Brezhnev Doctrine",
+            OngoingEffect::DeathSquads { .. } => "Death Squads",
+            OngoingEffect::NorthSeaOil => "North Sea Oil",
+            OngoingEffect::IranContra => "Iran-Contra",
+            OngoingEffect::Chernobyl { .. } => "Chernobyl",
+            OngoingEffect::YuriSamantha => "Yuri and Samantha",
+            OngoingEffect::HandRevealed { .. } => "Hand revealed",
+            OngoingEffect::CubanMissileCrisis { .. } => "Cuban Missile Crisis",
+            OngoingEffect::Salt => "SALT",
+            OngoingEffect::U2Incident => "U2 Incident",
+        }
+    }
+
     /// The side the effect favours (or, for a penalty, the side that
     /// played it) — what a view colours it by.
     pub fn side(&self) -> Superpower {

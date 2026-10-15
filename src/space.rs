@@ -53,6 +53,16 @@ impl Perk {
         }
     }
 
+    /// The box's printed name, for the status bar.
+    pub fn name(self) -> &'static str {
+        match self {
+            Perk::TwoAttempts => "Animal in Space",
+            Perk::OpponentHeadlinesFirst => "Man in Earth Orbit",
+            Perk::DiscardHeld => "Eagle/Bear has Landed",
+            Perk::EightRounds => "Space Station",
+        }
+    }
+
     /// Whether the crate acts on this perk, or only displays it.
     pub fn is_enforced(self) -> bool {
         matches!(self, Perk::TwoAttempts | Perk::OpponentHeadlinesFirst | Perk::EightRounds | Perk::DiscardHeld)

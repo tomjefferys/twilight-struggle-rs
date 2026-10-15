@@ -14,7 +14,7 @@ use crate::ops::Operation;
 use crate::space::{self, Perk};
 use crate::status::GameStatus;
 
-use super::{game_over_line, lasting_effect_line, ongoing_effect_line, operation_balance_line, vp_line, Canvas, Color, Style};
+use super::{game_over_line, operation_balance_line, vp_line, Canvas, Color, Style};
 use crate::ongoing::short_name;
 
 /// Row 1's wording when no card is in play yet. Keys live in the key rows
@@ -202,9 +202,9 @@ pub fn render_status_bar_with(
         .lasting
         .active()
         .iter()
-        .map(|e| (lasting_effect_line(e), e.side()))
-        .chain(status.effects.active().iter().map(|e| (ongoing_effect_line(e), e.side())))
-        .chain(Perk::ALL.iter().filter_map(|&p| space::perk_holder(status, p).map(|side| (format!("{side} space: {}", p.label()), side))))
+        .map(|e| (e.label().to_string(), e.side()))
+        .chain(status.effects.active().iter().map(|e| (e.label().to_string(), e.side())))
+        .chain(Perk::ALL.iter().filter_map(|&p| space::perk_holder(status, p).map(|side| (format!("{} ({side} space)", p.name()), side))))
         .collect();
     let effects_width = if effects.is_empty() {
         NO_EFFECTS.chars().count()
@@ -222,8 +222,8 @@ pub fn render_status_bar_with(
     canvas
 }
 
-const NO_EFFECTS: &str = "no turn effects in force";
-const EFFECTS_LABEL: &str = "In effect: ";
+const NO_EFFECTS: &str = "no effects in force (E lists them)";
+const EFFECTS_LABEL: &str = "In effect (E): ";
 const EFFECT_SEP: &str = " · ";
 
 /// ` · Space 2-1` — the USA's box, then the USSR's.
@@ -497,7 +497,7 @@ mod tests {
         let none = render_status_bar(&layout, &board, &status(), None, None, None, 60);
         let some = render_status_bar(&layout, &board, &with_effects(&[OngoingEffect::Containment]), None, None, None, 60);
         assert_eq!(none.height(), some.height());
-        assert!(none.render(ColorMode::Never).lines().nth(2).unwrap().contains("no turn effects"));
+        assert!(none.render(ColorMode::Never).lines().nth(2).unwrap().contains("no effects in force"));
     }
 
     #[test]
@@ -506,8 +506,8 @@ mod tests {
         let board = Board::new(&map);
         let s = with_effects(&[OngoingEffect::Chernobyl { region: crate::country::Region::Asia }, OngoingEffect::Containment]);
         let row = render_status_bar(&layout, &board, &s, None, None, None, 60).render(ColorMode::Never).lines().nth(2).unwrap().to_string();
-        assert!(row.starts_with("In effect: Containment"), "{row}");
-        assert!(row.contains("Chernobyl: USSR can't add influence in Asia"), "{row}");
+        assert!(row.starts_with("In effect (E): Containment"), "{row}");
+        assert!(row.contains("Chernobyl"), "{row}");
         assert!(row.find("Containment").unwrap() < row.find("Chernobyl").unwrap(), "{row}");
     }
 
